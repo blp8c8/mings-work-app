@@ -36,11 +36,7 @@ function fmtRange(s,e){ return`${fmtDate(s)} - ${fmtDate(e)}`; }
 function isoToDisplay(iso){ if(!iso)return""; const d=new Date(iso+"T12:00:00"); return d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}); }
 function currentWeekRange(){ return getWeekRange(todayISO()); }
 
-const SEED_STAFF=[
-  {id:"12345678",name:"Amy Chen",code:"12345678",payType:"hourly",rate:"12.50",shiftRate:"0",nightRate:"0",cashCard:"cash"},
-  {id:"87654321",name:"James Liu",code:"87654321",payType:"shift",rate:"0",shiftRate:"80",nightRate:"60",cashCard:"card"},
-  {id:"11223344",name:"Sofia Park",code:"11223344",payType:"hourly",rate:"13.00",shiftRate:"0",nightRate:"0",cashCard:"cash"},
-];
+const SEED_STAFF=[];
 
 // ═══════════════════════════════════════════════════════════════════
 // CSS
