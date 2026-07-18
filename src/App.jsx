@@ -1,79 +1,82 @@
-import { useState, useEffect, useCallback } from "react";
-import { supabase } from "./supabase";
+import { useState, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+// ═══════════════════════════════════════════════════════════════════
+// SUPABASE  ← paste your own URL & anon key from Supabase → Settings → API
+// ═══════════════════════════════════════════════════════════════════
+const SUPA_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPA_KEY = import.meta.env.VITE_SUPABASE_KEY;
+const db = createClient(SUPA_URL, SUPA_KEY, { auth: { persistSession: false } });
+
+// ═══════════════════════════════════════════════════════════════════
+// GOOGLE SHEETS  (hardcoded — no setup needed)
+// ═══════════════════════════════════════════════════════════════════
+const GS_API_KEY    = "AIzaSyAp0HeG4XqYV48iKu2-Hc5D7LDDsz8zOvE";
+const GS_PAYROLL_ID = "1Wj0EHKejhpEWU_bjvN1pNc4MqFwcraOncnRS5Ih5OEY";
+const GS_TAKINGS_ID = "1K-UMBoepGs3g7CZBlyk_muSh5uT1tFfX96s8xcAdblU";
+
+async function pushSheet(spreadsheetId, sheetName, rows) {
+  try {
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(sheetName+"!A1:Z2000")}:clear?key=${GS_API_KEY}`,{method:"POST"});
+    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(sheetName+"!A1")}?valueInputOption=USER_ENTERED&key=${GS_API_KEY}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({values:rows})});
+    if(!res.ok){const e=await res.json();return{ok:false,err:e.error?.message||"API error"};}
+    return{ok:true};
+  }catch(e){return{ok:false,err:e.message};}
+}
+function copyTSV(rows,toast){
+  const tsv=rows.map(r=>r.map(c=>String(c??'')).join('\t')).join('\n');
+  navigator.clipboard.writeText(tsv)
+    .then(()=>toast("📋 Copied! Open Google Sheets → click A1 → Ctrl+V"))
+    .catch(()=>toast("❌ Copy failed — try a different browser"));
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS & HELPERS
 // ═══════════════════════════════════════════════════════════════════
-const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const DAYS_SUN = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]; // JS getDay() order
+const DAYS_MON = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]; // display order (Mon-first)
 const SHIFT_TYPES = ["Off","Full Day (11am–close)","Night (5:30pm–close)","Custom"];
-const ADDITION_LABELS = ["Bank Holiday","Red Day","Other"];
-const DEDUCTION_LABELS = ["Left Early","Sick Leave","Other"];
+const ADD_LABELS  = ["Bank Holiday","Red Day","Other"];
+const DED_LABELS  = ["Left Early","Sick Leave","Other"];
+
 const TAKING_FIELDS = [
-  {key:"deliveroo",  label:"Deliveroo 🛵",         sign:1, dbKey:"deliveroo"},
-  {key:"uber",       label:"Uber Eats 🛵",          sign:1, dbKey:"uber"},
-  {key:"cash",       label:"Cash 💵",               sign:1, dbKey:"cash"},
-  {key:"card",       label:"Card 💳",               sign:1, dbKey:"card"},
-  {key:"online",     label:"Online 🌐",             sign:1, dbKey:"online"},
-  {key:"depositReceipt",   label:"Deposit Receipt", sign:1, dbKey:"deposit_receipt",  hasCashCard:true, dbPayKey:"deposit_pay_type"},
-  {key:"voucherRedemption",label:"Voucher Redemption 🎟️",sign:-1,dbKey:"voucher_redemption", hint:"Enter as a normal positive number — the deduction is handled automatically"},
-  {key:"voucherPurchase",  label:"Voucher Purchase 🎫",  sign:1, dbKey:"voucher_purchase",  hasCashCard:true, dbPayKey:"voucher_pay_type"},
+  {key:"deliveroo",         label:"Deliveroo 🛵",          dbKey:"deliveroo",         sign:1},
+  {key:"uber",              label:"Uber Eats 🛵",           dbKey:"uber",              sign:1},
+  {key:"cash",              label:"Cash 💵",                dbKey:"cash",              sign:1},
+  {key:"card",              label:"Card 💳",                dbKey:"card",              sign:1},
+  {key:"online",            label:"Online 🌐",              dbKey:"online",            sign:1},
+  {key:"depositReceipt",    label:"Deposit Receipt",        dbKey:"deposit_receipt",   sign:1, hasCashCard:true, dbPayKey:"deposit_pay_type"},
+  {key:"voucherRedemption", label:"Voucher Redemption 🎟️", dbKey:"voucher_redemption",sign:-1,hint:"Enter as a positive number — we handle the deduction"},
+  {key:"voucherPurchase",   label:"Voucher Purchase 🎫",    dbKey:"voucher_purchase",  sign:1, hasCashCard:true, dbPayKey:"voucher_pay_type"},
 ];
 
-// ── HARDCODE YOUR GOOGLE SHEETS CREDENTIALS HERE ──────────────────
-// Replace the empty strings with your actual values.
-// After pasting, commit the file and Vercel will redeploy.
-const DEFAULT_GS = {
-  apiKey:     "",   // e.g. "AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-  payrollId:  "",   // Spreadsheet ID for the Payroll sheet
-  takingsId:  "",   // Spreadsheet ID for the Takings sheet
-};
-// ──────────────────────────────────────────────────────────────────
+const todayISO  = () => new Date().toISOString().split("T")[0];
+const nowTime   = () => new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
+const fmtDate   = iso => { if(!iso)return""; const[y,m,d]=iso.split("-"); return`${d}/${m}/${y}`; };
+const addDays   = (iso,n) => { const d=new Date(iso+"T12:00:00"); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
+const dispDate  = (iso,wd=false) => { if(!iso)return""; const d=new Date(iso+"T12:00:00"); return wd?d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}):d.toLocaleDateString("en-GB",{day:"numeric",month:"short"}); };
+const fmtRange  = (s,e) => `${fmtDate(s)} – ${fmtDate(e)}`;
+const parseHrs  = (inn,out) => { if(!inn||!out)return 0; const p=t=>{const[h,m]=t.split(":").map(Number);return h+m/60;}; return Math.max(0,p(out)-p(inn)); };
 
-function todayISO(){ return new Date().toISOString().split("T")[0]; }
-function nowTime(){ return new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}); }
-function fmtDate(iso){ if(!iso)return""; const[y,m,d]=iso.split("-"); return`${d}/${m}/${y}`; }
-function parseHours(inn,out){
-  if(!inn||!out)return 0;
-  const p=t=>{const[h,mn]=t.split(":").map(Number);return h+mn/60;};
-  return Math.max(0,p(out)-p(inn));
-}
-function getWeekRange(dateISO){
-  const d=new Date(dateISO+"T12:00:00");
+// Pay-week: Sun→Sat
+function payWeekOf(iso){
+  const d=new Date(iso+"T12:00:00");
   const sun=new Date(d); sun.setDate(d.getDate()-d.getDay());
   const sat=new Date(sun); sat.setDate(sun.getDate()+6);
   return{start:sun.toISOString().split("T")[0],end:sat.toISOString().split("T")[0]};
 }
-// Rota week: Mon→Sun
-function getRotaWeekRange(dateISO){
-  const d=new Date(dateISO+"T12:00:00");
-  const day=d.getDay(); // 0=Sun
-  const mon=new Date(d); mon.setDate(d.getDate()-(day===0?6:day-1));
+// Rota-week: Mon→Sun
+function rotaWeekOf(iso){
+  const d=new Date(iso+"T12:00:00");
+  const dow=d.getDay(); // 0=Sun
+  const mon=new Date(d); mon.setDate(d.getDate()-(dow===0?6:dow-1));
   const sun=new Date(mon); sun.setDate(mon.getDate()+6);
   return{start:mon.toISOString().split("T")[0],end:sun.toISOString().split("T")[0]};
 }
-function fmtRange(s,e){ return`${fmtDate(s)} – ${fmtDate(e)}`; }
-function isoToDisplay(iso,withDay=false){
-  if(!iso)return"";
-  const d=new Date(iso+"T12:00:00");
-  if(withDay) return d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"});
-  return d.toLocaleDateString("en-GB",{day:"numeric",month:"short"});
-}
-function addDays(iso,n){
-  const d=new Date(iso+"T12:00:00"); d.setDate(d.getDate()+n);
-  return d.toISOString().split("T")[0];
-}
-// Returns array of ISO dates for Mon–Sun given a Monday start
-function weekDates(monISO){
-  return Array.from({length:7},(_,i)=>addDays(monISO,i));
-}
-function currentRotaWeek(){ return getRotaWeekRange(todayISO()); }
-function currentPayWeek(){ return getWeekRange(todayISO()); }
-
-// ── ROTA: Mon=0…Sun=6 order for display, but DB stores Sun=0..Sat=6
-// We keep DB as Sun=0 (JS getDay()) and convert for display
-const ROTA_DISPLAY_DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-// Given a Monday-start week, index 0=Mon(dayOfWeek=1) … 6=Sun(dayOfWeek=0)
-function rotaDisplayIndex(jsDay){ return jsDay===0?6:jsDay-1; } // Mon=0..Sun=6
+// Returns array of 7 ISO dates starting from Monday
+function weekDates(monISO){ return Array.from({length:7},(_,i)=>addDays(monISO,i)); }
+// JS day (0=Sun) → Mon-first display index (0=Mon … 6=Sun)
+const jsToMon = d => d===0?6:d-1;
 
 // ═══════════════════════════════════════════════════════════════════
 // CSS
@@ -83,207 +86,161 @@ const CSS=`
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-color:transparent;overscroll-behavior:none;}
 .app{max-width:430px;margin:0 auto;min-height:100vh;background:#fff;position:relative;overflow-x:hidden;}
+/* ── role ── */
 .role-screen{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;background:linear-gradient(160deg,#1A2744 0%,#2C3E6B 100%);}
-.role-logo{font-size:52px;margin-bottom:12px;}
-.role-title{font-size:28px;font-weight:900;color:#fff;text-align:center;margin-bottom:6px;}
+.role-logo{font-size:52px;margin-bottom:12px;} .role-title{font-size:28px;font-weight:900;color:#fff;text-align:center;margin-bottom:6px;}
 .role-sub{font-size:14px;color:rgba(255,255,255,.55);margin-bottom:36px;text-align:center;}
 .role-btn{width:100%;padding:20px;border-radius:18px;border:none;cursor:pointer;margin-bottom:12px;display:flex;align-items:center;gap:14px;transition:transform .1s;}
-.role-btn:active{transform:scale(.97);}
-.role-btn.staff{background:#F5A623;color:#1A2744;}
-.role-btn.manager{background:#fff;color:#1A2744;}
-.role-btn-icon{font-size:30px;}
-.role-btn-label{font-size:17px;font-weight:800;display:block;}
-.role-btn-desc{font-size:12px;font-weight:500;opacity:.6;display:block;}
+.role-btn:active{transform:scale(.97);} .role-btn.staff{background:#F5A623;color:#1A2744;} .role-btn.manager{background:#fff;color:#1A2744;}
+.role-btn-icon{font-size:30px;} .role-btn-label{font-size:17px;font-weight:800;display:block;} .role-btn-desc{font-size:12px;font-weight:500;opacity:.6;display:block;}
+/* ── auth ── */
 .auth-screen{min-height:100vh;padding:48px 24px 32px;display:flex;flex-direction:column;}
 .auth-back{background:none;border:none;font-size:26px;cursor:pointer;align-self:flex-start;margin-bottom:20px;color:#1A2744;}
 .auth-title{font-size:25px;font-weight:900;color:#1A2744;margin-bottom:6px;}
 .auth-sub{font-size:14px;color:#888;margin-bottom:24px;line-height:1.6;}
 .lbl{font-size:12px;font-weight:700;color:#888;margin-bottom:5px;display:block;text-transform:uppercase;letter-spacing:.5px;}
 .inp{width:100%;padding:14px;border:2px solid #E5E5E5;border-radius:12px;font-size:15px;font-family:inherit;margin-bottom:14px;outline:none;transition:border-color .2s;background:#fff;}
-.inp:focus{border-color:#F5A623;}
-.inp.code{font-size:26px;letter-spacing:8px;font-weight:800;text-align:center;color:#1A2744;}
+.inp:focus{border-color:#F5A623;} .inp.code{font-size:26px;letter-spacing:8px;font-weight:800;text-align:center;color:#1A2744;}
 .inp.sm{padding:9px 11px;font-size:13px;margin-bottom:0;border-radius:9px;}
 .inp.time{padding:8px 9px;font-size:12px;margin-bottom:0;width:auto;flex:1;border-radius:8px;}
 .btn{width:100%;padding:16px;background:#F5A623;border:none;border-radius:14px;font-size:15px;font-weight:800;color:#1A2744;cursor:pointer;margin-top:8px;transition:transform .1s;display:block;text-align:center;}
-.btn:active{transform:scale(.98);}
-.btn:disabled{opacity:.4;cursor:not-allowed;}
-.btn.sec{background:#F0F0F0;color:#1A2744;margin-top:10px;}
-.btn.danger{background:#E05252;color:#fff;}
-.btn.green{background:#50DC78;color:#1A2744;}
+.btn:active{transform:scale(.98);} .btn:disabled{opacity:.4;cursor:not-allowed;}
+.btn.sec{background:#F0F0F0;color:#1A2744;margin-top:10px;} .btn.danger{background:#E05252;color:#fff;}
+.btn.green{background:#50DC78;color:#1A2744;} .btn.navy{background:#1A2744;color:#fff;}
 .btn.sm{padding:9px 14px;font-size:12px;width:auto;margin-top:0;border-radius:9px;}
-.btn.navy{background:#1A2744;color:#fff;}
-.btn.outline{background:none;border:2px solid #1A2744;color:#1A2744;margin-top:8px;}
 .err{color:#E05252;font-weight:700;font-size:13px;margin-bottom:10px;}
 .staff-list{display:flex;flex-direction:column;gap:10px;margin-bottom:18px;}
 .staff-item{padding:14px 16px;background:#F7F4EF;border-radius:12px;display:flex;align-items:center;gap:12px;cursor:pointer;border:2px solid transparent;}
 .staff-item:hover{border-color:#ddd;}
 .avatar{width:42px;height:42px;border-radius:21px;background:#1A2744;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;flex-shrink:0;}
+/* ── layout ── */
 .hdr{padding:18px 18px 8px;display:flex;align-items:center;justify-content:space-between;}
-.hdr-name{font-size:19px;font-weight:900;color:#1A2744;}
-.hdr-greet{font-size:12px;color:#aaa;font-weight:500;}
+.hdr-name{font-size:19px;font-weight:900;color:#1A2744;} .hdr-greet{font-size:12px;color:#aaa;font-weight:500;}
 .hdr-logout{background:none;border:none;font-size:22px;cursor:pointer;}
 .body{padding:0 16px 110px;}
 .sec{font-size:16px;font-weight:800;color:#1A2744;margin:16px 0 10px;}
 .sec-sub{font-size:12px;color:#aaa;margin-top:-6px;margin-bottom:10px;}
 .bnav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:#fff;border-top:1px solid #F0F0F0;display:flex;padding:8px 0 env(safe-area-inset-bottom,18px);z-index:100;}
 .nbtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;border:none;background:none;cursor:pointer;padding:4px;position:relative;}
-.nbtn .ni{font-size:20px;}
-.nbtn .nl{font-size:10px;font-weight:700;color:#bbb;text-transform:uppercase;letter-spacing:.3px;}
-.nbtn.active .nl{color:#F5A623;}
+.nbtn .ni{font-size:20px;} .nbtn .nl{font-size:10px;font-weight:700;color:#bbb;text-transform:uppercase;letter-spacing:.3px;} .nbtn.active .nl{color:#F5A623;}
 .nbadge{position:absolute;top:0;right:calc(50% - 18px);background:#E05252;color:#fff;border-radius:10px;font-size:10px;font-weight:800;padding:1px 5px;min-width:16px;text-align:center;}
+/* ── cards ── */
+.card{background:#F7F4EF;border-radius:14px;padding:13px 14px;margin-bottom:10px;}
+.card.white{background:#fff;border:1.5px solid #F0F0F0;}
+.card-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;}
+.card-name{font-size:14px;font-weight:800;color:#1A2744;} .card-sub{font-size:11px;color:#888;margin-top:2px;}
+/* ── chips ── */
+.chip{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;}
+.chip.g{background:#D1FAE5;color:#065F46;} .chip.r{background:#FEE2E2;color:#7F1D1D;}
+.chip.a{background:#FEF3C7;color:#78350F;} .chip.b{background:#DBEAFE;color:#1E40AF;}
+/* ── clock ── */
 .clk-card{background:linear-gradient(135deg,#1A2744,#2C3E6B);border-radius:20px;padding:20px;margin-bottom:14px;color:#fff;}
-.clk-time{font-size:40px;font-weight:900;letter-spacing:-1px;}
-.clk-date{font-size:12px;color:rgba(255,255,255,.5);margin-bottom:12px;}
+.clk-time{font-size:40px;font-weight:900;letter-spacing:-1px;} .clk-date{font-size:12px;color:rgba(255,255,255,.5);margin-bottom:12px;}
 .clk-st{display:inline-block;padding:3px 11px;border-radius:20px;font-size:11px;font-weight:700;margin-bottom:14px;}
-.clk-st.in{background:rgba(80,220,120,.2);color:#50DC78;}
-.clk-st.out{background:rgba(255,255,255,.1);color:rgba(255,255,255,.4);}
+.clk-st.in{background:rgba(80,220,120,.2);color:#50DC78;} .clk-st.out{background:rgba(255,255,255,.1);color:rgba(255,255,255,.4);}
 .clk-btns{display:flex;gap:8px;}
 .clk-btn{flex:1;padding:13px;border-radius:11px;border:none;font-size:13px;font-weight:800;cursor:pointer;}
-.clk-btn.in{background:#50DC78;color:#1A2744;}
-.clk-btn.out{background:#E05252;color:#fff;}
-.clk-btn:disabled{opacity:.3;cursor:not-allowed;}
+.clk-btn.in{background:#50DC78;color:#1A2744;} .clk-btn.out{background:#E05252;color:#fff;} .clk-btn:disabled{opacity:.3;cursor:not-allowed;}
 .clk-hist{margin-top:12px;}
 .clk-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;color:rgba(255,255,255,.65);}
 .clk-row:last-child{border:none;}
+/* ── rota ── */
 .rday{background:#F7F4EF;border-radius:13px;padding:11px 13px;margin-bottom:7px;display:flex;align-items:center;gap:8px;}
-.rday.today{background:#FFF8EC;border:2px solid #F5A623;}
-.rday.off{opacity:.4;}
-.rday-lbl{min-width:62px;}
-.rday-name{font-size:12px;font-weight:800;color:#1A2744;}
-.rday-date{font-size:10px;color:#aaa;}
-.rday-flag{font-size:9px;font-weight:700;color:#F5A623;}
+.rday.today{background:#FFF8EC;border:2px solid #F5A623;} .rday.off{opacity:.4;}
+.rday-lbl{min-width:60px;} .rday-name{font-size:12px;font-weight:800;color:#1A2744;}
+.rday-date{font-size:10px;color:#aaa;} .rday-flag{font-size:9px;font-weight:700;color:#F5A623;}
 .rday-shift{flex:1;font-size:13px;font-weight:700;color:#1A2744;}
 .rday-actions{display:flex;gap:5px;}
-.reject-btn{border:none;background:#FEE2E2;color:#E05252;border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;}
 .confirm-btn{border:none;background:#D1FAE5;color:#065F46;border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;}
+.reject-btn{border:none;background:#FEE2E2;color:#E05252;border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;}
+/* ── absence ── */
 .abs-card{background:#FFF8EC;border:2px solid #F5A623;border-radius:16px;padding:16px;margin-bottom:14px;}
 .period-btns{display:flex;gap:6px;margin-bottom:12px;}
 .pbtn{flex:1;padding:10px 4px;border:2px solid #E5E5E5;border-radius:10px;background:#fff;font-size:12px;font-weight:700;color:#1A2744;cursor:pointer;text-align:center;}
 .pbtn.sel{border-color:#F5A623;background:#FFF8EC;}
+/* ── toast / overlay / modal ── */
 .toast{position:fixed;top:24px;left:50%;transform:translateX(-50%);background:#1A2744;color:#fff;padding:10px 18px;border-radius:40px;font-size:13px;font-weight:700;z-index:999;white-space:nowrap;animation:fio 2.8s forwards;pointer-events:none;}
 @keyframes fio{0%{opacity:0;top:10px}12%{opacity:1;top:24px}80%{opacity:1}100%{opacity:0}}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;z-index:200;}
-.sheet{background:#fff;border-radius:24px 24px 0 0;padding:24px 20px 40px;width:100%;max-width:430px;max-height:90vh;overflow-y:auto;}
+.sheet{background:#fff;border-radius:24px 24px 0 0;padding:24px 20px 44px;width:100%;max-width:430px;max-height:90vh;overflow-y:auto;}
 .sheet-title{font-size:19px;font-weight:900;color:#1A2744;margin-bottom:4px;}
 .sheet-sub{font-size:13px;color:#888;margin-bottom:14px;}
+/* ── toggle ── */
 .toggle{display:flex;border:2px solid #E5E5E5;border-radius:10px;overflow:hidden;width:fit-content;}
 .tgl-btn{padding:6px 13px;border:none;background:#fff;font-size:12px;font-weight:700;cursor:pointer;color:#888;}
 .tgl-btn.active{background:#1A2744;color:#fff;}
+/* ── manager header / tabs ── */
 .mgr-hdr{background:linear-gradient(135deg,#1A2744,#0F1D3A);padding:22px 16px 14px;display:flex;justify-content:space-between;align-items:flex-start;}
-.mgr-title{font-size:20px;font-weight:900;color:#fff;}
-.mgr-sub{font-size:11px;color:rgba(255,255,255,.4);}
+.mgr-title{font-size:20px;font-weight:900;color:#fff;} .mgr-sub{font-size:11px;color:rgba(255,255,255,.4);}
 .mgr-lo{background:rgba(255,255,255,.12);border:none;color:#fff;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:600;}
 .mgr-tabs{display:flex;overflow-x:auto;gap:2px;padding:0 12px;border-bottom:2px solid #F0F0F0;scrollbar-width:none;}
 .mgr-tabs::-webkit-scrollbar{display:none;}
 .mtab{white-space:nowrap;padding:10px 11px;border:none;background:none;font-size:12px;font-weight:700;color:#bbb;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;}
 .mtab.active{color:#1A2744;border-bottom-color:#F5A623;}
 .mgr-body{padding:12px 16px 110px;}
-.card{background:#F7F4EF;border-radius:14px;padding:13px 14px;margin-bottom:10px;}
-.card.white{background:#fff;border:1.5px solid #F0F0F0;}
-.card-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;}
-.card-name{font-size:14px;font-weight:800;color:#1A2744;}
-.card-sub{font-size:11px;color:#888;margin-top:2px;}
-.chip{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;}
-.chip.g{background:#D1FAE5;color:#065F46;}
-.chip.r{background:#FEE2E2;color:#7F1D1D;}
-.chip.a{background:#FEF3C7;color:#78350F;}
-.chip.b{background:#DBEAFE;color:#1E40AF;}
+/* ── payroll ── */
 .row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed #F0F0F0;font-size:13px;color:#555;}
-.row:last-child{border:none;}
-.row-bold{font-weight:800;color:#1A2744;}
-.rej-banner{background:#FEE2E2;border:1.5px solid #E05252;border-radius:11px;padding:9px 13px;margin-bottom:8px;font-size:12px;color:#7F1D1D;font-weight:600;display:flex;justify-content:space-between;align-items:center;}
-.taking-msg{background:#D1FAE5;border:1.5px solid #50DC78;border-radius:13px;padding:12px 14px;margin-bottom:10px;}
-.taking-msg-head{font-size:13px;font-weight:800;color:#065F46;margin-bottom:3px;}
-.taking-msg-detail{font-size:12px;color:#047857;}
-.taking-msg.new-sub{background:#FFF8EC;border-color:#F5A623;}
-.taking-msg.new-sub .taking-msg-head{color:#78350F;}
-.taking-msg.new-sub .taking-msg-detail{color:#92400E;}
-.log-entry{padding:9px 0;border-bottom:1px dashed #E5E5E5;}
-.log-entry:last-child{border:none;}
-.log-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;}
-.log-note{width:100%;padding:7px 9px;border:1.5px solid #E5E5E5;border-radius:8px;font-size:12px;font-family:inherit;outline:none;margin-top:4px;background:#fff;resize:none;}
-.log-note:focus{border-color:#F5A623;}
-.log-edit-row{display:flex;gap:5px;align-items:center;margin-bottom:5px;}
-.log-edit-lbl{font-size:10px;font-weight:700;color:#aaa;min-width:24px;}
+.row:last-child{border:none;} .row-bold{font-weight:800;color:#1A2744;}
 .pay-card{background:#fff;border:2px solid #F0F0F0;border-radius:14px;margin-bottom:10px;overflow:hidden;}
 .pay-head{background:#F7F4EF;padding:11px 14px;display:flex;justify-content:space-between;align-items:center;}
-.pay-name{font-size:14px;font-weight:800;color:#1A2744;}
-.pay-total{font-size:18px;font-weight:900;color:#F5A623;}
+.pay-name{font-size:14px;font-weight:800;color:#1A2744;} .pay-total{font-size:18px;font-weight:900;color:#F5A623;}
 .pay-body{padding:11px 14px;}
-.mini-inp{width:74px;padding:5px 7px;border:1.5px solid #ddd;border-radius:6px;font-size:13px;text-align:right;font-family:inherit;outline:none;}
+.mini-inp{width:80px;padding:5px 7px;border:1.5px solid #ddd;border-radius:6px;font-size:13px;text-align:right;font-family:inherit;outline:none;}
 .mini-inp:focus{border-color:#F5A623;}
 .add-row{display:flex;gap:5px;align-items:center;margin-top:6px;}
 .add-inp{flex:1;padding:7px 9px;border:1.5px solid #E5E5E5;border-radius:8px;font-size:12px;font-family:inherit;outline:none;}
 .add-inp:focus{border-color:#F5A623;}
 .add-btn-sm{padding:7px 11px;background:#F5A623;border:none;border-radius:7px;font-size:11px;font-weight:800;color:#1A2744;cursor:pointer;}
 .add-btn-sm.r{background:#FEE2E2;color:#7F1D1D;}
+.pay-summary{background:linear-gradient(135deg,#1A2744,#2C3E6B);border-radius:16px;padding:16px;margin-top:14px;color:#fff;}
+.psum-title{font-size:12px;font-weight:700;color:rgba(255,255,255,.5);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px;}
+.psum-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.1);font-size:14px;color:rgba(255,255,255,.8);}
+.psum-row:last-child{border:none;} .psum-amt{font-weight:900;color:#F5A623;}
+/* ── export ── */
 .exp-sec{background:#F7F4EF;border-radius:14px;padding:13px;margin-top:12px;}
 .exp-title{font-size:13px;font-weight:800;color:#1A2744;margin-bottom:9px;}
 .exp-btn{width:100%;padding:13px;border:none;border-radius:11px;font-size:13px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;margin-bottom:7px;}
-.exp-btn:last-child{margin-bottom:0;}
-.exp-btn.primary{background:#1A2744;color:#fff;}
-.exp-btn.sec{background:#E8F0E9;color:#1A2744;}
+.exp-btn:last-child{margin-bottom:0;} .exp-btn.primary{background:#1A2744;color:#fff;} .exp-btn.sec{background:#E8F0E9;color:#1A2744;}
 .exp-hint{font-size:11px;color:#aaa;margin-top:6px;line-height:1.5;}
+/* ── takings ── */
 .take-field{margin-bottom:9px;}
 .take-lbl{font-size:12px;font-weight:700;color:#555;margin-bottom:3px;display:flex;justify-content:space-between;align-items:center;}
 .take-hint{font-size:10px;color:#aaa;margin-top:2px;font-style:italic;}
+.taking-msg{background:#D1FAE5;border:1.5px solid #50DC78;border-radius:13px;padding:12px 14px;margin-bottom:10px;}
+.taking-msg-head{font-size:13px;font-weight:800;color:#065F46;margin-bottom:3px;}
+.taking-msg-detail{font-size:12px;color:#047857;}
+.taking-msg.new-sub{background:#FFF8EC;border-color:#F5A623;}
+.taking-msg.new-sub .taking-msg-head{color:#78350F;} .taking-msg.new-sub .taking-msg-detail{color:#92400E;}
+/* ── misc ── */
 .notif{background:linear-gradient(135deg,#F5A623,#E8940A);border-radius:14px;padding:14px;margin-bottom:14px;cursor:pointer;}
 .notif-title{font-size:14px;font-weight:900;color:#1A2744;margin-bottom:3px;}
 .notif-sub{font-size:12px;color:rgba(26,39,68,.7);}
 .warn-banner{background:#FEE2E2;border:2px solid #E05252;border-radius:13px;padding:12px 14px;margin-bottom:12px;}
-.warn-title{font-size:13px;font-weight:800;color:#7F1D1D;margin-bottom:3px;}
-.warn-sub{font-size:12px;color:#991B1B;}
-.divider{height:1px;background:#F0F0F0;margin:10px 0;}
-.empty{text-align:center;padding:36px 20px;color:#ccc;}
-.empty-icon{font-size:42px;margin-bottom:8px;}
-.empty-text{font-size:14px;font-weight:600;}
-.loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#F7F4EF;gap:16px;}
-.loading-spinner{width:40px;height:40px;border:4px solid #E5E5E5;border-top-color:#F5A623;border-radius:50%;animation:spin .8s linear infinite;}
-@keyframes spin{to{transform:rotate(360deg)}}
-.loading-text{font-size:14px;font-weight:600;color:#888;}
-/* Pay summary */
-.pay-summary{background:linear-gradient(135deg,#1A2744,#2C3E6B);border-radius:16px;padding:16px;margin-top:14px;color:#fff;}
-.pay-summary-title{font-size:13px;font-weight:700;color:rgba(255,255,255,.6);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px;}
-.pay-summary-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.1);font-size:14px;color:rgba(255,255,255,.85);}
-.pay-summary-row:last-child{border:none;}
-.pay-summary-total{font-weight:900;color:#F5A623;font-size:16px;}
-/* Cash popup */
-.cash-popup{background:#fff;border-radius:20px 20px 0 0;padding:24px 20px 40px;}
-.cash-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #F0F0F0;font-size:15px;}
-.cash-row:last-child{border:none;}
-.cash-name{font-weight:700;color:#1A2744;}
-.cash-amount{font-weight:900;color:#065F46;font-size:16px;}
-/* Week nav */
+.warn-title{font-size:13px;font-weight:800;color:#7F1D1D;margin-bottom:3px;} .warn-sub{font-size:12px;color:#991B1B;}
+.rej-banner{background:#FEE2E2;border:1.5px solid #E05252;border-radius:11px;padding:9px 13px;margin-bottom:8px;font-size:12px;color:#7F1D1D;font-weight:600;display:flex;justify-content:space-between;align-items:center;}
+.log-entry{padding:9px 0;border-bottom:1px dashed #E5E5E5;} .log-entry:last-child{border:none;}
+.log-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;}
+.log-note{width:100%;padding:7px 9px;border:1.5px solid #E5E5E5;border-radius:8px;font-size:12px;font-family:inherit;outline:none;margin-top:4px;background:#fff;resize:none;}
+.log-note:focus{border-color:#F5A623;}
+.log-edit-row{display:flex;gap:5px;align-items:center;margin-bottom:5px;}
+.log-edit-lbl{font-size:10px;font-weight:700;color:#aaa;min-width:24px;}
 .week-nav{display:flex;align-items:center;gap:8px;background:#F7F4EF;border-radius:12px;padding:10px 12px;margin-bottom:12px;}
 .week-nav-btn{background:#fff;border:1.5px solid #E5E5E5;border-radius:8px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px;flex-shrink:0;}
-.week-nav-label{flex:1;text-align:center;font-size:12px;font-weight:700;color:#1A2744;line-height:1.4;}
-/* Rota week range picker */
-.rota-week-bar{background:#FFF8EC;border:1.5px solid #F5A623;border-radius:12px;padding:10px 14px;margin-bottom:12px;}
-.rota-week-title{font-size:12px;font-weight:800;color:#78350F;margin-bottom:6px;}
-.rota-week-range{font-size:13px;color:#92400E;font-weight:600;}
-/* Staff remove */
-.danger-zone{margin-top:14px;padding-top:12px;border-top:1px dashed #F0F0F0;}
+.week-nav-lbl{flex:1;text-align:center;font-size:12px;font-weight:700;color:#1A2744;line-height:1.4;}
+.divider{height:1px;background:#F0F0F0;margin:10px 0;}
+.empty{text-align:center;padding:36px 20px;color:#ccc;}
+.empty-icon{font-size:42px;margin-bottom:8px;} .empty-text{font-size:14px;font-weight:600;}
+.loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#F7F4EF;gap:16px;}
+.loading-spinner{width:40px;height:40px;border:4px solid #E5E5E5;border-top-color:#F5A623;border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}} .loading-text{font-size:14px;font-weight:600;color:#888;}
+.cash-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #F0F0F0;font-size:15px;}
+.cash-row:last-child{border:none;} .cash-name{font-weight:700;color:#1A2744;} .cash-amt{font-weight:900;color:#065F46;font-size:16px;}
+.day-default-row{display:flex;align-items:center;gap:8px;margin-bottom:7px;}
+.day-default-lbl{font-size:12px;font-weight:700;color:#1A2744;min-width:36px;}
 `;
 
 // ═══════════════════════════════════════════════════════════════════
-// GOOGLE SHEETS
-// ═══════════════════════════════════════════════════════════════════
-async function pushSheet(apiKey, spreadsheetId, sheetName, rows) {
-  if (!apiKey || !spreadsheetId) return { ok:false, err:"Google Sheets not configured. Tap 🔗 Sheets to set up." };
-  try {
-    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(sheetName+"!A1:Z2000")}:clear?key=${apiKey}`,{method:"POST"});
-    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(sheetName+"!A1")}?valueInputOption=USER_ENTERED&key=${apiKey}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({values:rows})});
-    if (!res.ok){const e=await res.json();return{ok:false,err:e.error?.message||"API error"};}
-    return {ok:true};
-  } catch(e){return{ok:false,err:e.message};}
-}
-function copyTSV(rows,t){
-  const tsv=rows.map(r=>r.map(c=>String(c??'')).join('\t')).join('\n');
-  navigator.clipboard.writeText(tsv).then(()=>t("📋 Copied! Open Google Sheets → click A1 → Ctrl+V")).catch(()=>t("❌ Copy failed"));
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// TOAST & LOADING
+// SMALL SHARED COMPONENTS
 // ═══════════════════════════════════════════════════════════════════
 function Toast({msg}){return msg?<div className="toast">{msg}</div>:null;}
 function Loading({text="Loading…"}){return<div className="loading"><div className="loading-spinner"/><div className="loading-text">{text}</div></div>;}
@@ -299,7 +256,7 @@ function RolePicker({onPick}){
       <div className="role-sub">Who is using this device?</div>
       <button className="role-btn staff" onClick={()=>onPick("staff")}>
         <span className="role-btn-icon">👤</span>
-        <span><span className="role-btn-label">I'm a Staff Member</span><span className="role-btn-desc">Clock in/out · View rota · Report absence</span></span>
+        <span><span className="role-btn-label">I'm a Staff Member</span><span className="role-btn-desc">Clock in/out · Rota · Absence</span></span>
       </button>
       <button className="role-btn manager" onClick={()=>onPick("manager")}>
         <span className="role-btn-icon">🔑</span>
@@ -329,7 +286,7 @@ function StaffLogin({staff,onLogin,onBack,onRegister}){
     <div className="auth-screen">
       <button className="auth-back" onClick={onBack}>←</button>
       <div className="auth-title">Who are you? 👋</div>
-      <div className="auth-sub">Tap your name, then enter your code</div>
+      <div className="auth-sub">Tap your name then enter your code</div>
       <div className="staff-list">
         {staff.map(s=>(
           <div key={s.id} className="staff-item" onClick={()=>{setSel(s);setStep("code");setCode("");setErr("");}}>
@@ -348,10 +305,20 @@ function StaffRegister({onBack,onRegister}){
   async function handle(){
     if(!name.trim())return setErr("Please type your name");
     if(!/^\d{8}$/.test(code))return setErr("Code must be exactly 8 digits");
-    if(code!==confirm)return setErr("Codes don't match");
+    if(code!==confirm)return setErr("Codes don't match — try again");
     setSaving(true);
-    const{error}=await supabase.from("staff").insert({id:code,name:name.trim(),code,pay_type:"hourly",rate:"0",shift_rate:"0",night_rate:"0",cash_card:"cash",card_fixed:"0"});
-    if(error){setSaving(false);return setErr(error.code==="23505"?"That code is already taken — choose another":error.message);}
+    // Only insert columns that definitely exist with their DB names
+    const{error}=await db.from("staff").insert({
+      id:code, name:name.trim(), code,
+      pay_type:"hourly", rate:"0",
+      shift_rate:"0", night_rate:"0",
+      card_fixed:"0", card_override:"0"
+    });
+    if(error){
+      setSaving(false);
+      if(error.code==="23505")return setErr("That code is already taken — pick a different one");
+      return setErr("Error: "+error.message);
+    }
     onRegister({id:code,name:name.trim(),code});
   }
   return(
@@ -363,10 +330,10 @@ function StaffRegister({onBack,onRegister}){
       <input className="inp" placeholder="e.g. Amy Chen" value={name} onChange={e=>setName(e.target.value)}/>
       <label className="lbl">Choose 8-Digit Code</label>
       <input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={code} onChange={e=>setCode(e.target.value)}/>
-      <label className="lbl">Type Code Again</label>
+      <label className="lbl">Type Code Again to Confirm</label>
       <input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={confirm} onChange={e=>setConfirm(e.target.value)}/>
       {err&&<div className="err">{err}</div>}
-      <button className="btn" onClick={handle} disabled={saving}>{saving?"Creating…":"Create Account"}</button>
+      <button className="btn" onClick={handle} disabled={saving}>{saving?"Creating account…":"Create Account"}</button>
     </div>
   );
 }
@@ -374,102 +341,94 @@ function StaffRegister({onBack,onRegister}){
 // ═══════════════════════════════════════════════════════════════════
 // STAFF APP
 // ═══════════════════════════════════════════════════════════════════
-function StaffApp({user,onLogout,takingsAssignment}){
+function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[tab,setTab]=useState("home");
-  const[toast,setToast]=useState("");
+  const[msg,setMsg]=useState("");
   const[clockedIn,setClockedIn]=useState(false);
   const[clockInTime,setClockInTime]=useState(null);
-  const[clockLogs,setClockLogs]=useState([]);
-  const[rota,setRota]=useState([]);
+  const[logs,setLogs]=useState([]);
+  const[rota,setRota]=useState([]);  // [{date,jsDay,type,customIn,customOut}]
   const[absences,setAbsences]=useState([]);
   const[rejections,setRejections]=useState([]);
   const[confirmations,setConfirmations]=useState([]);
-  const[absDate,setAbsDate]=useState("");
-  const[absPeriod,setAbsPeriod]=useState("");
-  const[rejectModal,setRejectModal]=useState(null);
-  const[rejectReason,setRejectReason]=useState("");
-  const[takingsValues,setTakingsValues]=useState({});
-  const[takingsPayTypes,setTakingsPayTypes]=useState({});
-  const[takingsNote,setTakingsNote]=useState("");
-  const[loading,setLoading]=useState(true);
+  const[absDate,setAbsDate]=useState("");const[absPeriod,setAbsPeriod]=useState("");
+  const[rejectModal,setRejectModal]=useState(null);const[rejectReason,setRejectReason]=useState("");
+  const[tValues,setTValues]=useState({});const[tPayTypes,setTPayTypes]=useState({});const[tNote,setTNote]=useState("");
   const[alreadySubmitted,setAlreadySubmitted]=useState(false);
-  const[currentRotaMon,setCurrentRotaMon]=useState(currentRotaWeek().start);
+  const[loading,setLoading]=useState(true);
+  const[rotaMon,setRotaMon]=useState(rotaWeekOf(todayISO()).start);
 
-  const assigned=takingsAssignment?.staff_id===user.id&&takingsAssignment?.date===todayISO();
+  const assigned=effectiveTakingsPerson===user.id;
   const now=new Date();
-  function t(m){setToast(m);setTimeout(()=>setToast(""),2800);}
+  function t(m){setMsg(m);setTimeout(()=>setMsg(""),2800);}
 
   useEffect(()=>{loadData();},[]);
-  useEffect(()=>{loadRota();},[currentRotaMon]);
+  useEffect(()=>{loadRota();},[rotaMon]);
 
   async function loadData(){
     setLoading(true);
-    const[logsRes,absRes,rejRes,confRes,subRes]=await Promise.all([
-      supabase.from("clock_logs").select("*").eq("staff_id",user.id).order("date",{ascending:false}).limit(20),
-      supabase.from("absences").select("*").eq("staff_id",user.id).order("date",{ascending:false}),
-      supabase.from("rejections").select("*").eq("staff_id",user.id),
-      supabase.from("confirmations").select("*").eq("staff_id",user.id),
-      supabase.from("takings").select("id").eq("staff_id",user.id).eq("date",todayISO()),
+    const[logR,absR,rejR,confR,subR]=await Promise.all([
+      db.from("clock_logs").select("*").eq("staff_id",user.id).order("date",{ascending:false}).limit(20),
+      db.from("absences").select("*").eq("staff_id",user.id).order("date",{ascending:false}),
+      db.from("rejections").select("*").eq("staff_id",user.id),
+      db.from("confirmations").select("*").eq("staff_id",user.id),
+      db.from("takings").select("id").eq("staff_id",user.id).eq("date",todayISO()),
     ]);
-    setClockLogs(logsRes.data||[]);
-    setAbsences(absRes.data||[]);
-    setRejections(rejRes.data||[]);
-    setConfirmations(confRes.data||[]);
-    setAlreadySubmitted((subRes.data||[]).length>0);
-    const active=(logsRes.data||[]).find(l=>l.date===todayISO()&&l.time_in&&!l.time_out);
+    setLogs(logR.data||[]);
+    setAbsences(absR.data||[]);
+    setRejections(rejR.data||[]);
+    setConfirmations(confR.data||[]);
+    setAlreadySubmitted((subR.data||[]).length>0);
+    const active=(logR.data||[]).find(l=>l.date===todayISO()&&l.time_in&&!l.time_out);
     if(active){setClockedIn(true);setClockInTime(active.time_in);}
     await loadRota();
     setLoading(false);
   }
 
   async function loadRota(){
-    const monISO=currentRotaMon;
-    const sunISO=addDays(monISO,6);
-    const res=await supabase.from("rota").select("*").eq("staff_id",user.id).gte("week_start",monISO).lte("week_start",sunISO);
-    // Build 7-day array Mon–Sun
-    const dates=weekDates(monISO);
-    const arr=dates.map((dateISO,idx)=>{
-      // For this date, find a rota row where week_start=monISO and day_index matches JS day
+    const dates=weekDates(rotaMon);
+    const res=await db.from("rota").select("*").eq("staff_id",user.id).eq("week_start",rotaMon);
+    setRota(dates.map(dateISO=>{
       const jsDay=new Date(dateISO+"T12:00:00").getDay();
-      const row=(res.data||[]).find(r=>r.week_start===monISO&&r.day_index===jsDay);
-      return{date:dateISO,jsDay,type:row?.shift_type||"Off",customIn:row?.custom_in||"",customOut:row?.custom_out||"",rowId:row?.id};
-    });
-    setRota(arr);
+      const row=(res.data||[]).find(r=>r.day_index===jsDay);
+      return{date:dateISO,jsDay,type:row?.shift_type||"Off",customIn:row?.custom_in||"",customOut:row?.custom_out||""};
+    }));
   }
 
   async function clockIn(){
     const time=nowTime();
-    const{data,error}=await supabase.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:time,note:""}).select().single();
-    if(!error){setClockLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(time);t("✅ Clocked in at "+time);}
+    const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:time,note:""}).select().single();
+    if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(time);t("✅ Clocked in at "+time);}
     else t("❌ "+error.message);
   }
   async function clockOut(){
+    const active=logs.find(l=>l.date===todayISO()&&l.time_in&&!l.time_out);if(!active)return;
     const time=nowTime();
-    const active=clockLogs.find(l=>l.date===todayISO()&&l.time_in&&!l.time_out);
-    if(!active)return;
-    const{error}=await supabase.from("clock_logs").update({time_out:time}).eq("id",active.id);
-    if(!error){setClockLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time}:l));setClockedIn(false);t("👋 Clocked out at "+time);}
+    const{error}=await db.from("clock_logs").update({time_out:time}).eq("id",active.id);
+    if(!error){setLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time}:l));setClockedIn(false);t("👋 Clocked out at "+time);}
     else t("❌ "+error.message);
   }
   async function reportAbsence(){
     if(!absDate||!absPeriod)return t("Please pick a date and period");
-    const{data,error}=await supabase.from("absences").insert({staff_id:user.id,staff_name:user.name,date:absDate,period:absPeriod}).select().single();
+    const{data,error}=await db.from("absences").insert({staff_id:user.id,staff_name:user.name,date:absDate,period:absPeriod}).select().single();
     if(!error){setAbsences(p=>[...p,data]);setAbsDate("");setAbsPeriod("");t("📅 Absence sent to manager!");}
     else t("❌ "+error.message);
   }
   async function confirmShift(idx){
-    const{data,error}=await supabase.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:ROTA_DISPLAY_DAYS[idx]}).select().single();
+    const dayName=DAYS_MON[idx];
+    const{data,error}=await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:dayName}).select().single();
     if(!error){setConfirmations(p=>[...p,data]);t("✅ Shift confirmed!");}
   }
   async function rejectShift(){
-    const{data,error}=await supabase.from("rejections").insert({staff_id:user.id,staff_name:user.name,day:ROTA_DISPLAY_DAYS[rejectModal],reason:rejectReason}).select().single();
+    const dayName=DAYS_MON[rejectModal];
+    const{data,error}=await db.from("rejections").insert({staff_id:user.id,staff_name:user.name,day:dayName,reason:rejectReason}).select().single();
     if(!error){setRejections(p=>[...p,data]);setRejectModal(null);t("Rejection sent to manager");}
   }
   async function submitTakings(){
     const vals={};
-    TAKING_FIELDS.forEach(f=>{vals[f.dbKey]=parseFloat(takingsValues[f.key]||0);if(f.dbPayKey)vals[f.dbPayKey]=takingsPayTypes[f.key]||"cash";});
-    const{error}=await supabase.from("takings").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),...vals,note:takingsNote,is_new:true});
-    if(!error){setTakingsValues({});setTakingsPayTypes({});setTakingsNote("");setAlreadySubmitted(true);t("📊 Takings submitted!");setTab("home");}
+    TAKING_FIELDS.forEach(f=>{vals[f.dbKey]=parseFloat(tValues[f.key]||0);if(f.dbPayKey)vals[f.dbPayKey]=tPayTypes[f.key]||"cash";});
+    const{error}=await db.from("takings").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),...vals,note:tNote,is_new:true});
+    if(!error){setTValues({});setTPayTypes({});setTNote("");setAlreadySubmitted(true);t("📊 Submitted!");setTab("home");}
     else t("❌ "+error.message);
   }
 
@@ -483,26 +442,18 @@ function StaffApp({user,onLogout,takingsAssignment}){
 
   if(loading)return<Loading text="Loading your data…"/>;
 
-  const todayJsDay=now.getDay();
-  const navItems=[
-    {id:"home",icon:"🏠",label:"Home"},
-    {id:"rota",icon:"📋",label:"Rota"},
-    {id:"absence",icon:"📅",label:"Absence"},
-    ...(assigned?[{id:"takings",icon:"📊",label:"Takings",badge:!alreadySubmitted}]:[]),
-  ];
-
   function RotaList(){
     return rota.map((sh,idx)=>{
       const isToday=sh.date===todayISO();
-      const displayDay=ROTA_DISPLAY_DAYS[idx];
-      const rejected=rejections.some(r=>r.day===displayDay);
-      const confirmed=confirmations.some(r=>r.day===displayDay);
+      const dayName=DAYS_MON[idx];
+      const rejected=rejections.some(r=>r.day===dayName);
+      const confirmed=confirmations.some(r=>r.day===dayName);
       const isOff=sh.type==="Off";
       return(
         <div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}`}>
           <div className="rday-lbl">
-            <div className="rday-name">{displayDay}</div>
-            <div className="rday-date">{isoToDisplay(sh.date)}</div>
+            <div className="rday-name">{dayName}</div>
+            <div className="rday-date">{dispDate(sh.date)}</div>
             {isToday&&<div className="rday-flag">TODAY</div>}
           </div>
           <div className="rday-shift">{shiftLabel(sh)}</div>
@@ -519,25 +470,24 @@ function StaffApp({user,onLogout,takingsAssignment}){
     });
   }
 
+  const navItems=[
+    {id:"home",icon:"🏠",label:"Home"},
+    {id:"rota",icon:"📋",label:"Rota"},
+    {id:"absence",icon:"📅",label:"Absence"},
+    ...(assigned?[{id:"takings",icon:"📊",label:"Takings",badge:!alreadySubmitted}]:[]),
+  ];
+
   return(
     <div className="app">
-      <Toast msg={toast}/>
+      <Toast msg={msg}/>
       <div className="hdr">
-        <div>
-          <div className="hdr-greet">Good {now.getHours()<12?"morning":now.getHours()<18?"afternoon":"evening"},</div>
-          <div className="hdr-name">{user.name.split(" ")[0]} 👋</div>
-        </div>
+        <div><div className="hdr-greet">Good {now.getHours()<12?"morning":now.getHours()<18?"afternoon":"evening"},</div><div className="hdr-name">{user.name.split(" ")[0]} 👋</div></div>
         <button className="hdr-logout" onClick={onLogout}>🚪</button>
       </div>
 
       {tab==="home"&&(
         <div className="body">
-          {assigned&&!alreadySubmitted&&(
-            <div className="notif" onClick={()=>setTab("takings")}>
-              <div className="notif-title">📊 You're today's Takings Person!</div>
-              <div className="notif-sub">Tap here to record today's daily takings →</div>
-            </div>
-          )}
+          {assigned&&!alreadySubmitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-title">📊 You're today's Takings Person!</div><div className="notif-sub">Tap to record today's takings →</div></div>}
           <div className="clk-card">
             <div className="clk-time">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div>
             <div className="clk-date">{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div>
@@ -546,19 +496,9 @@ function StaffApp({user,onLogout,takingsAssignment}){
               <button className="clk-btn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button>
               <button className="clk-btn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button>
             </div>
-            {clockLogs.slice(0,3).length>0&&(
-              <div className="clk-hist">
-                {clockLogs.slice(0,3).map(l=>(
-                  <div key={l.id} className="clk-row">
-                    <span>{isoToDisplay(l.date,true)}</span>
-                    <span>{l.time_in} → {l.time_out||"active"}</span>
-                    <span style={{fontWeight:700}}>{l.time_out?parseHours(l.time_in,l.time_out).toFixed(1)+"h":""}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+            {logs.slice(0,3).length>0&&<div className="clk-hist">{logs.slice(0,3).map(l=><div key={l.id} className="clk-row"><span>{dispDate(l.date,true)}</span><span>{l.time_in}→{l.time_out||"active"}</span><span>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(1)+"h":""}</span></div>)}</div>}
           </div>
-          <div className="sec">This Week's Rota</div>
+          <div className="sec">This Week</div>
           <RotaList/>
         </div>
       )}
@@ -567,9 +507,9 @@ function StaffApp({user,onLogout,takingsAssignment}){
         <div className="body">
           <div className="sec">My Rota</div>
           <div className="week-nav">
-            <button className="week-nav-btn" onClick={()=>setCurrentRotaMon(addDays(currentRotaMon,-7))}>‹</button>
-            <div className="week-nav-label">{fmtDate(currentRotaMon)} – {fmtDate(addDays(currentRotaMon,6))}</div>
-            <button className="week-nav-btn" onClick={()=>setCurrentRotaMon(addDays(currentRotaMon,7))}>›</button>
+            <button className="week-nav-btn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button>
+            <div className="week-nav-lbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div>
+            <button className="week-nav-btn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button>
           </div>
           <RotaList/>
         </div>
@@ -583,67 +523,43 @@ function StaffApp({user,onLogout,takingsAssignment}){
             <div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work</div>
             <label className="lbl">Which day?</label>
             <input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={todayISO()} onChange={e=>setAbsDate(e.target.value)}/>
-            <label className="lbl" style={{marginBottom:7}}>Which part of the day?</label>
-            <div className="period-btns">
-              {["Morning","Evening","Full Day"].map(p=>(
-                <button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>
-                  {p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}
-                </button>
-              ))}
-            </div>
+            <label className="lbl" style={{marginBottom:7}}>Which part?</label>
+            <div className="period-btns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div>
             <button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod}>Send to Manager</button>
           </div>
-          {absences.length>0&&(<>
-            <div className="sec">Reported</div>
-            {absences.map(a=>(
-              <div key={a.id} style={{background:"#F7F4EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
-                <div><div style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{isoToDisplay(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div>
-                <span className="chip a">Sent ✓</span>
-              </div>
-            ))}
-          </>)}
+          {absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#F7F4EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</>}
         </div>
       )}
 
       {tab==="takings"&&(
         <div className="body">
           <div className="sec">📊 Daily Takings</div>
-          {alreadySubmitted?(<div className="empty"><div className="empty-icon">✅</div><div className="empty-text">Already submitted today!</div></div>)
-          :!assigned?(<div className="empty"><div className="empty-icon">🔒</div><div className="empty-text">Not assigned today</div></div>):(
+          {alreadySubmitted?<div className="empty"><div className="empty-icon">✅</div><div className="empty-text">Already submitted today!</div></div>
+          :!assigned?<div className="empty"><div className="empty-icon">🔒</div><div className="empty-text">Not assigned today</div></div>
+          :(
             <>
-              <div style={{fontSize:12,color:"#888",marginBottom:14}}>Record for {isoToDisplay(todayISO(),true)}. <strong>Enter all amounts as positive numbers.</strong></div>
+              <div style={{fontSize:12,color:"#888",marginBottom:14}}>For {dispDate(todayISO(),true)}. <strong>Enter all amounts as positive numbers.</strong></div>
               {TAKING_FIELDS.map(f=>(
                 <div key={f.key} className="take-field">
-                  <div className="take-lbl">
-                    <span>{f.label}</span>
-                    {f.hasCashCard&&(<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl-btn${(takingsPayTypes[f.key]||"cash")===c?" active":""}`} onClick={()=>setTakingsPayTypes(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>)}
-                  </div>
+                  <div className="take-lbl"><span>{f.label}</span>{f.hasCashCard&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl-btn${(tPayTypes[f.key]||"cash")===c?" active":""}`} onClick={()=>setTPayTypes(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>
                   {f.hint&&<div className="take-hint">{f.hint}</div>}
-                  <input className="inp sm" style={{display:"block",width:"100%",marginTop:4}} type="number" min="0" placeholder="0.00" value={takingsValues[f.key]||""} onChange={e=>setTakingsValues(p=>({...p,[f.key]:e.target.value}))}/>
+                  <input className="inp sm" style={{display:"block",width:"100%",marginTop:4}} type="number" min="0" placeholder="0.00" value={tValues[f.key]||""} onChange={e=>setTValues(p=>({...p,[f.key]:e.target.value}))}/>
                 </div>
               ))}
               <label className="lbl" style={{marginTop:10}}>Note (optional)</label>
-              <textarea className="log-note" rows={3} style={{marginBottom:12}} placeholder="Any notes…" value={takingsNote} onChange={e=>setTakingsNote(e.target.value)}/>
+              <textarea className="log-note" rows={3} style={{marginBottom:12}} placeholder="Any notes…" value={tNote} onChange={e=>setTNote(e.target.value)}/>
               <button className="btn green" onClick={submitTakings}>Submit to Manager ✓</button>
             </>
           )}
         </div>
       )}
 
-      <div className="bnav">
-        {navItems.map(n=>(
-          <button key={n.id} className={`nbtn${tab===n.id?" active":""}`} onClick={()=>setTab(n.id)}>
-            {n.badge&&<span className="nbadge">!</span>}
-            <span className="ni">{n.icon}</span>
-            <span className="nl">{n.label}</span>
-          </button>
-        ))}
-      </div>
+      <div className="bnav">{navItems.map(n=><button key={n.id} className={`nbtn${tab===n.id?" active":""}`} onClick={()=>setTab(n.id)}>{n.badge&&<span className="nbadge">!</span>}<span className="ni">{n.icon}</span><span className="nl">{n.label}</span></button>)}</div>
 
       {rejectModal!==null&&(
         <div className="overlay" onClick={()=>setRejectModal(null)}>
           <div className="sheet" onClick={e=>e.stopPropagation()}>
-            <div className="sheet-title">Can't work {ROTA_DISPLAY_DAYS[rejectModal]}?</div>
+            <div className="sheet-title">Can't work {DAYS_MON[rejectModal]}?</div>
             <div className="sheet-sub">Tell the manager why (optional)</div>
             <textarea className="log-note" rows={3} placeholder="e.g. Doctor appointment…" value={rejectReason} onChange={e=>setRejectReason(e.target.value)}/>
             <button className="btn danger" style={{marginTop:12}} onClick={rejectShift}>Send Rejection</button>
@@ -659,14 +575,23 @@ function StaffApp({user,onLogout,takingsAssignment}){
 // MANAGER AUTH
 // ═══════════════════════════════════════════════════════════════════
 function ManagerLogin({onLogin,onBack}){
-  const[pin,setPin]=useState("");const[err,setErr]=useState("");
+  const[pin,setPin]=useState("");const[err,setErr]=useState("");const[loading,setLoading]=useState(false);
+  async function tryLogin(){
+    setLoading(true);
+    const{data}=await db.from("app_settings").select("value").eq("key","manager_pin").maybeSingle();
+    const correctPin=data?.value||"00000000";
+    if(pin===correctPin)onLogin();
+    else{setErr("Wrong PIN — try again");setPin("");}
+    setLoading(false);
+  }
   return(
     <div className="auth-screen">
       <button className="auth-back" onClick={onBack}>←</button>
       <div className="auth-title">Manager Sign In 🔑</div>
+      <div className="auth-sub">Enter your manager PIN</div>
       <input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={pin} onChange={e=>{setPin(e.target.value);setErr("");}} autoFocus/>
       {err&&<div className="err">{err}</div>}
-      <button className="btn" onClick={()=>pin==="00000000"?onLogin():setErr("Wrong PIN")} disabled={pin.length<4}>Sign In</button>
+      <button className="btn" onClick={tryLogin} disabled={pin.length<4||loading}>{loading?"Checking…":"Sign In"}</button>
       <div style={{textAlign:"center",fontSize:13,color:"#aaa",marginTop:14}}>Default PIN: 00000000</div>
     </div>
   );
@@ -677,10 +602,10 @@ function ManagerLogin({onLogin,onBack}){
 // ═══════════════════════════════════════════════════════════════════
 function ManagerApp({onLogout}){
   const[tab,setTab]=useState("rota");
-  const[toast,setToast]=useState("");
+  const[msg,setMsg]=useState("");
   const[loading,setLoading]=useState(true);
   const[staff,setStaff]=useState([]);
-  const[rota,setRota]=useState({});  // {staffId: [{date,jsDay,type,customIn,customOut,rowId}, ...7]}
+  const[rota,setRota]=useState({});
   const[absences,setAbsences]=useState([]);
   const[clockLogs,setClockLogs]=useState([]);
   const[rejections,setRejections]=useState([]);
@@ -688,266 +613,229 @@ function ManagerApp({onLogout}){
   const[expenses,setExpenses]=useState([]);
   const[kitchenStaff,setKitchenStaff]=useState([]);
   const[payrollExtras,setPayrollExtras]=useState({});
-  const[defaultTakingsPerson,setDefaultTakingsPerson]=useState(null); // staffId
-  const[todayOverride,setTodayOverride]=useState(null); // {staffId, date}
+  // day-of-week defaults: {0:"staffId",...,6:"staffId"}
+  const[dayDefaults,setDayDefaults]=useState({});
+  const[todayOverrideId,setTodayOverrideId]=useState(null);
   const[staffSetupModal,setStaffSetupModal]=useState(null);
-  const[gsModal,setGsModal]=useState(false);
   const[cashPopup,setCashPopup]=useState(false);
-  const[gsConfig,setGsConfig]=useState(DEFAULT_GS);
-  const[weekRange,setWeekRange]=useState(currentPayWeek);
-  const[rotaMonStart,setRotaMonStart]=useState(currentRotaWeek().start);
-  const[rotaWeeks,setRotaWeeks]=useState(1); // 1 or 2
-  const[newKName,setNewKName]=useState("");
-  // Manager absence log modal
+  const[pinModal,setPinModal]=useState(false);
   const[absModal,setAbsModal]=useState(false);
-  const[absStaff,setAbsStaff]=useState("");const[absDate,setAbsDate]=useState("");const[absPeriod,setAbsPeriod]=useState("");
+  const[rotaShareModal,setRotaShareModal]=useState(null); // staffId
+  const[weekRange,setWeekRange]=useState(payWeekOf(todayISO()));
+  const[rotaMon,setRotaMon]=useState(rotaWeekOf(todayISO()).start);
+  const[rotaWeeks,setRotaWeeks]=useState(1);
+  const[newKName,setNewKName]=useState("");
+  const[absStaff,setAbsStaff]=useState("");const[absDate2,setAbsDate2]=useState("");const[absPeriod2,setAbsPeriod2]=useState("");
 
-  const newTakingsCount=takings.filter(s=>s.is_new).length;
-  function t(m){setToast(m);setTimeout(()=>setToast(""),3000);}
+  const newTakings=takings.filter(s=>s.is_new).length;
+  function t(m){setMsg(m);setTimeout(()=>setMsg(""),3000);}
 
   useEffect(()=>{loadAll();},[]);
+  useEffect(()=>{if(staff.length)loadRota();},[rotaMon,rotaWeeks,staff.length]);
 
   async function loadAll(){
     setLoading(true);
-    const[staffRes,absRes,logsRes,rejRes,takingsRes,expRes,kitchenRes,settingsRes]=await Promise.all([
-      supabase.from("staff").select("*").order("name"),
-      supabase.from("absences").select("*").order("date",{ascending:false}),
-      supabase.from("clock_logs").select("*").order("date",{ascending:false}),
-      supabase.from("rejections").select("*"),
-      supabase.from("takings").select("*").order("date",{ascending:false}),
-      supabase.from("expenses").select("*").order("date",{ascending:false}),
-      supabase.from("kitchen_staff").select("*"),
-      supabase.from("takings_assignment").select("*").order("date",{ascending:false}).limit(10),
+    const[staffR,absR,logR,rejR,takR,expR,kitR,defaultsR,todayR,extrasR]=await Promise.all([
+      db.from("staff").select("*").order("name"),
+      db.from("absences").select("*").order("date",{ascending:false}),
+      db.from("clock_logs").select("*").order("date",{ascending:false}),
+      db.from("rejections").select("*"),
+      db.from("takings").select("*").order("date",{ascending:false}),
+      db.from("expenses").select("*").order("date",{ascending:false}),
+      db.from("kitchen_staff").select("*"),
+      db.from("takings_defaults").select("*"),
+      db.from("takings_assignment").select("*").eq("date",todayISO()).maybeSingle(),
+      db.from("payroll_extras").select("*"),
     ]);
-    const staffData=(staffRes.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cashCard:s.cash_card,cardFixed:s.card_fixed||"0"}));
-    setStaff(staffData);
-    setAbsences(absRes.data||[]);
-    setClockLogs(logsRes.data||[]);
-    setRejections(rejRes.data||[]);
-    setTakings(takingsRes.data||[]);
-    setExpenses(expRes.data||[]);
-    setKitchenStaff(kitchenRes.data||[]);
-    // Find default assignment (no specific date = default) and today override
-    const assigns=settingsRes.data||[];
-    const def=assigns.find(a=>a.date==="default");
-    const todayA=assigns.find(a=>a.date===todayISO());
-    setDefaultTakingsPerson(def?.staff_id||null);
-    setTodayOverride(todayA||null);
-    // Load rota
-    await loadRota(currentRotaWeek().start, 1, staffData);
-    // Load payroll extras
-    const extrasRes=await supabase.from("payroll_extras").select("*").eq("week_start",currentPayWeek().start);
-    const em={};(extrasRes.data||[]).forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],id:e.id};});
+    const sd=(staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardOverride:s.card_override||"0"}));
+    setStaff(sd);
+    setAbsences(absR.data||[]);
+    setClockLogs(logR.data||[]);
+    setRejections(rejR.data||[]);
+    setTakings(takR.data||[]);
+    setExpenses(expR.data||[]);
+    setKitchenStaff(kitR.data||[]);
+    const dd={};(defaultsR.data||[]).forEach(r=>{dd[r.day_of_week]=r.staff_id;});setDayDefaults(dd);
+    setTodayOverrideId(todayR.data?.staff_id||null);
+    const em={};(extrasR.data||[]).forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],id:e.id,weekStart:e.week_start};});
     setPayrollExtras(em);
-    // Load gs config from DB settings table if exists
-    const gsRes=await supabase.from("takings_assignment").select("*").eq("date","__gs_config__").maybeSingle();
-    if(gsRes.data?.staff_id){
-      try{const cfg=JSON.parse(gsRes.data.staff_id);setGsConfig({...DEFAULT_GS,...cfg});}catch{}
-    } else if(DEFAULT_GS.apiKey){setGsConfig(DEFAULT_GS);}
     setLoading(false);
   }
 
-  async function loadRota(monStart, weeks, staffList){
-    const s=staffList||staff;
-    if(!s.length)return;
-    const endDate=addDays(monStart,weeks*7-1);
-    const res=await supabase.from("rota").select("*").gte("week_start",monStart).lte("week_start",endDate);
+  async function loadRota(){
+    if(!staff.length)return;
+    const endDate=addDays(rotaMon,rotaWeeks*7-1);
+    const res=await db.from("rota").select("*").gte("week_start",rotaMon).lte("week_start",endDate);
     const rm={};
-    s.forEach(st=>{
-      // Build array of 7*weeks days
-      const days=Array.from({length:weeks*7},(_,i)=>{
-        const dateISO=addDays(monStart,i);
+    staff.forEach(s=>{
+      rm[s.id]=Array.from({length:rotaWeeks*7},(_,i)=>{
+        const dateISO=addDays(rotaMon,i);
         const jsDay=new Date(dateISO+"T12:00:00").getDay();
-        const weekMon=addDays(monStart,Math.floor(i/7)*7);
-        const row=(res.data||[]).find(r=>r.staff_id===st.id&&r.week_start===weekMon&&r.day_index===jsDay);
+        const weekMon=addDays(rotaMon,Math.floor(i/7)*7);
+        const row=(res.data||[]).find(r=>r.staff_id===s.id&&r.week_start===weekMon&&r.day_index===jsDay);
         return{date:dateISO,jsDay,weekMon,type:row?.shift_type||"Off",customIn:row?.custom_in||"",customOut:row?.custom_out||"",rowId:row?.id};
       });
-      rm[st.id]=days;
     });
     setRota(rm);
   }
 
-  useEffect(()=>{if(staff.length)loadRota(rotaMonStart,rotaWeeks);},[rotaMonStart,rotaWeeks]);
-
-  // ── Rota shift update ──
   async function setShift(sId,dayIdx,field,val){
-    const days=rota[sId]||[];
-    const day=days[dayIdx];if(!day)return;
+    const days=rota[sId]||[];const day=days[dayIdx];if(!day)return;
     const updated={...day,[field]:val};
     setRota(p=>({...p,[sId]:p[sId].map((d,i)=>i===dayIdx?updated:d)}));
-    const dbPayload={staff_id:sId,day_index:day.jsDay,week_start:day.weekMon,shift_type:field==="type"?val:day.type,custom_in:field==="customIn"?val:day.customIn,custom_out:field==="customOut"?val:day.customOut};
-    if(day.rowId){await supabase.from("rota").update(dbPayload).eq("id",day.rowId);}
-    else{const{data}=await supabase.from("rota").insert(dbPayload).select().single();if(data)setRota(p=>({...p,[sId]:p[sId].map((d,i)=>i===dayIdx?{...updated,rowId:data.id}:d)}));}
+    const payload={staff_id:sId,day_index:day.jsDay,week_start:day.weekMon,shift_type:field==="type"?val:day.type,custom_in:field==="customIn"?val:day.customIn,custom_out:field==="customOut"?val:day.customOut};
+    if(day.rowId){await db.from("rota").update(payload).eq("id",day.rowId);}
+    else{const{data}=await db.from("rota").insert(payload).select().single();if(data)setRota(p=>({...p,[sId]:p[sId].map((d,i)=>i===dayIdx?{...updated,rowId:data.id}:d)}));}
   }
+
+  // ── Day-of-week default takings assignment ──
+  async function saveDayDefault(dow,staffId){
+    setDayDefaults(p=>({...p,[dow]:staffId||null}));
+    const existing=await db.from("takings_defaults").select("*").eq("day_of_week",dow).maybeSingle();
+    if(staffId){
+      if(existing.data){await db.from("takings_defaults").update({staff_id:staffId}).eq("day_of_week",dow);}
+      else{await db.from("takings_defaults").insert({day_of_week:dow,staff_id:staffId});}
+    }else{await db.from("takings_defaults").delete().eq("day_of_week",dow);}
+  }
+
+  async function saveTodayOverride(staffId){
+    setTodayOverrideId(staffId||null);
+    const existing=await db.from("takings_assignment").select("*").eq("date",todayISO()).maybeSingle();
+    if(staffId){
+      if(existing.data){await db.from("takings_assignment").update({staff_id:staffId}).eq("date",todayISO());}
+      else{await db.from("takings_assignment").insert({staff_id:staffId,date:todayISO()});}
+    }else{if(existing.data)await db.from("takings_assignment").delete().eq("date",todayISO());}
+    t("✅ Today's override saved");
+  }
+
+  // Effective takings person for today
+  const todayJsDow=new Date().getDay();
+  const effectiveTakingsPerson=todayOverrideId||(dayDefaults[todayJsDow]||null);
 
   // ── Payroll ──
   function getExtras(sId){return payrollExtras[sId]||{tips:"",additions:[],deductions:[],notes:[]};}
   async function setExtras(sId,fn){
     const next=fn(getExtras(sId));
     setPayrollExtras(p=>({...p,[sId]:next}));
-    const weekStart=weekRange.start;
-    const payload={staff_id:sId,week_start:weekStart,tips:next.tips||"0",additions:next.additions||[],deductions:next.deductions||[],notes:next.notes||[]};
-    if(next.id){await supabase.from("payroll_extras").update(payload).eq("id",next.id);}
-    else{const{data}=await supabase.from("payroll_extras").insert(payload).select().single();if(data)setPayrollExtras(p=>({...p,[sId]:{...next,id:data.id}}));}
+    const ws=weekRange.start;
+    const payload={staff_id:sId,week_start:ws,tips:next.tips||"0",additions:next.additions||[],deductions:next.deductions||[],notes:next.notes||[]};
+    if(next.id&&next.weekStart===ws){await db.from("payroll_extras").update(payload).eq("id",next.id);}
+    else{const{data}=await db.from("payroll_extras").insert(payload).select().single();if(data)setPayrollExtras(p=>({...p,[sId]:{...next,id:data.id,weekStart:ws}}));}
   }
 
-  function calcStaffPay(s){
+  function calcPay(s){
     const myRota=rota[s.id]||[];
     const logsInRange=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=weekRange.start&&l.date<=weekRange.end);
-    let fullShifts=0,nightShifts=0,totalHrs=0;
-    myRota.forEach(sh=>{if(!sh||sh.type==="Off")return;if(sh.type==="Full Day (11am–close)")fullShifts++;else if(sh.type==="Night (5:30pm–close)")nightShifts++;});
-    logsInRange.forEach(l=>{totalHrs+=parseHours(l.time_in,l.time_out);});
+    let full=0,night=0,hrs=0;
+    myRota.forEach(sh=>{if(!sh||sh.type==="Off")return;if(sh.type==="Full Day (11am–close)")full++;else if(sh.type==="Night (5:30pm–close)")night++;});
+    logsInRange.forEach(l=>{hrs+=parseHrs(l.time_in,l.time_out);});
     const extras=getExtras(s.id);
     const tips=parseFloat(extras.tips||0);
-    const addTotal=(extras.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    const dedTotal=(extras.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    let base=0;
-    if(s.payType==="hourly")base=totalHrs*parseFloat(s.rate||0);
-    else base=fullShifts*parseFloat(s.shiftRate||0)+nightShifts*parseFloat(s.nightRate||0);
-    const total=Math.max(0,base+tips+addTotal-dedTotal);
-    const cardFixed=parseFloat(s.cardFixed||0);
-    const cashAmt=Math.max(0,total-cardFixed);
-    return{fullShifts,nightShifts,totalHrs:totalHrs.toFixed(2),base:base.toFixed(2),tips:tips.toFixed(2),addTotal:addTotal.toFixed(2),dedTotal:dedTotal.toFixed(2),total:total.toFixed(2),cardAmt:cardFixed.toFixed(2),cashAmt:cashAmt.toFixed(2)};
+    const addT=(extras.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+    const dedT=(extras.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+    let base=s.payType==="hourly"?hrs*parseFloat(s.rate||0):full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
+    const total=Math.max(0,base+tips+addT-dedT);
+    // card: use weekly override if set, else cardFixed
+    const cardAmt=parseFloat(s.cardOverride&&s.cardOverride!=="0"?s.cardOverride:s.cardFixed||0);
+    const cashAmt=Math.max(0,total-cardAmt);
+    return{full,night,hrs:hrs.toFixed(2),base:base.toFixed(2),tips:tips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:total.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2)};
+  }
+
+  function payrollTotals(){
+    let cash=0,card=0,gross=0;
+    staff.forEach(s=>{const p=calcPay(s);cash+=parseFloat(p.cashAmt);card+=parseFloat(p.cardAmt);gross+=parseFloat(p.total);});
+    return{cash:cash.toFixed(2),card:card.toFixed(2),gross:gross.toFixed(2)};
   }
 
   // ── Kitchen ──
-  async function addKitchen(){if(!newKName.trim())return;const{data}=await supabase.from("kitchen_staff").insert({name:newKName.trim(),hours:"",rate:"",cash_card:"cash"}).select().single();if(data){setKitchenStaff(p=>[...p,data]);setNewKName("");}}
-  async function updateKitchen(id,field,val){setKitchenStaff(p=>p.map(k=>k.id===id?{...k,[field]:val}:k));await supabase.from("kitchen_staff").update({[field]:val}).eq("id",id);}
-  async function deleteKitchen(id){setKitchenStaff(p=>p.filter(k=>k.id!==id));await supabase.from("kitchen_staff").delete().eq("id",id);}
+  async function addKitchen(){if(!newKName.trim())return;const{data}=await db.from("kitchen_staff").insert({name:newKName.trim(),hours:"",rate:"",cash_card:"cash"}).select().single();if(data){setKitchenStaff(p=>[...p,data]);setNewKName("");}}
+  async function updKitchen(id,f,v){setKitchenStaff(p=>p.map(k=>k.id===id?{...k,[f]:v}:k));await db.from("kitchen_staff").update({[f]:v}).eq("id",id);}
+  async function delKitchen(id){setKitchenStaff(p=>p.filter(k=>k.id!==id));await db.from("kitchen_staff").delete().eq("id",id);}
 
   // ── Remove staff ──
   async function removeStaff(s){
     if(!window.confirm(`Remove ${s.name}? This cannot be undone.`))return;
-    await supabase.from("staff").delete().eq("id",s.id);
+    await db.from("staff").delete().eq("id",s.id);
     setStaff(p=>p.filter(x=>x.id!==s.id));
     t(`${s.name} removed`);
   }
 
-  // ── Takings assignment ──
-  // effective today: todayOverride > defaultTakingsPerson
-  const effectiveTakingsPerson = todayOverride?.staff_id || defaultTakingsPerson;
-
-  async function saveDefaultTakingsPerson(staffId){
-    setDefaultTakingsPerson(staffId||null);
-    const existing=await supabase.from("takings_assignment").select("*").eq("date","default").maybeSingle();
-    if(staffId){
-      if(existing.data){await supabase.from("takings_assignment").update({staff_id:staffId}).eq("date","default");}
-      else{await supabase.from("takings_assignment").insert({staff_id:staffId,date:"default"});}
-    }else{await supabase.from("takings_assignment").delete().eq("date","default");}
-    t("✅ Default takings person saved");
-  }
-
-  async function saveTodayOverride(staffId){
-    if(staffId){
-      if(todayOverride){await supabase.from("takings_assignment").update({staff_id:staffId}).eq("date",todayISO());setTodayOverride({...todayOverride,staff_id:staffId});}
-      else{const{data}=await supabase.from("takings_assignment").insert({staff_id:staffId,date:todayISO()}).select().single();setTodayOverride(data);}
-    }else{
-      if(todayOverride){await supabase.from("takings_assignment").delete().eq("date",todayISO());setTodayOverride(null);}
-    }
-    t("✅ Today's assignment saved");
-  }
-
-  // ── Absence conflict ──
-  function getAbsenceConflicts(staffId){
-    const myRota=rota[staffId]||[];
-    return absences.filter(a=>a.staff_id===staffId).filter(a=>{
-      const dow=new Date(a.date+"T12:00:00").getDay();
-      const sh=myRota.find(d=>d.jsDay===dow);
-      if(!sh||sh.type==="Off")return false;
-      if(a.period==="Full Day")return true;
-      if(a.period==="Morning"&&sh.type==="Full Day (11am–close)")return true;
-      if(a.period==="Evening"&&(sh.type==="Night (5:30pm–close)"||sh.type==="Full Day (11am–close)"))return true;
-      return false;
-    });
-  }
-
-  // ── Manager log absence ──
-  async function logManagerAbsence(){
-    if(!absStaff||!absDate||!absPeriod)return t("Fill in all fields");
-    const s=staff.find(x=>x.id===absStaff);
-    const{data,error}=await supabase.from("absences").insert({staff_id:absStaff,staff_name:s?.name||"",date:absDate,period:absPeriod}).select().single();
-    if(!error){setAbsences(p=>[...p,data]);setAbsModal(false);setAbsStaff("");setAbsDate("");setAbsPeriod("");t("📅 Absence logged");}
-    else t("❌ "+error.message);
-  }
-
   // ── Expenses ──
   async function addExpense(desc,amount,payType,date){
-    const{data,error}=await supabase.from("expenses").insert({description:desc,amount:parseFloat(amount),pay_type:payType,date}).select().single();
+    const{data,error}=await db.from("expenses").insert({description:desc,amount:parseFloat(amount),pay_type:payType,date}).select().single();
     if(!error)setExpenses(p=>[data,...p]);
     return{error};
   }
-  async function deleteExpense(id){setExpenses(p=>p.filter(e=>e.id!==id));await supabase.from("expenses").delete().eq("id",id);}
+  async function delExpense(id){setExpenses(p=>p.filter(e=>e.id!==id));await db.from("expenses").delete().eq("id",id);}
 
-  // ── GS Config save ──
-  async function saveGsConfig(cfg){
-    setGsConfig(cfg);
-    // Store in a dummy takings_assignment row
-    const existing=await supabase.from("takings_assignment").select("*").eq("date","__gs_config__").maybeSingle();
-    const serialised=JSON.stringify(cfg);
-    if(existing.data){await supabase.from("takings_assignment").update({staff_id:serialised}).eq("date","__gs_config__");}
-    else{await supabase.from("takings_assignment").insert({staff_id:serialised,date:"__gs_config__"});}
-    t("✅ Google Sheets config saved!");
-  }
-
-  // ── Build export rows ──
-  function buildPayrollRows(){
+  // ── Export rows ──
+  function buildPayroll(){
     const hdr=["Date Range","Name","Full Day Shifts","Night Shifts","Hours","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes"];
     const rows=[hdr];
-    staff.forEach(s=>{const p=calcStaffPay(s);const extras=getExtras(s.id);rows.push([fmtRange(weekRange.start,weekRange.end),s.name,p.fullShifts,p.nightShifts,p.totalHrs,p.cashAmt,p.cardAmt,p.tips,p.addTotal,p.dedTotal,p.total,(extras.notes||[]).join("; ")]);});
+    staff.forEach(s=>{const p=calcPay(s);const e=getExtras(s.id);rows.push([fmtRange(weekRange.start,weekRange.end),s.name,p.full,p.night,p.hrs,p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,(e.notes||[]).join("; ")]);});
     return rows;
   }
-  function buildDailyRows(){
-    const allDates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&d!=="default"&&d!=="__gs_config__").sort();
+  function buildDaily(){
+    const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&d!=="default"&&!d.startsWith("__")).sort();
     const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Deposit Receipt","Voucher Redemption","Voucher Purchase","Total","Cash in Hand","Net Total","Expenses"];
     const rows=[hdr];
-    allDates.forEach(date=>{
-      const sub=takings.find(s=>s.date===date);const v=sub||{};
+    dates.forEach(date=>{
+      const sub=takings.find(s=>s.date===date)||{};
       const dayExp=expenses.filter(e=>e.date===date);
-      const total=TAKING_FIELDS.reduce((s,f)=>s+parseFloat(v[f.dbKey]||0)*f.sign,0);
+      const total=TAKING_FIELDS.reduce((s,f)=>s+parseFloat(sub[f.dbKey]||0)*f.sign,0);
       const cashExp=dayExp.filter(e=>e.pay_type==="cash").reduce((s,e)=>s+e.amount,0);
-      const expNotes=dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ");
-      rows.push([fmtDate(date),v.deliveroo||0,v.uber||0,v.cash||0,v.card||0,v.online||0,v.deposit_receipt||0,v.voucher_redemption||0,v.voucher_purchase||0,total.toFixed(2),(parseFloat(v.cash||0)-cashExp).toFixed(2),(total-cashExp).toFixed(2),expNotes]);
+      rows.push([fmtDate(date),sub.deliveroo||0,sub.uber||0,sub.cash||0,sub.card||0,sub.online||0,sub.deposit_receipt||0,sub.voucher_redemption||0,sub.voucher_purchase||0,total.toFixed(2),(parseFloat(sub.cash||0)-cashExp).toFixed(2),(total-cashExp).toFixed(2),dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ")]);
     });
     return rows;
   }
-  function buildWeeklyRows(){
-    const allDates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&d!=="default"&&d!=="__gs_config__").sort();
-    const weekMap={};allDates.forEach(d=>{const{start}=getWeekRange(d);if(!weekMap[start])weekMap[start]=[];weekMap[start].push(d);});
+  function buildWeekly(){
+    const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&d!=="default"&&!d.startsWith("__")).sort();
+    const wm={};dates.forEach(d=>{const{start}=payWeekOf(d);if(!wm[start])wm[start]=[];wm[start].push(d);});
     const hdr=["Week (Sun–Sat)","Deliveroo","Uber Eats","Cash","Card","Online","Deposit Receipt","Voucher Redemption","Voucher Purchase","Total","Cash in Hand","Net Total"];
     const rows=[["WEEKLY SUMMARY"],hdr];
-    Object.entries(weekMap).sort().forEach(([ws,dates])=>{
-      const{end}=getWeekRange(ws);let tot={};TAKING_FIELDS.forEach(f=>tot[f.dbKey]=0);let cashExpTot=0;
-      dates.forEach(d=>{const sub=takings.find(s=>s.date===d);if(sub)TAKING_FIELDS.forEach(f=>{tot[f.dbKey]+=parseFloat(sub[f.dbKey]||0);});cashExpTot+=expenses.filter(e=>e.date===d&&e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);});
+    Object.entries(wm).sort().forEach(([ws,dates2])=>{
+      const{end}=payWeekOf(ws);let tot={};TAKING_FIELDS.forEach(f=>tot[f.dbKey]=0);let cashExp=0;
+      dates2.forEach(d=>{const sub=takings.find(s=>s.date===d);if(sub)TAKING_FIELDS.forEach(f=>{tot[f.dbKey]+=parseFloat(sub[f.dbKey]||0);});cashExp+=expenses.filter(e=>e.date===d&&e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);});
       const total=TAKING_FIELDS.reduce((s,f)=>s+tot[f.dbKey]*f.sign,0);
-      rows.push([fmtRange(ws,end),tot.deliveroo.toFixed(2),tot.uber.toFixed(2),tot.cash.toFixed(2),tot.card.toFixed(2),tot.online.toFixed(2),tot.deposit_receipt.toFixed(2),tot.voucher_redemption.toFixed(2),tot.voucher_purchase.toFixed(2),total.toFixed(2),(tot.cash-cashExpTot).toFixed(2),(total-cashExpTot).toFixed(2)]);
+      rows.push([fmtRange(ws,end),tot.deliveroo.toFixed(2),tot.uber.toFixed(2),tot.cash.toFixed(2),tot.card.toFixed(2),tot.online.toFixed(2),tot.deposit_receipt.toFixed(2),tot.voucher_redemption.toFixed(2),tot.voucher_purchase.toFixed(2),total.toFixed(2),(tot.cash-cashExp).toFixed(2),(total-cashExp).toFixed(2)]);
     });
     return rows;
   }
 
-  async function doPayrollExport(){
-    if(gsConfig.apiKey&&gsConfig.payrollId){t("⏳ Pushing to Payroll sheet…");const r=await pushSheet(gsConfig.apiKey,gsConfig.payrollId,"Payroll",buildPayrollRows());t(r.ok?"✅ Payroll sheet updated!":"❌ "+r.err);}
-    else copyTSV(buildPayrollRows(),t);
+  async function exportPayroll(){
+    t("⏳ Pushing to Payroll sheet…");
+    const r=await pushSheet(GS_PAYROLL_ID,"Payroll",buildPayroll());
+    t(r.ok?"✅ Payroll sheet updated!":"❌ "+r.err);
   }
-  async function doTakingsExport(){
-    if(gsConfig.apiKey&&gsConfig.takingsId){
-      t("⏳ Updating Daily tab…");const r1=await pushSheet(gsConfig.apiKey,gsConfig.takingsId,"Daily",buildDailyRows());if(!r1.ok){t("❌ "+r1.err);return;}
-      t("⏳ Updating Weekly tab…");const r2=await pushSheet(gsConfig.apiKey,gsConfig.takingsId,"Weekly",buildWeeklyRows());t(r2.ok?"✅ Takings sheet updated!":"❌ "+r2.err);
-    }else copyTSV([...buildDailyRows(),[""],[""],...buildWeeklyRows()],t);
+  async function exportTakings(){
+    t("⏳ Updating Daily tab…");
+    const r1=await pushSheet(GS_TAKINGS_ID,"Daily",buildDaily());
+    if(!r1.ok){t("❌ "+r1.err);return;}
+    t("⏳ Updating Weekly tab…");
+    const r2=await pushSheet(GS_TAKINGS_ID,"Weekly",buildWeekly());
+    t(r2.ok?"✅ Takings sheet updated!":"❌ "+r2.err);
   }
 
-  // ── Pay summary totals ──
-  function payrollTotals(){
-    let totalCash=0,totalCard=0,totalGross=0;
-    staff.forEach(s=>{const p=calcStaffPay(s);totalCash+=parseFloat(p.cashAmt);totalCard+=parseFloat(p.cardAmt);totalGross+=parseFloat(p.total);});
-    return{totalCash:totalCash.toFixed(2),totalCard:totalCard.toFixed(2),totalGross:totalGross.toFixed(2)};
+  // ── Rota share text ──
+  function buildRotaText(sId){
+    const s=staff.find(x=>x.id===sId);if(!s)return"";
+    const days=rota[sId]||[];
+    const lines=days.map(d=>{
+      const dayName=DAYS_MON[jsToMon(d.jsDay)];
+      let shift="Off";
+      if(d.type==="Full Day (11am–close)")shift="Full Day (11am–close)";
+      else if(d.type==="Night (5:30pm–close)")shift="Night (5:30pm–close)";
+      else if(d.type==="Custom")shift=`${d.customIn||"?"}–${d.customOut||"?"}`;
+      else shift=d.type;
+      return`${dayName} ${fmtDate(d.date)}: ${s.name} — ${shift}`;
+    });
+    return`Rota for ${s.name}\n${fmtDate(rotaMon)} – ${fmtDate(addDays(rotaMon,rotaWeeks*7-1))}\n\n${lines.join("\n")}`;
   }
 
   // ── AddDeductRow ──
   function AddDeductRow({sId,type}){
-    const extras=getExtras(sId);
-    const key=type==="add"?"additions":"deductions";
-    const items=extras[key]||[];
-    const labels=type==="add"?ADDITION_LABELS:DEDUCTION_LABELS;
+    const extras=getExtras(sId);const key=type==="add"?"additions":"deductions";
+    const items=extras[key]||[];const labels=type==="add"?ADD_LABELS:DED_LABELS;
     const[amount,setAmount]=useState("");const[label,setLabel]=useState(labels[0]);const[custom,setCustom]=useState("");
     return(
       <div>
@@ -964,12 +852,11 @@ function ManagerApp({onLogout}){
 
   // ── Staff Pay Settings Modal ──
   function StaffSetupModal({s,onClose}){
-    const[payType,setPT]=useState(s.payType||"hourly");const[rate,setRate]=useState(s.rate||"");const[shiftRate,setSR]=useState(s.shiftRate||"");const[nightRate,setNR]=useState(s.nightRate||"");const[cardFixed,setCF]=useState(s.cardFixed||"0");const[saving,setSaving]=useState(false);
-    // cash_card is now auto (card=fixed, cash=total-card)
+    const[payType,setPT]=useState(s.payType||"hourly");const[rate,setRate]=useState(s.rate||"");const[shiftRate,setSR]=useState(s.shiftRate||"");const[nightRate,setNR]=useState(s.nightRate||"");const[cardFixed,setCF]=useState(s.cardFixed||"0");const[cardOverride,setCO]=useState(s.cardOverride||"0");const[saving,setSaving]=useState(false);
     async function save(){
       setSaving(true);
-      const{error}=await supabase.from("staff").update({pay_type:payType,rate,shift_rate:shiftRate,night_rate:nightRate,card_fixed:cardFixed}).eq("id",s.id);
-      if(!error){setStaff(p=>p.map(x=>x.id===s.id?{...x,payType,rate,shiftRate,nightRate,cardFixed}:x));t(`✅ ${s.name} pay settings saved`);onClose();}
+      const{error}=await db.from("staff").update({pay_type:payType,rate,shift_rate:shiftRate,night_rate:nightRate,card_fixed:cardFixed,card_override:cardOverride}).eq("id",s.id);
+      if(!error){setStaff(p=>p.map(x=>x.id===s.id?{...x,payType,rate,shiftRate,nightRate,cardFixed,cardOverride}:x));t(`✅ ${s.name} settings saved`);onClose();}
       else t("❌ "+error.message);
       setSaving(false);
     }
@@ -985,11 +872,17 @@ function ManagerApp({onLogout}){
           </div>
           {payType==="hourly"?(<><label className="lbl">Hourly Rate (£)</label><input className="inp" type="number" placeholder="e.g. 12.50" value={rate} onChange={e=>setRate(e.target.value)}/></>):(<><label className="lbl">Full Day Shift Rate (£)</label><input className="inp" type="number" placeholder="e.g. 80.00" value={shiftRate} onChange={e=>setSR(e.target.value)}/><label className="lbl">Night Shift Rate (£)</label><input className="inp" type="number" placeholder="e.g. 60.00" value={nightRate} onChange={e=>setNR(e.target.value)}/></>)}
           <label className="lbl">Fixed Card Payment (£)</label>
-          <div style={{fontSize:12,color:"#888",marginBottom:6}}>Set once — cash will auto-calculate as Total minus this amount</div>
+          <div style={{fontSize:12,color:"#888",marginBottom:6}}>Set once — stays every week unless you override below</div>
           <input className="inp" type="number" placeholder="e.g. 200.00" value={cardFixed} onChange={e=>setCF(e.target.value)}/>
+          <label className="lbl">This Week Card Override (£)</label>
+          <div style={{fontSize:12,color:"#888",marginBottom:6}}>Leave as 0 to use fixed amount above. Set a different amount for this week only.</div>
+          <input className="inp" type="number" placeholder="0 = use fixed amount" value={cardOverride} onChange={e=>setCO(e.target.value)}/>
+          <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",fontSize:12,color:"#555",marginBottom:14}}>
+            Cash = Total − Card. Cash auto-calculates and shows in payroll.
+          </div>
           <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Save Settings"}</button>
           <button className="btn sec" onClick={onClose}>Cancel</button>
-          <div className="danger-zone">
+          <div style={{marginTop:14,paddingTop:12,borderTop:"1px dashed #F0F0F0"}}>
             <button className="btn danger" onClick={()=>{onClose();removeStaff(s);}}>🗑️ Remove {s.name} from system</button>
           </div>
         </div>
@@ -997,44 +890,74 @@ function ManagerApp({onLogout}){
     );
   }
 
-  // ── GS Modal ──
-  function GsModal({onClose}){
-    const[apiKey,setApiKey]=useState(gsConfig.apiKey||"");const[payrollId,setPayrollId]=useState(gsConfig.payrollId||"");const[takingsId,setTakingsId]=useState(gsConfig.takingsId||"");
+  // ── Change PIN Modal ──
+  function PinModal({onClose}){
+    const[curr,setCurr]=useState("");const[n1,setN1]=useState("");const[n2,setN2]=useState("");const[err,setErr]=useState("");const[saving,setSaving]=useState(false);
+    async function save(){
+      setErr("");setSaving(true);
+      const{data}=await db.from("app_settings").select("value").eq("key","manager_pin").maybeSingle();
+      const correct=data?.value||"00000000";
+      if(curr!==correct){setErr("Current PIN is wrong");setSaving(false);return;}
+      if(!/^\d{8}$/.test(n1)){setErr("New PIN must be exactly 8 digits");setSaving(false);return;}
+      if(n1!==n2){setErr("New PINs don't match");setSaving(false);return;}
+      await db.from("app_settings").upsert({key:"manager_pin",value:n1});
+      t("✅ Manager PIN updated!");onClose();setSaving(false);
+    }
     return(
       <div className="overlay" onClick={onClose}>
         <div className="sheet" onClick={e=>e.stopPropagation()}>
-          <div className="sheet-title">🔗 Google Sheets Setup</div>
-          <div className="sheet-sub">Saved to database — you only need to do this once</div>
-          <label className="lbl">Google API Key</label>
-          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} placeholder="AIzaSy…" value={apiKey} onChange={e=>setApiKey(e.target.value)}/>
-          <label className="lbl">📋 Payroll Spreadsheet ID</label>
-          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} placeholder="Needs a 'Payroll' tab" value={payrollId} onChange={e=>setPayrollId(e.target.value)}/>
-          <label className="lbl">📊 Takings Spreadsheet ID</label>
-          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} placeholder="Needs 'Daily' and 'Weekly' tabs" value={takingsId} onChange={e=>setTakingsId(e.target.value)}/>
-          <button className="btn" onClick={async()=>{await saveGsConfig({apiKey,payrollId,takingsId});onClose();}}>Save Config</button>
+          <div className="sheet-title">🔒 Change Manager PIN</div>
+          <label className="lbl">Current PIN</label>
+          <input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={curr} onChange={e=>setCurr(e.target.value)}/>
+          <label className="lbl">New PIN (8 digits)</label>
+          <input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={n1} onChange={e=>setN1(e.target.value)}/>
+          <label className="lbl">Confirm New PIN</label>
+          <input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={n2} onChange={e=>setN2(e.target.value)}/>
+          {err&&<div className="err">{err}</div>}
+          <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Change PIN"}</button>
           <button className="btn sec" onClick={onClose}>Cancel</button>
         </div>
       </div>
     );
   }
 
-  if(loading)return<Loading text="Loading manager data…"/>;
+  // ── Absence modal (manager logs) ──
+  async function logAbsence(){
+    if(!absStaff||!absDate2||!absPeriod2)return t("Fill in all fields");
+    const s=staff.find(x=>x.id===absStaff);
+    const{data,error}=await db.from("absences").insert({staff_id:absStaff,staff_name:s?.name||"",date:absDate2,period:absPeriod2}).select().single();
+    if(!error){setAbsences(p=>[...p,data]);setAbsModal(false);setAbsStaff("");setAbsDate2("");setAbsPeriod2("");t("📅 Absence logged");}
+    else t("❌ "+error.message);
+  }
 
-  const{totalCash,totalCard,totalGross}=payrollTotals();
+  function absenceConflicts(staffId){
+    const mr=rota[staffId]||[];
+    return absences.filter(a=>a.staff_id===staffId).filter(a=>{
+      const dow=new Date(a.date+"T12:00:00").getDay();
+      const sh=mr.find(d=>d.jsDay===dow);if(!sh||sh.type==="Off")return false;
+      if(a.period==="Full Day")return true;
+      if(a.period==="Morning"&&sh.type==="Full Day (11am–close)")return true;
+      if(a.period==="Evening"&&(sh.type.includes("Night")||sh.type==="Full Day (11am–close)"))return true;
+      return false;
+    });
+  }
+
+  if(loading)return<Loading text="Loading manager data…"/>;
+  const{cash:totCash,card:totCard,gross:totGross}=payrollTotals();
 
   return(
     <div className="app">
-      <Toast msg={toast}/>
+      <Toast msg={msg}/>
       <div className="mgr-hdr">
         <div><div className="mgr-title">🔑 Manager Panel</div><div className="mgr-sub">Restaurant back office</div></div>
         <div style={{display:"flex",gap:7,alignItems:"center"}}>
-          <button onClick={()=>setGsModal(true)} style={{background:"rgba(255,255,255,.12)",border:"none",color:"#F5A623",borderRadius:7,padding:"5px 9px",cursor:"pointer",fontSize:12}}>🔗 Sheets</button>
+          <button onClick={()=>setPinModal(true)} style={{background:"rgba(255,255,255,.12)",border:"none",color:"rgba(255,255,255,.7)",borderRadius:7,padding:"5px 9px",cursor:"pointer",fontSize:12}}>🔒 PIN</button>
           <button className="mgr-lo" onClick={onLogout}>Sign out</button>
         </div>
       </div>
 
       <div className="mgr-tabs">
-        {[{id:"rota",label:"📋 Rota"},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:`📊 Takings${newTakingsCount>0?` (${newTakingsCount})`:""}`},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:"📅 Absences"}]
+        {[{id:"rota",label:"📋 Rota"},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:`📊 Takings${newTakings>0?` (${newTakings})`:""}`},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:"📅 Absences"}]
           .map(tb=><button key={tb.id} className={`mtab${tab===tb.id?" active":""}`} onClick={()=>setTab(tb.id)}>{tb.label}</button>)}
       </div>
 
@@ -1044,47 +967,36 @@ function ManagerApp({onLogout}){
         {tab==="rota"&&(
           <>
             <div className="sec">Assign Rota</div>
-            {/* Week navigation */}
-            <div className="rota-week-bar">
-              <div className="rota-week-title">Rota Period</div>
+            {/* Week nav */}
+            <div style={{background:"#FFF8EC",border:"1.5px solid #F5A623",borderRadius:12,padding:"10px 14px",marginBottom:12}}>
               <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8}}>
-                <button className="week-nav-btn" onClick={()=>setRotaMonStart(addDays(rotaMonStart,-7))}>‹</button>
-                <div style={{flex:1,fontSize:12,fontWeight:700,color:"#92400E",textAlign:"center"}}>{fmtDate(rotaMonStart)} – {fmtDate(addDays(rotaMonStart,rotaWeeks*7-1))}</div>
-                <button className="week-nav-btn" onClick={()=>setRotaMonStart(addDays(rotaMonStart,7))}>›</button>
+                <button className="week-nav-btn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button>
+                <div style={{flex:1,fontSize:12,fontWeight:700,color:"#92400E",textAlign:"center"}}>{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,rotaWeeks*7-1))}</div>
+                <button className="week-nav-btn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button>
               </div>
               <div style={{display:"flex",gap:6}}>
                 <button className={`btn sm${rotaWeeks===1?" navy":" sec"}`} style={{flex:1,marginTop:0}} onClick={()=>setRotaWeeks(1)}>1 Week</button>
                 <button className={`btn sm${rotaWeeks===2?" navy":" sec"}`} style={{flex:1,marginTop:0}} onClick={()=>setRotaWeeks(2)}>2 Weeks</button>
               </div>
             </div>
-
-            {rejections.length>0&&(
-              <div style={{marginBottom:10}}>
-                <div style={{fontSize:12,fontWeight:700,color:"#E05252",marginBottom:6}}>⚠️ Shift Rejections</div>
-                {rejections.map(r=>(
-                  <div key={r.id} className="rej-banner">
-                    <span><strong>{r.staff_name}</strong> can't do <strong>{r.day}</strong>{r.reason?` — "${r.reason}"`:""}</span>
-                    <button onClick={async()=>{await supabase.from("rejections").delete().eq("id",r.id);setRejections(p=>p.filter(x=>x.id!==r.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:16}}>✓</button>
-                  </div>
-                ))}
-              </div>
-            )}
-
+            {rejections.length>0&&<div style={{marginBottom:10}}><div style={{fontSize:12,fontWeight:700,color:"#E05252",marginBottom:6}}>⚠️ Rejections</div>{rejections.map(r=><div key={r.id} className="rej-banner"><span><strong>{r.staff_name}</strong> can't do <strong>{r.day}</strong>{r.reason?` — "${r.reason}"`:""}</span><button onClick={async()=>{await db.from("rejections").delete().eq("id",r.id);setRejections(p=>p.filter(x=>x.id!==r.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:16}}>✓</button></div>)}</div>}
             {staff.map(s=>{
-              const conflicts=getAbsenceConflicts(s.id);
-              const days=rota[s.id]||[];
+              const days=rota[s.id]||[];const conflicts=absenceConflicts(s.id);
               return(
                 <div key={s.id} className="card">
                   <div className="card-head">
                     <div><div className="card-name">👤 {s.name}</div><div className="card-sub">{s.payType==="shift"?`Full £${s.shiftRate}/Night £${s.nightRate}`:`£${s.rate}/hr`}</div></div>
-                    <button onClick={()=>setStaffSetupModal(s)} style={{background:"#E8F0E9",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>⚙️ Pay</button>
+                    <div style={{display:"flex",gap:6"}}>
+                      <button onClick={()=>setRotaShareModal(s.id)} style={{background:"#DBEAFE",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",color:"#1E40AF"}}>📤 Share</button>
+                      <button onClick={()=>setStaffSetupModal(s)} style={{background:"#E8F0E9",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>⚙️ Pay</button>
+                    </div>
                   </div>
-                  {conflicts.length>0&&(<div className="warn-banner"><div className="warn-title">⚠️ Absence Conflict</div><div className="warn-sub">{conflicts.map(c=>`${isoToDisplay(c.date,true)} (${c.period})`).join(", ")}</div></div>)}
+                  {conflicts.length>0&&<div className="warn-banner"><div className="warn-title">⚠️ Absence Conflict</div><div className="warn-sub">{conflicts.map(c=>`${dispDate(c.date,true)} (${c.period})`).join(", ")}</div></div>}
                   {days.map((d,idx)=>(
                     <div key={idx} style={{display:"flex",alignItems:"center",gap:5,marginBottom:5}}>
-                      <div style={{minWidth:52,fontSize:11,fontWeight:700,color:"#555"}}>
-                        <div>{ROTA_DISPLAY_DAYS[d.jsDay===0?6:d.jsDay-1]}</div>
-                        <div style={{fontSize:10,color:"#aaa"}}>{fmtDate(d.date)}</div>
+                      <div style={{minWidth:56,fontSize:11,fontWeight:700}}>
+                        <div style={{color:"#555"}}>{DAYS_MON[jsToMon(d.jsDay)]}</div>
+                        <div style={{color:"#aaa",fontSize:10}}>{fmtDate(d.date)}</div>
                       </div>
                       <select className="inp sm" style={{flex:1}} value={d.type||"Off"} onChange={e=>setShift(s.id,idx,"type",e.target.value)}>{SHIFT_TYPES.map(o=><option key={o}>{o}</option>)}</select>
                       {d.type==="Custom"&&(<><input type="time" className="inp time" value={d.customIn||""} onChange={e=>setShift(s.id,idx,"customIn",e.target.value)}/><span style={{fontSize:10,color:"#aaa"}}>–</span><input type="time" className="inp time" value={d.customOut||""} onChange={e=>setShift(s.id,idx,"customOut",e.target.value)}/></>)}
@@ -1102,26 +1014,26 @@ function ManagerApp({onLogout}){
           <>
             <div className="sec">Clock Logs</div>
             {staff.map(s=>{
-              const logs=clockLogs.filter(l=>l.staff_id===s.id);
-              const totalHrs=logs.reduce((a,l)=>a+parseHours(l.time_in,l.time_out),0);
+              const sLogs=clockLogs.filter(l=>l.staff_id===s.id);
+              const totalH=sLogs.reduce((a,l)=>a+parseHrs(l.time_in,l.time_out),0);
               return(
                 <div key={s.id} className="card">
                   <div className="card-name">👤 {s.name}</div>
-                  <div className="card-sub" style={{marginBottom:10}}>Total: {totalHrs.toFixed(1)} hrs</div>
-                  {logs.length===0&&<div style={{fontSize:12,color:"#ccc",fontStyle:"italic"}}>No records yet</div>}
-                  {logs.map(l=>(
+                  <div className="card-sub" style={{marginBottom:10}}>Total: {totalH.toFixed(1)} hrs</div>
+                  {sLogs.length===0&&<div style={{fontSize:12,color:"#ccc",fontStyle:"italic"}}>No records yet</div>}
+                  {sLogs.map(l=>(
                     <div key={l.id} className="log-entry">
-                      <div className="log-top"><span style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{isoToDisplay(l.date,true)}</span><span style={{fontSize:13,fontWeight:800,color:l.time_out?"#1A2744":"#50DC78"}}>{l.time_out?parseHours(l.time_in,l.time_out).toFixed(1)+"h":"active"}</span></div>
+                      <div className="log-top"><span style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(l.date,true)}</span><span style={{fontSize:13,fontWeight:800,color:l.time_out?"#1A2744":"#50DC78"}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(1)+"h":"active"}</span></div>
                       <div className="log-edit-row">
                         <span className="log-edit-lbl">In</span>
-                        <input type="time" className="inp time" value={l.time_in||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v}:x));supabase.from("clock_logs").update({time_in:v}).eq("id",l.id);}}/>
+                        <input type="time" className="inp time" value={l.time_in||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v}:x));db.from("clock_logs").update({time_in:v}).eq("id",l.id);}}/>
                         <span className="log-edit-lbl">Out</span>
-                        <input type="time" className="inp time" value={l.time_out||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v}:x));supabase.from("clock_logs").update({time_out:v}).eq("id",l.id);}}/>
+                        <input type="time" className="inp time" value={l.time_out||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v}:x));db.from("clock_logs").update({time_out:v}).eq("id",l.id);}}/>
                       </div>
-                      <textarea className="log-note" rows={2} placeholder="Note / question…" value={l.note||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:v}:x));supabase.from("clock_logs").update({note:v}).eq("id",l.id);}}/>
+                      <textarea className="log-note" rows={2} placeholder="Note…" value={l.note||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:v}:x));db.from("clock_logs").update({note:v}).eq("id",l.id);}}/>
                     </div>
                   ))}
-                  <button className="btn sm" style={{marginTop:9,background:"#F5A623"}} onClick={async()=>{const{data}=await supabase.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:todayISO(),time_in:"",time_out:"",note:""}).select().single();if(data)setClockLogs(p=>[data,...p]);}}>+ Add Entry</button>
+                  <button className="btn sm" style={{marginTop:9,background:"#F5A623"}} onClick={async()=>{const{data}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:todayISO(),time_in:"",time_out:"",note:""}).select().single();if(data)setClockLogs(p=>[data,...p]);}}>+ Add Entry</button>
                 </div>
               );
             })}
@@ -1138,23 +1050,19 @@ function ManagerApp({onLogout}){
               <span style={{fontSize:12,color:"#aaa"}}>→</span>
               <input type="date" className="inp sm" style={{flex:1}} value={weekRange.end} onChange={e=>setWeekRange(p=>({...p,end:e.target.value}))}/>
             </div>
-
             <div style={{fontSize:13,fontWeight:800,color:"#1A2744",marginBottom:8}}>Front of House</div>
             {staff.map(s=>{
-              const p=calcStaffPay(s);const extras=getExtras(s.id);
+              const p=calcPay(s);const extras=getExtras(s.id);
               return(
                 <div key={s.id} className="pay-card">
-                  <div className="pay-head">
-                    <div className="pay-name">👤 {s.name}</div>
-                    <div className="pay-total">£{p.total}</div>
-                  </div>
+                  <div className="pay-head"><div className="pay-name">👤 {s.name}</div><div className="pay-total">£{p.total}</div></div>
                   <div className="pay-body">
-                    {s.payType==="shift"?(<><div className="row"><span>Full Day shifts</span><span className="row-bold">{p.fullShifts} × £{s.shiftRate} = £{(p.fullShifts*parseFloat(s.shiftRate||0)).toFixed(2)}</span></div><div className="row"><span>Night shifts</span><span className="row-bold">{p.nightShifts} × £{s.nightRate} = £{(p.nightShifts*parseFloat(s.nightRate||0)).toFixed(2)}</span></div></>):(<div className="row"><span>Hours</span><span className="row-bold">{p.totalHrs} h × £{s.rate} = £{p.base}</span></div>)}
+                    {s.payType==="shift"?(<><div className="row"><span>Full Day</span><span className="row-bold">{p.full} × £{s.shiftRate} = £{(p.full*parseFloat(s.shiftRate||0)).toFixed(2)}</span></div><div className="row"><span>Night</span><span className="row-bold">{p.night} × £{s.nightRate} = £{(p.night*parseFloat(s.nightRate||0)).toFixed(2)}</span></div></>):(<div className="row"><span>Hours</span><span className="row-bold">{p.hrs}h × £{s.rate} = £{p.base}</span></div>)}
                     <div className="row"><span>Tips (£)</span><input type="number" className="mini-inp" min="0" placeholder="0.00" value={extras.tips||""} onChange={e=>setExtras(s.id,ex=>({...ex,tips:e.target.value}))}/></div>
                     <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#50DC78",marginBottom:4}}>ADDITIONS</div><AddDeductRow sId={s.id} type="add"/></div>
                     <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#E05252",marginBottom:4}}>DEDUCTIONS</div><AddDeductRow sId={s.id} type="ded"/></div>
                     <div style={{marginTop:8}}>
-                      <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>PAYROLL NOTES</div>
+                      <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>NOTES</div>
                       {(extras.notes||[]).map((n,i)=>(<div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0"}}><span style={{fontSize:12,color:"#555"}}>📌 {n}</span><button onClick={()=>setExtras(s.id,ex=>({...ex,notes:ex.notes.filter((_,j)=>j!==i)}))} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"#ccc"}}>✕</button></div>))}
                       <div className="add-row" style={{marginTop:5}}>
                         <select className="add-inp" style={{fontSize:11,padding:"5px 7px"}} id={`ns-${s.id}`}>{["Bank Holiday","Red Day","Custom"].map(l=><option key={l}>{l}</option>)}</select>
@@ -1162,14 +1070,13 @@ function ManagerApp({onLogout}){
                       </div>
                     </div>
                     <div className="divider"/>
-                    <div className="row"><span>💵 Cash</span><span className="row-bold">£{p.cashAmt}</span></div>
-                    <div className="row"><span>💳 Card (fixed)</span><span className="row-bold">£{p.cardAmt}</span></div>
+                    <div className="row"><span>💵 Cash (auto)</span><span className="row-bold">£{p.cashAmt}</span></div>
+                    <div className="row"><span>💳 Card <span style={{fontSize:10,color:"#aaa"}}>(edit in ⚙️ Pay)</span></span><span className="row-bold">£{p.cardAmt}</span></div>
                     <div className="row"><span style={{fontWeight:800}}>Total</span><span style={{fontWeight:900,color:"#F5A623",fontSize:15}}>£{p.total}</span></div>
                   </div>
                 </div>
               );
             })}
-
             {/* Kitchen */}
             <div style={{fontSize:13,fontWeight:800,color:"#1A2744",margin:"14px 0 8px"}}>Kitchen Staff</div>
             <div style={{display:"flex",gap:6,marginBottom:10}}><input className="inp sm" style={{flex:1}} placeholder="Add kitchen staff name…" value={newKName} onChange={e=>setNewKName(e.target.value)}/><button className="btn sm navy" onClick={addKitchen}>Add</button></div>
@@ -1177,33 +1084,28 @@ function ManagerApp({onLogout}){
               const pay=(parseFloat(k.hours||0)*parseFloat(k.rate||0)).toFixed(2);
               return(
                 <div key={k.id} className="card white">
-                  <div className="card-head"><div className="card-name">👨‍🍳 {k.name}</div><button onClick={()=>deleteKitchen(k.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ddd"}}>🗑️</button></div>
+                  <div className="card-head"><div className="card-name">👨‍🍳 {k.name}</div><button onClick={()=>delKitchen(k.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ddd"}}>🗑️</button></div>
                   <div style={{display:"flex",gap:7,marginBottom:8,flexWrap:"wrap"}}>
-                    <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>HOURS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={k.hours||""} onChange={e=>updateKitchen(k.id,"hours",e.target.value)}/></div>
-                    <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>£/HR</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.rate||""} onChange={e=>updateKitchen(k.id,"rate",e.target.value)}/></div>
+                    <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>HOURS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={k.hours||""} onChange={e=>updKitchen(k.id,"hours",e.target.value)}/></div>
+                    <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>£/HR</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.rate||""} onChange={e=>updKitchen(k.id,"rate",e.target.value)}/></div>
                     <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>GROSS</div><div style={{fontSize:16,fontWeight:900,color:"#F5A623",paddingTop:5}}>£{pay}</div></div>
                   </div>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <div style={{fontSize:11,color:"#888",fontWeight:700}}>Pay by:</div>
-                    <div className="toggle">{["cash","card"].map(c=><button key={c} className={`tgl-btn${k.cash_card===c?" active":""}`} onClick={()=>updateKitchen(k.id,"cash_card",c)}>{c==="cash"?"💵":"💳"} {c}</button>)}</div>
-                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><div style={{fontSize:11,color:"#888",fontWeight:700}}>Pay by:</div><div className="toggle">{["cash","card"].map(c=><button key={c} className={`tgl-btn${k.cash_card===c?" active":""}`} onClick={()=>updKitchen(k.id,"cash_card",c)}>{c==="cash"?"💵":"💳"} {c}</button>)}</div></div>
                 </div>
               );
             })}
-
-            {/* Payroll Summary */}
+            {/* Summary */}
             <div className="pay-summary">
-              <div className="pay-summary-title">Week Summary — {fmtRange(weekRange.start,weekRange.end)}</div>
-              <div className="pay-summary-row"><span>💵 Total Cash</span><span className="pay-summary-total">£{totalCash}</span></div>
-              <div className="pay-summary-row"><span>💳 Total Card</span><span className="pay-summary-total">£{totalCard}</span></div>
-              <div className="pay-summary-row"><span>Grand Total</span><span className="pay-summary-total">£{totalGross}</span></div>
+              <div className="psum-title">Week Summary — {fmtRange(weekRange.start,weekRange.end)}</div>
+              <div className="psum-row"><span>💵 Total Cash</span><span className="psum-amt">£{totCash}</span></div>
+              <div className="psum-row"><span>💳 Total Card</span><span className="psum-amt">£{totCard}</span></div>
+              <div className="psum-row"><span>Grand Total</span><span className="psum-amt">£{totGross}</span></div>
             </div>
-
             <div className="exp-sec">
               <div className="exp-title">📤 Export Payroll</div>
-              <button className="exp-btn primary" onClick={doPayrollExport}>{gsConfig.apiKey&&gsConfig.payrollId?"🔗 Push to Payroll Sheet":"📋 Copy — Paste into Payroll Sheet"}</button>
+              <button className="exp-btn primary" onClick={exportPayroll}>🔗 Push to Payroll Sheet</button>
+              <button className="exp-btn sec" onClick={()=>copyTSV(buildPayroll(),t)}>📋 Copy — Paste into Sheet</button>
               <button className="exp-btn sec" onClick={()=>setCashPopup(true)}>💵 View Cash Payments</button>
-              <div className="exp-hint">Cash Payments shows a popup list of who gets paid cash this week.</div>
             </div>
           </>
         )}
@@ -1212,29 +1114,29 @@ function ManagerApp({onLogout}){
         {tab==="takings"&&(
           <>
             <div className="sec">Daily Takings</div>
-
-            {/* Default takings person — set once */}
+            {/* Per-day-of-week defaults */}
             <div className="card">
-              <div className="card-name" style={{marginBottom:4}}>🔁 Default Takings Person</div>
-              <div style={{fontSize:12,color:"#888",marginBottom:8}}>This person is auto-assigned every day. Set once, stays until you change it.</div>
-              <select className="inp sm" style={{display:"block",width:"100%",marginBottom:8}} value={defaultTakingsPerson||""} onChange={e=>saveDefaultTakingsPerson(e.target.value||null)}>
-                <option value="">— Manager records takings —</option>
-                {staff.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-              {defaultTakingsPerson&&<span className="chip g">✓ {staff.find(s=>s.id===defaultTakingsPerson)?.name} is the default</span>}
+              <div className="card-name" style={{marginBottom:4}}>📅 Default Takings Person by Day</div>
+              <div style={{fontSize:12,color:"#888",marginBottom:10}}>Set once per day of week. Auto-assigned daily — no need to change every day.</div>
+              {DAYS_SUN.map((dayName,dow)=>(
+                <div key={dow} className="day-default-row">
+                  <div className="day-default-lbl">{dayName}</div>
+                  <select className="inp sm" style={{flex:1}} value={dayDefaults[dow]||""} onChange={e=>saveDayDefault(dow,e.target.value||null)}>
+                    <option value="">— Manager —</option>
+                    {staff.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+              ))}
             </div>
-
             {/* Today override */}
             <div className="card">
-              <div className="card-name" style={{marginBottom:4}}>📅 Override for Today</div>
-              <div style={{fontSize:12,color:"#888",marginBottom:8}}>Change today's assigned person without affecting the default.</div>
-              <select className="inp sm" style={{display:"block",width:"100%",marginBottom:8}} value={todayOverride?.staff_id||""} onChange={e=>saveTodayOverride(e.target.value||null)}>
-                <option value="">— Use default —</option>
+              <div className="card-name" style={{marginBottom:4}}>🔄 Override for Today Only</div>
+              <select className="inp sm" style={{display:"block",width:"100%",marginBottom:8}} value={todayOverrideId||""} onChange={e=>saveTodayOverride(e.target.value||null)}>
+                <option value="">— Use day default —</option>
                 {staff.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
-              <div style={{fontSize:12,color:"#888"}}>Effective today: <strong>{staff.find(s=>s.id===effectiveTakingsPerson)?.name||"Manager"}</strong></div>
+              <div style={{fontSize:12,color:"#888"}}>Effective today ({DAYS_SUN[todayJsDow]}): <strong>{staff.find(s=>s.id===effectiveTakingsPerson)?.name||"Manager"}</strong></div>
             </div>
-
             {/* Submissions */}
             {takings.filter(s=>s.staff_id!=="manager").length>0&&(
               <>
@@ -1243,66 +1145,73 @@ function ManagerApp({onLogout}){
                   const total=TAKING_FIELDS.reduce((s,f)=>s+parseFloat(sub[f.dbKey]||0)*f.sign,0);
                   return(
                     <div key={sub.id} className={`taking-msg${sub.is_new?" new-sub":""}`}>
-                      <div className="taking-msg-head">{sub.is_new?"🆕 New — ":"✓ "}{sub.staff_name} · {isoToDisplay(sub.date,true)}<span style={{float:"right",fontSize:14,fontWeight:900}}>£{total.toFixed(2)}</span></div>
+                      <div className="taking-msg-head">{sub.is_new?"🆕 New — ":"✓ "}{sub.staff_name} · {dispDate(sub.date,true)}<span style={{float:"right",fontSize:14,fontWeight:900}}>£{total.toFixed(2)}</span></div>
                       <div className="taking-msg-detail">{TAKING_FIELDS.filter(f=>parseFloat(sub[f.dbKey]||0)>0).map(f=>`${f.label.replace(/[🛵💵💳🌐🎟️🎫]/g,"").trim()}: £${sub[f.dbKey]}`).join(" · ")}</div>
                       {sub.note&&<div style={{marginTop:4,fontSize:12,opacity:.8}}>📝 {sub.note}</div>}
-                      {sub.is_new&&<button className="btn sm" style={{marginTop:8,background:"#065F46",color:"#fff"}} onClick={async()=>{await supabase.from("takings").update({is_new:false}).eq("id",sub.id);setTakings(p=>p.map(x=>x.id===sub.id?{...x,is_new:false}:x));}}>Mark Seen ✓</button>}
+                      {sub.is_new&&<button className="btn sm" style={{marginTop:8,background:"#065F46",color:"#fff"}} onClick={async()=>{await db.from("takings").update({is_new:false}).eq("id",sub.id);setTakings(p=>p.map(x=>x.id===sub.id?{...x,is_new:false}:x));}}>Mark Seen ✓</button>}
                     </div>
                   );
                 })}
               </>
             )}
-
-            {/* Manager entry */}
             <div className="card" style={{marginTop:10}}>
               <div className="card-name" style={{marginBottom:8}}>✏️ Enter Takings Manually</div>
-              <ManagerTakingsForm setTakings={setTakings} t={t}/>
+              <ManagerTakingsForm setTakings={setTakings} toast={t}/>
             </div>
-
             <div className="exp-sec">
               <div className="exp-title">📤 Export Takings</div>
-              <button className="exp-btn primary" onClick={doTakingsExport}>{gsConfig.apiKey&&gsConfig.takingsId?"🔗 Push to Takings Sheet":"📋 Copy — Paste into Takings Sheet"}</button>
+              <button className="exp-btn primary" onClick={exportTakings}>🔗 Push to Takings Sheet</button>
+              <button className="exp-btn sec" onClick={()=>copyTSV([...buildDaily(),[""],[""],...buildWeekly()],t)}>📋 Copy — Paste into Sheet</button>
             </div>
           </>
         )}
 
         {/* ── EXPENSES ── */}
-        {tab==="expenses"&&<ExpensesTab expenses={expenses} onAdd={addExpense} onDelete={deleteExpense} t={t}/>}
+        {tab==="expenses"&&<ExpensesTab expenses={expenses} onAdd={addExpense} onDelete={delExpense} toast={t}/>}
 
         {/* ── ABSENCES ── */}
         {tab==="absence"&&(
           <>
             <div className="sec">Absences</div>
-            <button className="btn navy" style={{marginBottom:14}} onClick={()=>{setAbsModal(true);setAbsStaff("");setAbsDate("");setAbsPeriod("");}}>+ Log Absence for a Staff Member</button>
+            <button className="btn navy" style={{marginBottom:14}} onClick={()=>{setAbsModal(true);setAbsStaff("");setAbsDate2("");setAbsPeriod2("");}}>+ Log Absence for Staff</button>
             {absences.length===0?<div className="empty"><div className="empty-icon">📅</div><div className="empty-text">No absences reported</div></div>
-              :absences.map(a=>(<div key={a.id} style={{background:"#FFF8EC",border:"1.5px solid #F5A623",borderRadius:12,padding:"10px 13px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div><div style={{fontWeight:800,color:"#1A2744",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#888",marginTop:2}}>{isoToDisplay(a.date,true)} — {a.period}</div></div>
-                <button onClick={async()=>{await supabase.from("absences").delete().eq("id",a.id);setAbsences(p=>p.filter(x=>x.id!==a.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ccc"}}>🗑️</button>
-              </div>))}
+              :absences.map(a=>(
+                <div key={a.id} style={{background:"#FFF8EC",border:"1.5px solid #F5A623",borderRadius:12,padding:"10px 13px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div><div style={{fontWeight:800,color:"#1A2744",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#888",marginTop:2}}>{dispDate(a.date,true)} — {a.period}</div></div>
+                  <button onClick={async()=>{await db.from("absences").delete().eq("id",a.id);setAbsences(p=>p.filter(x=>x.id!==a.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ccc"}}>🗑️</button>
+                </div>
+              ))}
           </>
         )}
       </div>
 
       {staffSetupModal&&<StaffSetupModal s={staffSetupModal} onClose={()=>setStaffSetupModal(null)}/>}
-      {gsModal&&<GsModal onClose={()=>setGsModal(false)}/>}
+      {pinModal&&<PinModal onClose={()=>setPinModal(false)}/>}
 
       {/* Cash popup */}
       {cashPopup&&(
         <div className="overlay" onClick={()=>setCashPopup(false)}>
           <div className="sheet" onClick={e=>e.stopPropagation()}>
             <div className="sheet-title">💵 Cash Payments</div>
-            <div className="sheet-sub">Week: {fmtRange(weekRange.start,weekRange.end)}</div>
-            <div className="cash-popup">
-              {staff.filter(s=>parseFloat(calcStaffPay(s).cashAmt)>0).map(s=>{
-                const p=calcStaffPay(s);
-                return(<div key={s.id} className="cash-row"><span className="cash-name">{s.name}</span><span className="cash-amount">£{p.cashAmt}</span></div>);
-              })}
-              {staff.filter(s=>parseFloat(calcStaffPay(s).cashAmt)>0).length===0&&<div style={{textAlign:"center",color:"#aaa",padding:"20px 0"}}>No cash payments this week</div>}
-              <div style={{borderTop:"2px solid #F0F0F0",marginTop:10,paddingTop:10,display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:800,color:"#1A2744"}}>
-                <span>Total Cash Out</span><span>£{totalCash}</span>
-              </div>
-            </div>
+            <div className="sheet-sub">{fmtRange(weekRange.start,weekRange.end)}</div>
+            {staff.filter(s=>parseFloat(calcPay(s).cashAmt)>0).map(s=>{const p=calcPay(s);return<div key={s.id} className="cash-row"><span className="cash-name">{s.name}</span><span className="cash-amt">£{p.cashAmt}</span></div>;})
+            }
+            {staff.filter(s=>parseFloat(calcPay(s).cashAmt)>0).length===0&&<div style={{textAlign:"center",color:"#aaa",padding:"20px 0"}}>No cash payments this week</div>}
+            <div style={{borderTop:"2px solid #F0F0F0",marginTop:10,paddingTop:10,display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:800,color:"#1A2744"}}><span>Total Cash Out</span><span>£{totCash}</span></div>
             <button className="btn sec" style={{marginTop:14}} onClick={()=>setCashPopup(false)}>Close</button>
+          </div>
+        </div>
+      )}
+
+      {/* Rota share modal */}
+      {rotaShareModal&&(
+        <div className="overlay" onClick={()=>setRotaShareModal(null)}>
+          <div className="sheet" onClick={e=>e.stopPropagation()}>
+            <div className="sheet-title">📤 Share Rota</div>
+            <div className="sheet-sub">{staff.find(s=>s.id===rotaShareModal)?.name} · {fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,rotaWeeks*7-1))}</div>
+            <textarea className="log-note" rows={12} readOnly style={{fontFamily:"monospace",fontSize:12,background:"#F7F4EF"}} value={buildRotaText(rotaShareModal)}/>
+            <button className="btn" style={{marginTop:12}} onClick={()=>{navigator.clipboard.writeText(buildRotaText(rotaShareModal)).then(()=>t("📋 Rota copied!"));setRotaShareModal(null);}}>📋 Copy to Clipboard</button>
+            <button className="btn sec" onClick={()=>setRotaShareModal(null)}>Close</button>
           </div>
         </div>
       )}
@@ -1312,21 +1221,16 @@ function ManagerApp({onLogout}){
         <div className="overlay" onClick={()=>setAbsModal(false)}>
           <div className="sheet" onClick={e=>e.stopPropagation()}>
             <div className="sheet-title">📅 Log Absence</div>
-            <div className="sheet-sub">This will appear in the rota conflict warning</div>
             <label className="lbl">Staff Member</label>
             <select className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} value={absStaff} onChange={e=>setAbsStaff(e.target.value)}>
               <option value="">— Select staff —</option>
               {staff.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
             <label className="lbl">Date</label>
-            <input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} value={absDate} onChange={e=>setAbsDate(e.target.value)}/>
+            <input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} value={absDate2} onChange={e=>setAbsDate2(e.target.value)}/>
             <label className="lbl" style={{marginBottom:8}}>Period</label>
-            <div className="period-btns">
-              {["Morning","Evening","Full Day"].map(p=>(
-                <button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>
-              ))}
-            </div>
-            <button className="btn" style={{marginTop:12}} onClick={logManagerAbsence}>Save Absence</button>
+            <div className="period-btns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod2===p?" sel":""}`} onClick={()=>setAbsPeriod2(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div>
+            <button className="btn" style={{marginTop:12}} onClick={logAbsence}>Save Absence</button>
             <button className="btn sec" onClick={()=>setAbsModal(false)}>Cancel</button>
           </div>
         </div>
@@ -1338,14 +1242,14 @@ function ManagerApp({onLogout}){
 // ═══════════════════════════════════════════════════════════════════
 // MANAGER TAKINGS FORM
 // ═══════════════════════════════════════════════════════════════════
-function ManagerTakingsForm({setTakings,t}){
+function ManagerTakingsForm({setTakings,toast}){
   const[values,setValues]=useState({});const[payTypes,setPayTypes]=useState({});const[note,setNote]=useState("");const[date,setDate]=useState(todayISO());const[saving,setSaving]=useState(false);
   async function submit(){
     setSaving(true);
     const vals={};TAKING_FIELDS.forEach(f=>{vals[f.dbKey]=parseFloat(values[f.key]||0);if(f.dbPayKey)vals[f.dbPayKey]=payTypes[f.key]||"cash";});
-    const{data,error}=await supabase.from("takings").insert({staff_id:"manager",staff_name:"Manager",date,...vals,note,is_new:false}).select().single();
-    if(!error){setTakings(p=>[data,...p]);setValues({});setNote("");setDate(todayISO());t("✅ Takings saved!");}
-    else t("❌ "+error.message);
+    const{data,error}=await db.from("takings").insert({staff_id:"manager",staff_name:"Manager",date,...vals,note,is_new:false}).select().single();
+    if(!error){setTakings(p=>[data,...p]);setValues({});setNote("");setDate(todayISO());toast("✅ Takings saved!");}
+    else toast("❌ "+error.message);
     setSaving(false);
   }
   return(
@@ -1354,7 +1258,7 @@ function ManagerTakingsForm({setTakings,t}){
       <input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={date} onChange={e=>setDate(e.target.value)}/>
       {TAKING_FIELDS.map(f=>(
         <div key={f.key} className="take-field">
-          <div className="take-lbl"><span>{f.label}</span>{f.hasCashCard&&(<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl-btn${(payTypes[f.key]||"cash")===c?" active":""}`} onClick={()=>setPayTypes(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>)}</div>
+          <div className="take-lbl"><span>{f.label}</span>{f.hasCashCard&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl-btn${(payTypes[f.key]||"cash")===c?" active":""}`} onClick={()=>setPayTypes(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>
           {f.hint&&<div className="take-hint">{f.hint}</div>}
           <input className="inp sm" style={{display:"block",width:"100%",marginTop:3}} type="number" min="0" placeholder="0.00" value={values[f.key]||""} onChange={e=>setValues(p=>({...p,[f.key]:e.target.value}))}/>
         </div>
@@ -1369,12 +1273,12 @@ function ManagerTakingsForm({setTakings,t}){
 // ═══════════════════════════════════════════════════════════════════
 // EXPENSES TAB
 // ═══════════════════════════════════════════════════════════════════
-function ExpensesTab({expenses,onAdd,onDelete,t}){
+function ExpensesTab({expenses,onAdd,onDelete,toast}){
   const[desc,setDesc]=useState("");const[amount,setAmount]=useState("");const[payType,setPayType]=useState("cash");const[date,setDate]=useState(todayISO());const[saving,setSaving]=useState(false);
   async function add(){
-    if(!desc||!amount)return t("Fill in description and amount");
+    if(!desc||!amount)return toast("Fill in description and amount");
     setSaving(true);const{error}=await onAdd(desc,amount,payType,date);
-    if(!error){setDesc("");setAmount("");t("✓ Expense added");}else t("❌ "+error.message);
+    if(!error){setDesc("");setAmount("");}else toast("❌ "+error.message);
     setSaving(false);
   }
   const total=expenses.reduce((a,e)=>a+e.amount,0);
@@ -1416,23 +1320,23 @@ export default function App(){
   const[user,setUser]=useState(null);
   const[allStaff,setAllStaff]=useState([]);
   const[loadingStaff,setLoadingStaff]=useState(false);
-  const[takingsAssignment,setTakingsAssignment]=useState(null);
+  const[effectiveTakingsPerson,setEffectiveTakingsPerson]=useState(null);
 
   useEffect(()=>{
     if(screen==="staffLogin"){
       setLoadingStaff(true);
-      supabase.from("staff").select("id,name,code").order("name").then(({data})=>{setAllStaff(data||[]);setLoadingStaff(false);});
+      db.from("staff").select("id,name,code").order("name").then(({data})=>{setAllStaff(data||[]);setLoadingStaff(false);});
     }
   },[screen]);
 
   useEffect(()=>{
     if(screen==="staff"&&user){
-      // Get effective assignment: today override or default
+      const dow=new Date().getDay();
       Promise.all([
-        supabase.from("takings_assignment").select("*").eq("date",todayISO()).maybeSingle(),
-        supabase.from("takings_assignment").select("*").eq("date","default").maybeSingle(),
-      ]).then(([todayRes,defaultRes])=>{
-        setTakingsAssignment(todayRes.data||defaultRes.data||null);
+        db.from("takings_assignment").select("staff_id").eq("date",todayISO()).maybeSingle(),
+        db.from("takings_defaults").select("staff_id").eq("day_of_week",dow).maybeSingle(),
+      ]).then(([todayR,defaultR])=>{
+        setEffectiveTakingsPerson(todayR.data?.staff_id||defaultR.data?.staff_id||null);
       });
     }
   },[screen,user]);
@@ -1445,7 +1349,7 @@ export default function App(){
         {screen==="staffLogin"&&(loadingStaff?<Loading text="Loading…"/>:<StaffLogin staff={allStaff} onLogin={u=>{setUser(u);setScreen("staff");}} onBack={()=>setScreen("role")} onRegister={()=>setScreen("staffRegister")}/>)}
         {screen==="staffRegister"&&<StaffRegister onBack={()=>setScreen("staffLogin")} onRegister={u=>{setUser(u);setScreen("staff");}}/>}
         {screen==="managerLogin"&&<ManagerLogin onLogin={()=>setScreen("manager")} onBack={()=>setScreen("role")}/>}
-        {screen==="staff"&&user&&<StaffApp user={user} onLogout={()=>{setUser(null);setScreen("role");}} takingsAssignment={takingsAssignment}/>}
+        {screen==="staff"&&user&&<StaffApp user={user} onLogout={()=>{setUser(null);setScreen("role");}} effectiveTakingsPerson={effectiveTakingsPerson}/>}
         {screen==="manager"&&<ManagerApp onLogout={()=>setScreen("role")}/>}
       </div>
     </>
