@@ -1,106 +1,96 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-// ═══════════════════════════════════════════════════════════════════
-// SUPABASE CLIENT
+// ─── Supabase client ────────────────────────────────────────────────
 // vite.config.js maps SUPABASE_URL → VITE_SUPABASE_URL automatically
-// so no manual env var setup is needed after Vercel-Supabase integration
-// ═══════════════════════════════════════════════════════════════════
 const db = createClient(
   import.meta.env.VITE_SUPABASE_URL,
   import.meta.env.VITE_SUPABASE_KEY,
   { auth: { persistSession: false } }
 );
 
-// ═══════════════════════════════════════════════════════════════════
-// GOOGLE SHEETS — hardcoded, no setup needed
-// ═══════════════════════════════════════════════════════════════════
-const GS_KEY        = "AIzaSyAp0HeG4XqYV48iKu2-Hc5D7LDDsz8zOvE";
-const GS_PAYROLL_ID = "1Wj0EHKejhpEWU_bjvN1pNc4MqFwcraOncnRS5Ih5OEY";
-const GS_TAKINGS_ID = "1K-UMBoepGs3g7CZBlyk_muSh5uT1tFfX96s8xcAdblU";
-
-async function pushSheet(sheetId, tabName, rows) {
+// ─── Google Sheets helper (credentials loaded from Supabase at runtime) ─
+async function pushSheet(apiKey, sheetId, tabName, rows) {
+  if (!apiKey || !sheetId) return { ok: false, err: "Google Sheets not configured — tap ⚙️ Settings" };
   try {
     const base = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}`;
-    const tab  = encodeURIComponent(`${tabName}!A1`);
-    await fetch(`${base}/values/${encodeURIComponent(tabName+"!A1:Z2000")}:clear?key=${GS_KEY}`, { method:"POST" });
-    const res  = await fetch(`${base}/values/${tab}?valueInputOption=USER_ENTERED&key=${GS_KEY}`, {
-      method:"PUT", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ values: rows })
-    });
-    if (!res.ok) { const e = await res.json(); return { ok:false, err:e.error?.message||"Sheets API error" }; }
-    return { ok:true };
-  } catch(e) { return { ok:false, err:e.message }; }
+    await fetch(`${base}/values/${encodeURIComponent(tabName + "!A1:Z2000")}:clear?key=${apiKey}`, { method: "POST" });
+    const res = await fetch(
+      `${base}/values/${encodeURIComponent(tabName + "!A1")}?valueInputOption=USER_ENTERED&key=${apiKey}`,
+      { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ values: rows }) }
+    );
+    if (!res.ok) { const e = await res.json(); return { ok: false, err: e.error?.message || "Sheets API error" }; }
+    return { ok: true };
+  } catch (e) { return { ok: false, err: e.message }; }
 }
 function copyTSV(rows, toast) {
   const tsv = rows.map(r => r.map(c => String(c ?? "")).join("\t")).join("\n");
   navigator.clipboard.writeText(tsv)
-    .then(()  => toast("📋 Copied! Open Google Sheets → click A1 → Ctrl+V"))
-    .catch(()  => toast("❌ Copy failed — try a different browser"));
+    .then(() => toast("📋 Copied! Open Google Sheets → click A1 → Ctrl+V"))
+    .catch(() => toast("❌ Copy failed — try a different browser"));
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// CONSTANTS & HELPERS
-// ═══════════════════════════════════════════════════════════════════
-const DAYS_SUN  = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]; // indexed by JS getDay()
-const DAYS_MON  = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]; // Mon-first display
-const SHIFTS    = ["Off","Full Day (11am–close)","Night (5:30pm–close)","Custom"];
-const ADD_LBLS  = ["Bank Holiday","Red Day","Other"];
-const DED_LBLS  = ["Left Early","Sick Leave","Other"];
+// ─── Constants ──────────────────────────────────────────────────────
+const DAYS_SUN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DAYS_MON = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const SHIFTS   = ["Off", "Full Day (11am–close)", "Night (5:30pm–close)", "Custom"];
+const ADD_LBLS = ["Bank Holiday", "Red Day", "Other"];
+const DED_LBLS = ["Left Early", "Sick Leave", "Other"];
 
 const TKFIELDS = [
-  { key:"deliveroo",         label:"Deliveroo 🛵",         db:"deliveroo",          sign: 1 },
-  { key:"uber",              label:"Uber Eats 🛵",          db:"uber",               sign: 1 },
-  { key:"cash",              label:"Cash 💵",               db:"cash",               sign: 1 },
-  { key:"card",              label:"Card 💳",               db:"card",               sign: 1 },
-  { key:"online",            label:"Online 🌐",             db:"online",             sign: 1 },
-  { key:"depositReceipt",    label:"Deposit Receipt",       db:"deposit_receipt",    sign: 1, cc:true, ccDb:"deposit_pay_type" },
-  { key:"voucherRedemption", label:"Voucher Redemption 🎟️",db:"voucher_redemption", sign:-1, hint:"Enter as a positive number — deducted automatically" },
-  { key:"voucherPurchase",   label:"Voucher Purchase 🎫",   db:"voucher_purchase",   sign: 1, cc:true, ccDb:"voucher_pay_type" },
+  { key: "deliveroo",          label: "Deliveroo 🛵",         db: "deliveroo",          sign:  1 },
+  { key: "uber",               label: "Uber Eats 🛵",          db: "uber",               sign:  1 },
+  { key: "cash",               label: "Cash 💵",               db: "cash",               sign:  1 },
+  { key: "card",               label: "Card 💳",               db: "card",               sign:  1 },
+  { key: "online",             label: "Online 🌐",             db: "online",             sign:  1 },
+  { key: "depositReceipt",     label: "Deposit Receipt",       db: "deposit_receipt",    sign:  1, cc: true, ccDb: "deposit_pay_type" },
+  { key: "voucherRedemption",  label: "Voucher Redemption 🎟️", db: "voucher_redemption", sign: -1, hint: "Enter as positive — deducted automatically" },
+  { key: "voucherPurchase",    label: "Voucher Purchase 🎫",   db: "voucher_purchase",   sign:  1, cc: true, ccDb: "voucher_pay_type" },
 ];
 
+// ─── Helpers ────────────────────────────────────────────────────────
 const todayISO = () => new Date().toISOString().split("T")[0];
-const nowTime  = () => new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
-const fmtDate  = iso => { if(!iso)return""; const[y,m,d]=iso.split("-"); return`${d}/${m}/${y}`; };
-const addDays  = (iso,n) => { const d=new Date(iso+"T12:00:00"); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
-const dispDate = (iso,wd=false) => {
-  if(!iso)return"";
-  const d=new Date(iso+"T12:00:00");
-  return wd ? d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})
-             : d.toLocaleDateString("en-GB",{day:"numeric",month:"short"});
+const nowTime  = () => new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+const fmtDate  = iso => { if (!iso) return ""; const [y, m, d] = iso.split("-"); return `${d}/${m}/${y}`; };
+const addDays  = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return d.toISOString().split("T")[0]; };
+const dispDate = (iso, wd = false) => {
+  if (!iso) return "";
+  const d = new Date(iso + "T12:00:00");
+  return wd ? d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })
+            : d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 };
-const fmtRange = (s,e) => `${fmtDate(s)} – ${fmtDate(e)}`;
-const parseHrs = (i,o) => { if(!i||!o)return 0; const p=t=>{const[h,m]=t.split(":").map(Number);return h+m/60;}; return Math.max(0,p(o)-p(i)); };
-const jsToMon  = d => d===0?6:d-1; // JS day (0=Sun) → Mon-first index (0=Mon…6=Sun)
+const fmtRange  = (s, e) => `${fmtDate(s)} – ${fmtDate(e)}`;
+const parseHrs  = (i, o) => { if (!i || !o) return 0; const p = t => { const [h, m] = t.split(":").map(Number); return h + m / 60; }; return Math.max(0, p(o) - p(i)); };
+const jsToMon   = d => d === 0 ? 6 : d - 1;
+const weekDates = monISO => Array.from({ length: 7 }, (_, i) => addDays(monISO, i));
 
 function payWeekOf(iso) {
-  const d=new Date(iso+"T12:00:00"), dow=d.getDay();
-  const sun=new Date(d); sun.setDate(d.getDate()-dow);
-  const sat=new Date(sun); sat.setDate(sun.getDate()+6);
-  return { start:sun.toISOString().split("T")[0], end:sat.toISOString().split("T")[0] };
+  const d = new Date(iso + "T12:00:00"), dow = d.getDay();
+  const sun = new Date(d); sun.setDate(d.getDate() - dow);
+  const sat = new Date(sun); sat.setDate(sun.getDate() + 6);
+  return { start: sun.toISOString().split("T")[0], end: sat.toISOString().split("T")[0] };
 }
 function rotaWeekOf(iso) {
-  const d=new Date(iso+"T12:00:00"), dow=d.getDay();
-  const mon=new Date(d); mon.setDate(d.getDate()-(dow===0?6:dow-1));
-  const sun=new Date(mon); sun.setDate(mon.getDate()+6);
-  return { start:mon.toISOString().split("T")[0], end:sun.toISOString().split("T")[0] };
+  const d = new Date(iso + "T12:00:00"), dow = d.getDay();
+  const mon = new Date(d); mon.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
+  const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+  return { start: mon.toISOString().split("T")[0], end: sun.toISOString().split("T")[0] };
 }
-const weekDates = monISO => Array.from({length:7},(_,i)=>addDays(monISO,i));
 
-// ═══════════════════════════════════════════════════════════════════
-// CSS
-// ═══════════════════════════════════════════════════════════════════
+// ─── CSS ────────────────────────────────────────────────────────────
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-color:transparent;overscroll-behavior:none;}
 .app{max-width:430px;margin:0 auto;min-height:100vh;background:#fff;position:relative;overflow-x:hidden;}
+/* role */
 .role-screen{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;background:linear-gradient(160deg,#1A2744,#2C3E6B);}
 .role-logo{font-size:52px;margin-bottom:12px;}.role-title{font-size:28px;font-weight:900;color:#fff;text-align:center;margin-bottom:6px;}
 .role-sub{font-size:14px;color:rgba(255,255,255,.55);margin-bottom:36px;text-align:center;}
 .role-btn{width:100%;padding:20px;border-radius:18px;border:none;cursor:pointer;margin-bottom:12px;display:flex;align-items:center;gap:14px;transition:transform .1s;}
 .role-btn:active{transform:scale(.97);}.role-btn.staff{background:#F5A623;color:#1A2744;}.role-btn.manager{background:#fff;color:#1A2744;}
-.role-icon{font-size:30px;}.role-lbl{font-size:17px;font-weight:800;display:block;}.role-desc{font-size:12px;font-weight:500;opacity:.6;display:block;}
+.ri{font-size:30px;}.rl{font-size:17px;font-weight:800;display:block;}.rd{font-size:12px;font-weight:500;opacity:.6;display:block;}
+/* auth */
 .auth{min-height:100vh;padding:48px 24px 32px;display:flex;flex-direction:column;}
 .back{background:none;border:none;font-size:26px;cursor:pointer;align-self:flex-start;margin-bottom:20px;color:#1A2744;}
 .atitle{font-size:25px;font-weight:900;color:#1A2744;margin-bottom:6px;}
@@ -110,6 +100,7 @@ body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-col
 .inp:focus{border-color:#F5A623;}.inp.code{font-size:26px;letter-spacing:8px;font-weight:800;text-align:center;color:#1A2744;}
 .inp.sm{padding:9px 11px;font-size:13px;margin-bottom:0;border-radius:9px;}
 .inp.time{padding:8px 9px;font-size:12px;margin-bottom:0;flex:1;border-radius:8px;}
+.inp.num{width:72px;padding:7px 8px;font-size:13px;margin-bottom:0;border-radius:8px;text-align:right;}
 .btn{width:100%;padding:16px;background:#F5A623;border:none;border-radius:14px;font-size:15px;font-weight:800;color:#1A2744;cursor:pointer;margin-top:8px;transition:transform .1s;display:block;text-align:center;}
 .btn:active{transform:scale(.98);}.btn:disabled{opacity:.4;cursor:not-allowed;}
 .btn.sec{background:#F0F0F0;color:#1A2744;margin-top:10px;}.btn.danger{background:#E05252;color:#fff;}
@@ -120,6 +111,7 @@ body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-col
 .sitem{padding:14px 16px;background:#F7F4EF;border-radius:12px;display:flex;align-items:center;gap:12px;cursor:pointer;border:2px solid transparent;}
 .sitem:hover{border-color:#ddd;}
 .avatar{width:42px;height:42px;border-radius:21px;background:#1A2744;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;flex-shrink:0;}
+/* layout */
 .hdr{padding:18px 18px 8px;display:flex;align-items:center;justify-content:space-between;}
 .hdr-name{font-size:19px;font-weight:900;color:#1A2744;}.hdr-greet{font-size:12px;color:#aaa;font-weight:500;}
 .body{padding:0 16px 110px;}
@@ -127,8 +119,9 @@ body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-col
 .ssub{font-size:12px;color:#aaa;margin-top:-6px;margin-bottom:10px;}
 .bnav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:#fff;border-top:1px solid #F0F0F0;display:flex;padding:8px 0 env(safe-area-inset-bottom,18px);z-index:100;}
 .nbtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;border:none;background:none;cursor:pointer;padding:4px;position:relative;}
-.ni{font-size:20px;}.nl{font-size:10px;font-weight:700;color:#bbb;text-transform:uppercase;letter-spacing:.3px;}.nbtn.active .nl{color:#F5A623;}
+.ni{font-size:20px;}.nl{font-size:10px;font-weight:700;color:#bbb;text-transform:uppercase;letter-spacing:.3px;}.nbtn.on .nl{color:#F5A623;}
 .nbadge{position:absolute;top:0;right:calc(50% - 18px);background:#E05252;color:#fff;border-radius:10px;font-size:10px;font-weight:800;padding:1px 5px;min-width:16px;text-align:center;}
+/* clock */
 .clkcard{background:linear-gradient(135deg,#1A2744,#2C3E6B);border-radius:20px;padding:20px;margin-bottom:14px;color:#fff;}
 .clktime{font-size:40px;font-weight:900;letter-spacing:-1px;}.clkdate{font-size:12px;color:rgba(255,255,255,.5);margin-bottom:12px;}
 .clkst{display:inline-block;padding:3px 11px;border-radius:20px;font-size:11px;font-weight:700;margin-bottom:14px;}
@@ -139,6 +132,7 @@ body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-col
 .clkhist{margin-top:12px;}
 .clkrow{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;color:rgba(255,255,255,.65);}
 .clkrow:last-child{border:none;}
+/* rota */
 .rday{background:#F7F4EF;border-radius:13px;padding:11px 13px;margin-bottom:7px;display:flex;align-items:center;gap:8px;}
 .rday.today{background:#FFF8EC;border:2px solid #F5A623;}.rday.off{opacity:.4;}
 .rdaylbl{min-width:60px;}.rdayname{font-size:12px;font-weight:800;color:#1A2744;}
@@ -147,19 +141,27 @@ body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-col
 .rdaybtns{display:flex;gap:5px;}
 .okbtn{border:none;background:#D1FAE5;color:#065F46;border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;}
 .nobtn{border:none;background:#FEE2E2;color:#E05252;border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;}
+/* absence */
 .abscard{background:#FFF8EC;border:2px solid #F5A623;border-radius:16px;padding:16px;margin-bottom:14px;}
 .peribtns{display:flex;gap:6px;margin-bottom:12px;}
 .pbtn{flex:1;padding:10px 4px;border:2px solid #E5E5E5;border-radius:10px;background:#fff;font-size:12px;font-weight:700;color:#1A2744;cursor:pointer;text-align:center;}
 .pbtn.sel{border-color:#F5A623;background:#FFF8EC;}
+/* toast / overlay / modal */
 .toast{position:fixed;top:24px;left:50%;transform:translateX(-50%);background:#1A2744;color:#fff;padding:10px 18px;border-radius:40px;font-size:13px;font-weight:700;z-index:999;white-space:nowrap;animation:fio 2.8s forwards;pointer-events:none;}
 @keyframes fio{0%{opacity:0;top:10px}12%{opacity:1;top:24px}80%{opacity:1}100%{opacity:0}}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;z-index:200;}
 .sheet{background:#fff;border-radius:24px 24px 0 0;padding:24px 20px 44px;width:100%;max-width:430px;max-height:90vh;overflow-y:auto;}
 .stitle{font-size:19px;font-weight:900;color:#1A2744;margin-bottom:4px;}
 .ssub2{font-size:13px;color:#888;margin-bottom:14px;}
+/* toggle */
 .toggle{display:flex;border:2px solid #E5E5E5;border-radius:10px;overflow:hidden;width:fit-content;}
 .tgl{padding:6px 13px;border:none;background:#fff;font-size:12px;font-weight:700;cursor:pointer;color:#888;}
 .tgl.on{background:#1A2744;color:#fff;}
+/* day toggles for takings */
+.day-tog{padding:5px 8px;border:1.5px solid #E5E5E5;border-radius:7px;background:#fff;font-size:11px;font-weight:700;cursor:pointer;color:#888;}
+.day-tog.on{background:#F5A623;border-color:#F5A623;color:#1A2744;}
+.day-tog:disabled{opacity:.35;cursor:not-allowed;}
+/* manager */
 .mhdr{background:linear-gradient(135deg,#1A2744,#0F1D3A);padding:22px 16px 14px;display:flex;justify-content:space-between;align-items:flex-start;}
 .mtitle{font-size:20px;font-weight:900;color:#fff;}.msub{font-size:11px;color:rgba(255,255,255,.4);}
 .mlo{background:rgba(255,255,255,.12);border:none;color:#fff;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:600;}
@@ -168,34 +170,41 @@ body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-col
 .mtab{white-space:nowrap;padding:10px 11px;border:none;background:none;font-size:12px;font-weight:700;color:#bbb;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;}
 .mtab.on{color:#1A2744;border-bottom-color:#F5A623;}
 .mbody{padding:12px 16px 110px;}
+/* cards */
 .card{background:#F7F4EF;border-radius:14px;padding:13px 14px;margin-bottom:10px;}
 .card.w{background:#fff;border:1.5px solid #F0F0F0;}
 .chead{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;}
 .cname{font-size:14px;font-weight:800;color:#1A2744;}.csub{font-size:11px;color:#888;margin-top:2px;}
+/* chips */
 .chip{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;}
 .chip.g{background:#D1FAE5;color:#065F46;}.chip.r{background:#FEE2E2;color:#7F1D1D;}
 .chip.a{background:#FEF3C7;color:#78350F;}
+/* rows */
 .row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed #F0F0F0;font-size:13px;color:#555;}
 .row:last-child{border:none;}.rowb{font-weight:800;color:#1A2744;}
+/* payroll */
 .paycard{background:#fff;border:2px solid #F0F0F0;border-radius:14px;margin-bottom:10px;overflow:hidden;}
 .phead{background:#F7F4EF;padding:11px 14px;display:flex;justify-content:space-between;align-items:center;}
 .pname{font-size:14px;font-weight:800;color:#1A2744;}.ptotal{font-size:18px;font-weight:900;color:#F5A623;}
 .pbody{padding:11px 14px;}
-.mini{width:80px;padding:5px 7px;border:1.5px solid #ddd;border-radius:6px;font-size:13px;text-align:right;font-family:inherit;outline:none;}
+.mini{width:68px;padding:5px 7px;border:1.5px solid #ddd;border-radius:6px;font-size:13px;text-align:right;font-family:inherit;outline:none;}
 .mini:focus{border-color:#F5A623;}
 .addrow{display:flex;gap:5px;align-items:center;margin-top:6px;}
 .addinp{flex:1;padding:7px 9px;border:1.5px solid #E5E5E5;border-radius:8px;font-size:12px;font-family:inherit;outline:none;}
 .addinp:focus{border-color:#F5A623;}
 .addbtn{padding:7px 11px;background:#F5A623;border:none;border-radius:7px;font-size:11px;font-weight:800;color:#1A2744;cursor:pointer;}
 .addbtn.r{background:#FEE2E2;color:#7F1D1D;}
+/* pay summary */
 .psum{background:linear-gradient(135deg,#1A2744,#2C3E6B);border-radius:16px;padding:16px;margin-top:14px;color:#fff;}
 .psumtitle{font-size:12px;font-weight:700;color:rgba(255,255,255,.5);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px;}
 .psumrow{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.1);font-size:14px;color:rgba(255,255,255,.8);}
 .psumrow:last-child{border:none;}.psumamt{font-weight:900;color:#F5A623;}
+/* export */
 .expsec{background:#F7F4EF;border-radius:14px;padding:13px;margin-top:12px;}
 .exptitle{font-size:13px;font-weight:800;color:#1A2744;margin-bottom:9px;}
 .expbtn{width:100%;padding:13px;border:none;border-radius:11px;font-size:13px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;margin-bottom:7px;}
 .expbtn:last-child{margin-bottom:0;}.expbtn.p{background:#1A2744;color:#fff;}.expbtn.s{background:#E8F0E9;color:#1A2744;}
+/* takings */
 .tfield{margin-bottom:9px;}
 .tlbl{font-size:12px;font-weight:700;color:#555;margin-bottom:3px;display:flex;justify-content:space-between;align-items:center;}
 .thint{font-size:10px;color:#aaa;margin-top:2px;font-style:italic;}
@@ -204,6 +213,7 @@ body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-col
 .tmsg-d{font-size:12px;color:#047857;}
 .tmsg.new{background:#FFF8EC;border-color:#F5A623;}
 .tmsg.new .tmsg-h{color:#78350F;}.tmsg.new .tmsg-d{color:#92400E;}
+/* misc */
 .notif{background:linear-gradient(135deg,#F5A623,#E8940A);border-radius:14px;padding:14px;margin-bottom:14px;cursor:pointer;}
 .notif-t{font-size:14px;font-weight:900;color:#1A2744;margin-bottom:3px;}
 .notif-s{font-size:12px;color:rgba(26,39,68,.7);}
@@ -227,13 +237,12 @@ body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-col
 @keyframes spin{to{transform:rotate(360deg)}}.loadtxt{font-size:14px;font-weight:600;color:#888;}
 .cashrow{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #F0F0F0;font-size:15px;}
 .cashrow:last-child{border:none;}.cashname{font-weight:700;color:#1A2744;}.cashamt{font-weight:900;color:#065F46;font-size:16px;}
-.dayrow{display:flex;align-items:center;gap:6px;margin-bottom:8px;}
-.daylbl{font-size:12px;font-weight:700;color:#1A2744;min-width:34px;}
+/* GS setup banner */
+.gs-banner{background:#FFF8EC;border:1.5px solid #F5A623;border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:13px;color:#78350F;}
+.gs-banner strong{font-weight:800;}
 `;
 
-// ═══════════════════════════════════════════════════════════════════
-// TINY SHARED COMPONENTS
-// ═══════════════════════════════════════════════════════════════════
+// ─── Shared UI ───────────────────────────────────────────────────────
 function Toast({ msg }) { return msg ? <div className="toast">{msg}</div> : null; }
 function Loading({ text = "Loading…" }) {
   return <div className="loading"><div className="spinner" /><div className="loadtxt">{text}</div></div>;
@@ -249,12 +258,12 @@ function RolePicker({ onPick }) {
       <div className="role-title">Restaurant Staff App</div>
       <div className="role-sub">Who is using this device?</div>
       <button className="role-btn staff" onClick={() => onPick("staff")}>
-        <span className="role-icon">👤</span>
-        <span><span className="role-lbl">I'm a Staff Member</span><span className="role-desc">Clock in/out · Rota · Absence</span></span>
+        <span className="ri">👤</span>
+        <span><span className="rl">I'm a Staff Member</span><span className="rd">Clock in/out · Rota · Absence</span></span>
       </button>
       <button className="role-btn manager" onClick={() => onPick("manager")}>
-        <span className="role-icon">🔑</span>
-        <span><span className="role-lbl">I'm the Manager</span><span className="role-desc">Rota · Payroll · Takings · Expenses</span></span>
+        <span className="ri">🔑</span>
+        <span><span className="rl">I'm the Manager</span><span className="rd">Rota · Payroll · Takings · Expenses</span></span>
       </button>
     </div>
   );
@@ -282,7 +291,7 @@ function StaffLogin({ staff, onLogin, onBack, onRegister }) {
         onClick={() => { if (code === sel.code) onLogin(sel); else { setErr("Wrong code — try again"); setCode(""); } }}>
         Sign In
       </button>
-      <div style={{ textAlign:"center", fontSize:13, color:"#aaa", marginTop:14 }}>Forgot your code? Ask the manager</div>
+      <div style={{ textAlign: "center", fontSize: 13, color: "#aaa", marginTop: 14 }}>Forgot your code? Ask the manager</div>
     </div>
   );
 
@@ -295,7 +304,10 @@ function StaffLogin({ staff, onLogin, onBack, onRegister }) {
         {staff.map(s => (
           <div key={s.id} className="sitem" onClick={() => { setSel(s); setStep("code"); setCode(""); setErr(""); }}>
             <div className="avatar">{s.name[0]}</div>
-            <div><div style={{ fontSize:15, fontWeight:700, color:"#1A2744" }}>{s.name}</div><div style={{ fontSize:11, color:"#aaa" }}>Tap to sign in</div></div>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#1A2744" }}>{s.name}</div>
+              <div style={{ fontSize: 11, color: "#aaa" }}>Tap to sign in</div>
+            </div>
           </div>
         ))}
       </div>
@@ -318,22 +330,15 @@ function StaffRegister({ onBack, onRegister }) {
     if (code !== confirm) return setErr("Codes don't match — try again");
     setSaving(true);
     const { error } = await db.from("staff").insert({
-      id: code,
-      name: name.trim(),
-      code: code,
-      pay_type: "hourly",
-      rate: "0",
-      shift_rate: "0",
-      night_rate: "0",
-      card_fixed: "0",
-      card_override: "0"
+      id: code, name: name.trim(), code,
+      pay_type: "hourly", rate: "0", shift_rate: "0", night_rate: "0",
+      card_fixed: "0", card_override: "0"
     });
     if (error) {
       setSaving(false);
-      if (error.code === "23505") return setErr("That code is already taken — pick a different one");
-      return setErr("Error saving: " + error.message);
+      return setErr(error.code === "23505" ? "That code is already taken — pick a different one" : "Error: " + error.message);
     }
-    onRegister({ id:code, name:name.trim(), code });
+    onRegister({ id: code, name: name.trim(), code });
   }
 
   return (
@@ -348,7 +353,7 @@ function StaffRegister({ onBack, onRegister }) {
       <label className="lbl">Type Code Again to Confirm</label>
       <input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={confirm} onChange={e => setConfirm(e.target.value)} />
       {err && <div className="err">{err}</div>}
-      <button className="btn" onClick={handle} disabled={saving}>{saving ? "Creating account…" : "Create Account"}</button>
+      <button className="btn" onClick={handle} disabled={saving}>{saving ? "Creating…" : "Create Account"}</button>
     </div>
   );
 }
@@ -375,7 +380,7 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
   const [tNote, setTNote] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [rotaMon, setRotaMon] = useState(rotaWeekOf(todayISO()).start);
+  const [rotaMon, setRotaMon] = useState(() => rotaWeekOf(todayISO()).start);
 
   const assigned = effectiveTakingsPerson === user.id;
   const now = new Date();
@@ -387,8 +392,8 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
   async function loadData() {
     setLoading(true);
     const [logR, absR, rejR, confR, subR] = await Promise.all([
-      db.from("clock_logs").select("*").eq("staff_id", user.id).order("date", { ascending:false }).limit(20),
-      db.from("absences").select("*").eq("staff_id", user.id).order("date", { ascending:false }),
+      db.from("clock_logs").select("*").eq("staff_id", user.id).order("date", { ascending: false }).limit(20),
+      db.from("absences").select("*").eq("staff_id", user.id).order("date", { ascending: false }),
       db.from("rejections").select("*").eq("staff_id", user.id),
       db.from("confirmations").select("*").eq("staff_id", user.id),
       db.from("takings").select("id").eq("staff_id", user.id).eq("date", todayISO()),
@@ -410,13 +415,13 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
     setRota(dates.map(dateISO => {
       const jsDay = new Date(dateISO + "T12:00:00").getDay();
       const row = (data || []).find(r => r.day_index === jsDay);
-      return { date:dateISO, jsDay, type:row?.shift_type||"Off", customIn:row?.custom_in||"", customOut:row?.custom_out||"" };
+      return { date: dateISO, jsDay, type: row?.shift_type || "Off", customIn: row?.custom_in || "", customOut: row?.custom_out || "" };
     }));
   }
 
   async function clockIn() {
     const time = nowTime();
-    const { data, error } = await db.from("clock_logs").insert({ staff_id:user.id, staff_name:user.name, date:todayISO(), time_in:time, note:"" }).select().single();
+    const { data, error } = await db.from("clock_logs").insert({ staff_id: user.id, staff_name: user.name, date: todayISO(), time_in: time, note: "" }).select().single();
     if (!error) { setLogs(p => [data, ...p]); setClockedIn(true); setClockInTime(time); t("✅ Clocked in at " + time); }
     else t("❌ " + error.message);
   }
@@ -425,27 +430,28 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
     const active = logs.find(l => l.date === todayISO() && l.time_in && !l.time_out);
     if (!active) return;
     const time = nowTime();
-    const { error } = await db.from("clock_logs").update({ time_out:time }).eq("id", active.id);
-    if (!error) { setLogs(p => p.map(l => l.id === active.id ? { ...l, time_out:time } : l)); setClockedIn(false); t("👋 Clocked out at " + time); }
+    const { error } = await db.from("clock_logs").update({ time_out: time }).eq("id", active.id);
+    if (!error) { setLogs(p => p.map(l => l.id === active.id ? { ...l, time_out: time } : l)); setClockedIn(false); t("👋 Clocked out at " + time); }
     else t("❌ " + error.message);
   }
 
   async function reportAbsence() {
     if (!absDate || !absPeriod) return t("Please pick a date and period");
-    const { data, error } = await db.from("absences").insert({ staff_id:user.id, staff_name:user.name, date:absDate, period:absPeriod }).select().single();
+    const { data, error } = await db.from("absences").insert({ staff_id: user.id, staff_name: user.name, date: absDate, period: absPeriod }).select().single();
     if (!error) { setAbsences(p => [...p, data]); setAbsDate(""); setAbsPeriod(""); t("📅 Absence sent to manager!"); }
     else t("❌ " + error.message);
   }
 
   async function confirmShift(idx) {
     const dayName = DAYS_MON[idx];
-    const { data, error } = await db.from("confirmations").insert({ staff_id:user.id, staff_name:user.name, day:dayName }).select().single();
+    const { data, error } = await db.from("confirmations").insert({ staff_id: user.id, staff_name: user.name, day: dayName }).select().single();
     if (!error) { setConfirmations(p => [...p, data]); t("✅ Shift confirmed!"); }
+    else t("❌ " + error.message);
   }
 
   async function rejectShift() {
     const dayName = DAYS_MON[rejectModal];
-    const { data, error } = await db.from("rejections").insert({ staff_id:user.id, staff_name:user.name, day:dayName, reason:rejectReason }).select().single();
+    const { data, error } = await db.from("rejections").insert({ staff_id: user.id, staff_name: user.name, day: dayName, reason: rejectReason }).select().single();
     if (!error) { setRejections(p => [...p, data]); setRejectModal(null); t("Rejection sent to manager"); }
     else t("❌ " + error.message);
   }
@@ -453,7 +459,7 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
   async function submitTakings() {
     const vals = {};
     TKFIELDS.forEach(f => { vals[f.db] = parseFloat(tVals[f.key] || 0); if (f.ccDb) vals[f.ccDb] = tCC[f.key] || "cash"; });
-    const { error } = await db.from("takings").insert({ staff_id:user.id, staff_name:user.name, date:todayISO(), ...vals, note:tNote, is_new:true });
+    const { error } = await db.from("takings").insert({ staff_id: user.id, staff_name: user.name, date: todayISO(), ...vals, note: tNote, is_new: true });
     if (!error) { setTVals({}); setTCC({}); setTNote(""); setSubmitted(true); t("📊 Submitted!"); setTab("home"); }
     else t("❌ " + error.message);
   }
@@ -497,10 +503,10 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
   }
 
   const navItems = [
-    { id:"home", icon:"🏠", label:"Home" },
-    { id:"rota", icon:"📋", label:"Rota" },
-    { id:"absence", icon:"📅", label:"Absence" },
-    ...(assigned ? [{ id:"takings", icon:"📊", label:"Takings", badge:!submitted }] : []),
+    { id: "home", icon: "🏠", label: "Home" },
+    { id: "rota", icon: "📋", label: "Rota" },
+    { id: "absence", icon: "📅", label: "Absence" },
+    ...(assigned ? [{ id: "takings", icon: "📊", label: "Takings", badge: !submitted }] : []),
   ];
 
   return (
@@ -511,7 +517,7 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
           <div className="hdr-greet">Good {now.getHours() < 12 ? "morning" : now.getHours() < 18 ? "afternoon" : "evening"},</div>
           <div className="hdr-name">{user.name.split(" ")[0]} 👋</div>
         </div>
-        <button style={{ background:"none", border:"none", fontSize:22, cursor:"pointer" }} onClick={onLogout}>🚪</button>
+        <button style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer" }} onClick={onLogout}>🚪</button>
       </div>
 
       {tab === "home" && (
@@ -523,8 +529,8 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
             </div>
           )}
           <div className="clkcard">
-            <div className="clktime">{now.toLocaleTimeString("en-GB", { hour:"2-digit", minute:"2-digit" })}</div>
-            <div className="clkdate">{now.toLocaleDateString("en-GB", { weekday:"long", day:"numeric", month:"long" })}</div>
+            <div className="clktime">{now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</div>
+            <div className="clkdate">{now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</div>
             <div className={`clkst ${clockedIn ? "in" : "out"}`}>{clockedIn ? `● Clocked in at ${clockInTime}` : "● Not clocked in"}</div>
             <div className="clkbtns">
               <button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button>
@@ -536,7 +542,7 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
                   <div key={l.id} className="clkrow">
                     <span>{dispDate(l.date, true)}</span>
                     <span>{l.time_in} → {l.time_out || "active"}</span>
-                    <span style={{ fontWeight:700 }}>{l.time_out ? parseHrs(l.time_in, l.time_out).toFixed(1) + "h" : ""}</span>
+                    <span style={{ fontWeight: 700 }}>{l.time_out ? parseHrs(l.time_in, l.time_out).toFixed(1) + "h" : ""}</span>
                   </div>
                 ))}
               </div>
@@ -563,26 +569,29 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
         <div className="body">
           <div className="sec">Report Absence</div>
           <div className="abscard">
-            <div style={{ fontSize:14, fontWeight:800, color:"#1A2744", marginBottom:4 }}>📅 Can't come in?</div>
-            <div style={{ fontSize:12, color:"#888", marginBottom:12 }}>Pick the date and when you can't work</div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "#1A2744", marginBottom: 4 }}>📅 Can't come in?</div>
+            <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>Pick the date and when you can't work</div>
             <label className="lbl">Which day?</label>
-            <input type="date" className="inp sm" style={{ display:"block", width:"100%", marginBottom:12 }} value={absDate} min={todayISO()} onChange={e => setAbsDate(e.target.value)} />
-            <label className="lbl" style={{ marginBottom:7 }}>Which part?</label>
+            <input type="date" className="inp sm" style={{ display: "block", width: "100%", marginBottom: 12 }} value={absDate} min={todayISO()} onChange={e => setAbsDate(e.target.value)} />
+            <label className="lbl" style={{ marginBottom: 7 }}>Which part?</label>
             <div className="peribtns">
-              {["Morning","Evening","Full Day"].map(p => (
+              {["Morning", "Evening", "Full Day"].map(p => (
                 <button key={p} className={`pbtn${absPeriod === p ? " sel" : ""}`} onClick={() => setAbsPeriod(p)}>
                   {p === "Morning" ? "🌅" : p === "Evening" ? "🌙" : "☀️"}<br />{p}
                 </button>
               ))}
             </div>
-            <button className="btn" style={{ marginTop:10 }} onClick={reportAbsence} disabled={!absDate || !absPeriod}>Send to Manager</button>
+            <button className="btn" style={{ marginTop: 10 }} onClick={reportAbsence} disabled={!absDate || !absPeriod}>Send to Manager</button>
           </div>
           {absences.length > 0 && (
             <>
               <div className="sec">Reported</div>
               {absences.map(a => (
-                <div key={a.id} style={{ background:"#F7F4EF", borderRadius:12, padding:"10px 12px", display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:7 }}>
-                  <div><div style={{ fontSize:13, fontWeight:700, color:"#1A2744" }}>{dispDate(a.date, true)}</div><div style={{ fontSize:11, color:"#aaa" }}>{a.period}</div></div>
+                <div key={a.id} style={{ background: "#F7F4EF", borderRadius: 12, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#1A2744" }}>{dispDate(a.date, true)}</div>
+                    <div style={{ fontSize: 11, color: "#aaa" }}>{a.period}</div>
+                  </div>
                   <span className="chip a">Sent ✓</span>
                 </div>
               ))}
@@ -600,23 +609,23 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
             <div className="empty"><div className="emptyicon">🔒</div><div className="emptytxt">Not assigned today</div></div>
           ) : (
             <>
-              <div style={{ fontSize:12, color:"#888", marginBottom:14 }}>For {dispDate(todayISO(), true)}. <strong>Enter all amounts as positive numbers.</strong></div>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>For {dispDate(todayISO(), true)}. <strong>Enter all amounts as positive numbers.</strong></div>
               {TKFIELDS.map(f => (
                 <div key={f.key} className="tfield">
                   <div className="tlbl">
                     <span>{f.label}</span>
                     {f.cc && (
-                      <div className="toggle" style={{ transform:"scale(.8)", transformOrigin:"right" }}>
-                        {["cash","card"].map(c => <button key={c} className={`tgl${(tCC[f.key]||"cash")===c?" on":""}`} onClick={() => setTCC(p => ({ ...p, [f.key]:c }))}>{c}</button>)}
+                      <div className="toggle" style={{ transform: "scale(.8)", transformOrigin: "right" }}>
+                        {["cash", "card"].map(c => <button key={c} className={`tgl${(tCC[f.key] || "cash") === c ? " on" : ""}`} onClick={() => setTCC(p => ({ ...p, [f.key]: c }))}>{c}</button>)}
                       </div>
                     )}
                   </div>
                   {f.hint && <div className="thint">{f.hint}</div>}
-                  <input className="inp sm" style={{ display:"block", width:"100%", marginTop:4 }} type="number" min="0" placeholder="0.00" value={tVals[f.key] || ""} onChange={e => setTVals(p => ({ ...p, [f.key]:e.target.value }))} />
+                  <input className="inp sm" style={{ display: "block", width: "100%", marginTop: 4 }} type="number" min="0" placeholder="0.00" value={tVals[f.key] || ""} onChange={e => setTVals(p => ({ ...p, [f.key]: e.target.value }))} />
                 </div>
               ))}
-              <label className="lbl" style={{ marginTop:10 }}>Note (optional)</label>
-              <textarea className="lognote" rows={3} style={{ marginBottom:12 }} placeholder="Any notes…" value={tNote} onChange={e => setTNote(e.target.value)} />
+              <label className="lbl" style={{ marginTop: 10 }}>Note (optional)</label>
+              <textarea className="lognote" rows={3} style={{ marginBottom: 12 }} placeholder="Any notes…" value={tNote} onChange={e => setTNote(e.target.value)} />
               <button className="btn green" onClick={submitTakings}>Submit to Manager ✓</button>
             </>
           )}
@@ -625,7 +634,7 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
 
       <div className="bnav">
         {navItems.map(n => (
-          <button key={n.id} className={`nbtn${tab === n.id ? " active" : ""}`} onClick={() => setTab(n.id)}>
+          <button key={n.id} className={`nbtn${tab === n.id ? " on" : ""}`} onClick={() => setTab(n.id)}>
             {n.badge && <span className="nbadge">!</span>}
             <span className="ni">{n.icon}</span>
             <span className="nl">{n.label}</span>
@@ -639,7 +648,7 @@ function StaffApp({ user, onLogout, effectiveTakingsPerson }) {
             <div className="stitle">Can't work {DAYS_MON[rejectModal]}?</div>
             <div className="ssub2">Tell the manager why (optional)</div>
             <textarea className="lognote" rows={3} placeholder="e.g. Doctor appointment…" value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
-            <button className="btn danger" style={{ marginTop:12 }} onClick={rejectShift}>Send Rejection</button>
+            <button className="btn danger" style={{ marginTop: 12 }} onClick={rejectShift}>Send Rejection</button>
             <button className="btn sec" onClick={() => setRejectModal(null)}>Cancel</button>
           </div>
         </div>
@@ -671,11 +680,10 @@ function ManagerLogin({ onLogin, onBack }) {
       <div className="atitle">Manager Sign In 🔑</div>
       <div className="asub">Enter your manager PIN</div>
       <input className="inp code" type="password" inputMode="numeric" maxLength={8}
-        placeholder="••••••••" value={pin} autoFocus
-        onChange={e => { setPin(e.target.value); setErr(""); }} />
+        placeholder="••••••••" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(""); }} />
       {err && <div className="err">{err}</div>}
       <button className="btn" onClick={tryLogin} disabled={pin.length < 4 || loading}>{loading ? "Checking…" : "Sign In"}</button>
-      <div style={{ textAlign:"center", fontSize:13, color:"#aaa", marginTop:14 }}>Default PIN: 00000000</div>
+      <div style={{ textAlign: "center", fontSize: 13, color: "#aaa", marginTop: 14 }}>Default PIN: 00000000</div>
     </div>
   );
 }
@@ -695,43 +703,55 @@ function ManagerApp({ onLogout }) {
   const [takings, setTakings] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [kitchenStaff, setKitchenStaff] = useState([]);
+  const [kitchenHours, setKitchenHours] = useState({}); // { kitchen_staff_id: { id, hours } }
   const [extras, setExtras] = useState({});
-  // dayDefaults: { dow: { slot1: staffId, slot2: staffId } }
-  const [dayDefaults, setDayDefaults] = useState({});
+  // takingDefaults: { dow: staffId }  (one person per day of week)
+  const [takingDefaults, setTakingDefaults] = useState({});
   const [todayOverride, setTodayOverride] = useState(null);
   const [weekRange, setWeekRange] = useState(() => payWeekOf(todayISO()));
   const [rotaMon, setRotaMon] = useState(() => rotaWeekOf(todayISO()).start);
   const [setupModal, setSetupModal] = useState(null);
   const [cashPopup, setCashPopup] = useState(false);
   const [pinModal, setPinModal] = useState(false);
+  const [settingsModal, setSettingsModal] = useState(false);
   const [absModal, setAbsModal] = useState(false);
   const [shareModal, setShareModal] = useState(null);
   const [newKName, setNewKName] = useState("");
   const [absStaff, setAbsStaff] = useState("");
   const [absDate, setAbsDate] = useState("");
   const [absPeriod, setAbsPeriod] = useState("");
+  // GS config — loaded from Supabase, stored in Supabase
+  const [gsConfig, setGsConfig] = useState({ apiKey: "", payrollId: "", takingsId: "" });
 
   const newCount = takings.filter(s => s.is_new).length;
   function t(m) { setMsg(m); setTimeout(() => setMsg(""), 3000); }
 
   useEffect(() => { loadAll(); }, []);
   useEffect(() => { if (staff.length) loadRota(); }, [rotaMon, staff.length]);
+  useEffect(() => { if (kitchenStaff.length) loadKitchenHours(); }, [weekRange.start, kitchenStaff.length]);
 
   async function loadAll() {
     setLoading(true);
-    const [staffR, absR, logR, rejR, takR, expR, kitR, defR, ovR, extR] = await Promise.all([
+    const [staffR, absR, logR, rejR, takR, expR, kitR, defR, ovR, extR, gsR] = await Promise.all([
       db.from("staff").select("*").order("name"),
-      db.from("absences").select("*").order("date", { ascending:false }),
-      db.from("clock_logs").select("*").order("date", { ascending:false }),
+      db.from("absences").select("*").order("date", { ascending: false }),
+      db.from("clock_logs").select("*").order("date", { ascending: false }),
       db.from("rejections").select("*"),
-      db.from("takings").select("*").order("date", { ascending:false }),
-      db.from("expenses").select("*").order("date", { ascending:false }),
+      db.from("takings").select("*").order("date", { ascending: false }),
+      db.from("expenses").select("*").order("date", { ascending: false }),
       db.from("kitchen_staff").select("*").order("name"),
       db.from("takings_defaults").select("*"),
-      db.from("takings_assignment").select("*").eq("date", todayISO()).maybeSingle(),
+      db.from("takings_assignment").select("staff_id").eq("date", todayISO()).maybeSingle(),
       db.from("payroll_extras").select("*"),
+      db.from("app_settings").select("key,value").in("key", ["gs_api_key", "gs_payroll_id", "gs_takings_id"]),
     ]);
-    setStaff((staffR.data || []).map(s => ({ ...s, payType:s.pay_type, rate:s.rate, shiftRate:s.shift_rate, nightRate:s.night_rate, cardFixed:s.card_fixed||"0", cardOverride:s.card_override||"0" })));
+
+    const sd = (staffR.data || []).map(s => ({
+      ...s,
+      payType: s.pay_type, rate: s.rate, shiftRate: s.shift_rate,
+      nightRate: s.night_rate, cardFixed: s.card_fixed || "0", cardOverride: s.card_override || "0"
+    }));
+    setStaff(sd);
     setAbsences(absR.data || []);
     setClockLogs(logR.data || []);
     setRejections(rejR.data || []);
@@ -739,16 +759,31 @@ function ManagerApp({ onLogout }) {
     setExpenses(expR.data || []);
     setKitchenStaff(kitR.data || []);
     setTodayOverride(ovR.data?.staff_id || null);
-    // Build dayDefaults map: { dow: { slot1: staffId, slot2: staffId } }
+
+    // takingDefaults: { dow: staffId }
     const dd = {};
-    (defR.data || []).forEach(r => {
-      if (!dd[r.day_of_week]) dd[r.day_of_week] = {};
-      dd[r.day_of_week][`slot${r.slot}`] = r.staff_id;
-    });
-    setDayDefaults(dd);
+    (defR.data || []).forEach(r => { dd[r.day_of_week] = r.staff_id; });
+    setTakingDefaults(dd);
+
+    // payroll extras
     const em = {};
-    (extR.data || []).forEach(e => { em[e.staff_id] = { tips:e.tips, additions:e.additions||[], deductions:e.deductions||[], notes:e.notes||[], id:e.id, ws:e.week_start }; });
+    (extR.data || []).forEach(e => {
+      em[e.staff_id] = {
+        tips: e.tips, additions: e.additions || [], deductions: e.deductions || [],
+        notes: e.notes || [], manualFull: e.manual_full || "", manualNight: e.manual_night || "",
+        manualHrs: e.manual_hrs || "", id: e.id, ws: e.week_start
+      };
+    });
     setExtras(em);
+
+    // GS config
+    const gsRows = gsR.data || [];
+    setGsConfig({
+      apiKey:    gsRows.find(r => r.key === "gs_api_key")?.value    || "",
+      payrollId: gsRows.find(r => r.key === "gs_payroll_id")?.value || "",
+      takingsId: gsRows.find(r => r.key === "gs_takings_id")?.value || "",
+    });
+
     setLoading(false);
   }
 
@@ -760,104 +795,158 @@ function ManagerApp({ onLogout }) {
       rm[s.id] = weekDates(rotaMon).map(dateISO => {
         const jsDay = new Date(dateISO + "T12:00:00").getDay();
         const row = (data || []).find(r => r.staff_id === s.id && r.day_index === jsDay);
-        return { date:dateISO, jsDay, type:row?.shift_type||"Off", customIn:row?.custom_in||"", customOut:row?.custom_out||"", rowId:row?.id };
+        return { date: dateISO, jsDay, type: row?.shift_type || "Off", customIn: row?.custom_in || "", customOut: row?.custom_out || "", rowId: row?.id };
       });
     });
     setRota(rm);
   }
 
+  async function loadKitchenHours() {
+    const ws = weekRange.start;
+    const ids = kitchenStaff.map(k => k.id);
+    if (!ids.length) return;
+    const { data } = await db.from("kitchen_weekly_hours").select("*").in("kitchen_staff_id", ids).eq("week_start", ws);
+    const hm = {};
+    (data || []).forEach(r => { hm[r.kitchen_staff_id] = { id: r.id, hours: r.hours }; });
+    setKitchenHours(hm);
+  }
+
+  // ── Save GS config to Supabase ──
+  async function saveGsConfig(cfg) {
+    setGsConfig(cfg);
+    for (const [key, value] of [["gs_api_key", cfg.apiKey], ["gs_payroll_id", cfg.payrollId], ["gs_takings_id", cfg.takingsId]]) {
+      await db.from("app_settings").upsert({ key, value });
+    }
+    t("✅ Google Sheets config saved!");
+  }
+
+  // ── Rota ──
   async function setShift(sId, dayIdx, field, val) {
     const days = rota[sId] || [];
     const day = days[dayIdx];
     if (!day) return;
-    const updated = { ...day, [field]:val };
-    setRota(p => ({ ...p, [sId]:p[sId].map((d, i) => i === dayIdx ? updated : d) }));
-    const payload = { staff_id:sId, day_index:day.jsDay, week_start:rotaMon, shift_type:field==="type"?val:day.type, custom_in:field==="customIn"?val:day.customIn, custom_out:field==="customOut"?val:day.customOut };
+    const updated = { ...day, [field]: val };
+    setRota(p => ({ ...p, [sId]: p[sId].map((d, i) => i === dayIdx ? updated : d) }));
+    const payload = { staff_id: sId, day_index: day.jsDay, week_start: rotaMon, shift_type: field === "type" ? val : day.type, custom_in: field === "customIn" ? val : day.customIn, custom_out: field === "customOut" ? val : day.customOut };
     if (day.rowId) { await db.from("rota").update(payload).eq("id", day.rowId); }
     else {
       const { data } = await db.from("rota").insert(payload).select().single();
-      if (data) setRota(p => ({ ...p, [sId]:p[sId].map((d, i) => i === dayIdx ? { ...updated, rowId:data.id } : d) }));
+      if (data) setRota(p => ({ ...p, [sId]: p[sId].map((d, i) => i === dayIdx ? { ...updated, rowId: data.id } : d) }));
     }
   }
 
-  // ── Takings defaults: 2 slots per day ──
-  async function saveDaySlot(dow, slot, staffId) {
-    setDayDefaults(p => ({ ...p, [dow]:{ ...(p[dow]||{}), [`slot${slot}`]:staffId||null } }));
-    const { data:existing } = await db.from("takings_defaults").select("id").eq("day_of_week", dow).eq("slot", slot).maybeSingle();
-    if (staffId) {
-      if (existing) await db.from("takings_defaults").update({ staff_id:staffId }).eq("id", existing.id);
-      else await db.from("takings_defaults").insert({ day_of_week:dow, slot, staff_id:staffId });
+  // ── Takings defaults: one person per day, max 2 staff total assigned ──
+  async function saveTakingDefault(staffId, dow, assigned) {
+    if (assigned) {
+      // remove this day from whoever currently has it
+      const currentHolder = takingDefaults[dow];
+      if (currentHolder && currentHolder !== staffId) {
+        // another staff has this day — unassign them
+        await db.from("takings_defaults").delete().eq("day_of_week", dow);
+      }
+      const exists = Object.values(takingDefaults).includes; // not used just clarity
+      const { data: existing } = await db.from("takings_defaults").select("id").eq("day_of_week", dow).maybeSingle();
+      if (existing) await db.from("takings_defaults").update({ staff_id: staffId }).eq("id", existing.id);
+      else await db.from("takings_defaults").insert({ staff_id: staffId, day_of_week: dow });
+      setTakingDefaults(p => ({ ...p, [dow]: staffId }));
     } else {
-      if (existing) await db.from("takings_defaults").delete().eq("id", existing.id);
+      // unassign this day
+      await db.from("takings_defaults").delete().eq("day_of_week", dow).eq("staff_id", staffId);
+      setTakingDefaults(p => { const n = { ...p }; if (n[dow] === staffId) delete n[dow]; return n; });
     }
   }
 
   async function saveTodayOverride(staffId) {
     setTodayOverride(staffId || null);
-    const { data:existing } = await db.from("takings_assignment").select("id").eq("date", todayISO()).maybeSingle();
+    const { data: existing } = await db.from("takings_assignment").select("id").eq("date", todayISO()).maybeSingle();
     if (staffId) {
-      if (existing) await db.from("takings_assignment").update({ staff_id:staffId }).eq("date", todayISO());
-      else await db.from("takings_assignment").insert({ staff_id:staffId, date:todayISO() });
+      if (existing) await db.from("takings_assignment").update({ staff_id: staffId }).eq("date", todayISO());
+      else await db.from("takings_assignment").insert({ staff_id: staffId, date: todayISO() });
     } else {
       if (existing) await db.from("takings_assignment").delete().eq("date", todayISO());
     }
     t("✅ Today's assignment saved");
   }
 
+  // effective person today
   const todayDow = new Date().getDay();
-  const todaySlot1 = dayDefaults[todayDow]?.slot1 || null;
-  const todaySlot2 = dayDefaults[todayDow]?.slot2 || null;
-  // effectiveTakingsPerson for staff side: first slot1 then slot2 (passed down via root)
+  const effectiveTodayPerson = todayOverride || takingDefaults[todayDow] || null;
 
-  // ── Payroll ──
-  function getExtras(sId) { return extras[sId] || { tips:"", additions:[], deductions:[], notes:[] }; }
+  // Count how many staff are assigned to at least one day
+  function staffAssignedDays(staffId) {
+    return Object.entries(takingDefaults).filter(([, sid]) => sid === staffId).map(([dow]) => parseInt(dow));
+  }
+  const assignedStaffIds = [...new Set(Object.values(takingDefaults))];
+
+  // ── Payroll extras ──
+  function getExtras(sId) { return extras[sId] || { tips: "", additions: [], deductions: [], notes: [], manualFull: "", manualNight: "", manualHrs: "", id: null, ws: null }; }
 
   async function updateExtras(sId, fn) {
     const next = fn(getExtras(sId));
-    setExtras(p => ({ ...p, [sId]:next }));
+    setExtras(p => ({ ...p, [sId]: next }));
     const ws = weekRange.start;
-    const payload = { staff_id:sId, week_start:ws, tips:next.tips||"0", additions:next.additions||[], deductions:next.deductions||[], notes:next.notes||[] };
+    const payload = {
+      staff_id: sId, week_start: ws,
+      tips: next.tips || "0", additions: next.additions || [], deductions: next.deductions || [], notes: next.notes || [],
+      manual_full: next.manualFull || null, manual_night: next.manualNight || null, manual_hrs: next.manualHrs || null
+    };
     if (next.id && next.ws === ws) { await db.from("payroll_extras").update(payload).eq("id", next.id); }
     else {
       const { data } = await db.from("payroll_extras").insert(payload).select().single();
-      if (data) setExtras(p => ({ ...p, [sId]:{ ...next, id:data.id, ws } }));
+      if (data) setExtras(p => ({ ...p, [sId]: { ...next, id: data.id, ws } }));
     }
   }
 
+  // ── Pay calculation ──
   function calcPay(s) {
     const myRota = rota[s.id] || [];
     const logsInRange = clockLogs.filter(l => l.staff_id === s.id && l.date >= weekRange.start && l.date <= weekRange.end);
-    let full = 0, night = 0, hrs = 0;
-    myRota.forEach(sh => { if (!sh || sh.type === "Off") return; if (sh.type === "Full Day (11am–close)") full++; else if (sh.type === "Night (5:30pm–close)") night++; });
-    logsInRange.forEach(l => { hrs += parseHrs(l.time_in, l.time_out); });
     const ex = getExtras(s.id);
+
+    // Use manual override if set, else calculate from rota/logs
+    let full  = ex.manualFull  !== "" && ex.manualFull  != null ? parseFloat(ex.manualFull)  : myRota.filter(sh => sh?.type === "Full Day (11am–close)").length;
+    let night = ex.manualNight !== "" && ex.manualNight != null ? parseFloat(ex.manualNight) : myRota.filter(sh => sh?.type === "Night (5:30pm–close)").length;
+    let hrs   = ex.manualHrs   !== "" && ex.manualHrs   != null ? parseFloat(ex.manualHrs)   : logsInRange.reduce((a, l) => a + parseHrs(l.time_in, l.time_out), 0);
+
     const tips = parseFloat(ex.tips || 0);
     const addT = (ex.additions || []).reduce((a, x) => a + parseFloat(x.amount || 0), 0);
     const dedT = (ex.deductions || []).reduce((a, x) => a + parseFloat(x.amount || 0), 0);
-    const base = s.payType === "hourly" ? hrs * parseFloat(s.rate || 0) : full * parseFloat(s.shiftRate || 0) + night * parseFloat(s.nightRate || 0);
+    const base = s.payType === "hourly"
+      ? hrs * parseFloat(s.rate || 0)
+      : full * parseFloat(s.shiftRate || 0) + night * parseFloat(s.nightRate || 0);
     const total = Math.max(0, base + tips + addT - dedT);
+    // Card: use weekly card_override if set (non-zero), else card_fixed
     const cardAmt = parseFloat(s.cardOverride && s.cardOverride !== "0" ? s.cardOverride : s.cardFixed || 0);
     const cashAmt = Math.max(0, total - cardAmt);
-    return { full, night, hrs:hrs.toFixed(2), base:base.toFixed(2), tips:tips.toFixed(2), addT:addT.toFixed(2), dedT:dedT.toFixed(2), total:total.toFixed(2), cardAmt:cardAmt.toFixed(2), cashAmt:cashAmt.toFixed(2) };
+    return { full, night, hrs: typeof hrs === "number" ? hrs.toFixed(2) : hrs, base: base.toFixed(2), tips: tips.toFixed(2), addT: addT.toFixed(2), dedT: dedT.toFixed(2), total: total.toFixed(2), cardAmt: cardAmt.toFixed(2), cashAmt: cashAmt.toFixed(2) };
   }
 
   function payTotals() {
     let cash = 0, card = 0, gross = 0;
     staff.forEach(s => { const p = calcPay(s); cash += parseFloat(p.cashAmt); card += parseFloat(p.cardAmt); gross += parseFloat(p.total); });
-    return { cash:cash.toFixed(2), card:card.toFixed(2), gross:gross.toFixed(2) };
+    return { cash: cash.toFixed(2), card: card.toFixed(2), gross: gross.toFixed(2) };
   }
 
   // ── Kitchen ──
   async function addKitchen() {
     if (!newKName.trim()) return t("Please enter a name");
-    const { data, error } = await db.from("kitchen_staff").insert({ name:newKName.trim(), hours:"", rate:"", cash_card:"cash" }).select().single();
-    if (!error) { setKitchenStaff(p => [...p, data]); setNewKName(""); t("✅ " + newKName.trim() + " added"); }
-    else t("❌ Error adding kitchen staff: " + error.message);
+    const { data, error } = await db.from("kitchen_staff").insert({ name: newKName.trim(), cash_card: "cash" }).select().single();
+    if (!error) { setKitchenStaff(p => [...p, data]); setNewKName(""); t("✅ " + data.name + " added"); }
+    else t("❌ Error: " + error.message);
   }
-  async function updKitchen(id, field, val) {
-    setKitchenStaff(p => p.map(k => k.id === id ? { ...k, [field]:val } : k));
-    const { error } = await db.from("kitchen_staff").update({ [field]:val }).eq("id", id);
-    if (error) t("❌ Save error: " + error.message);
+  async function updKitchenField(id, field, val) {
+    setKitchenStaff(p => p.map(k => k.id === id ? { ...k, [field]: val } : k));
+    await db.from("kitchen_staff").update({ [field]: val }).eq("id", id);
+  }
+  async function updKitchenHours(kitchenId, hours) {
+    const ws = weekRange.start;
+    const existing = kitchenHours[kitchenId];
+    setKitchenHours(p => ({ ...p, [kitchenId]: { ...p[kitchenId], hours } }));
+    if (existing?.id) { await db.from("kitchen_weekly_hours").update({ hours }).eq("id", existing.id); }
+    else {
+      const { data } = await db.from("kitchen_weekly_hours").insert({ kitchen_staff_id: kitchenId, week_start: ws, hours }).select().single();
+      if (data) setKitchenHours(p => ({ ...p, [kitchenId]: { id: data.id, hours } }));
+    }
   }
   async function delKitchen(id) {
     setKitchenStaff(p => p.filter(k => k.id !== id));
@@ -874,46 +963,43 @@ function ManagerApp({ onLogout }) {
 
   // ── Expenses ──
   async function addExpense(desc, amount, payType, date) {
-    const { data, error } = await db.from("expenses").insert({ description:desc, amount:parseFloat(amount), pay_type:payType, date }).select().single();
+    const { data, error } = await db.from("expenses").insert({ description: desc, amount: parseFloat(amount), pay_type: payType, date }).select().single();
     if (!error) setExpenses(p => [data, ...p]);
     return { error };
   }
   async function delExpense(id) { setExpenses(p => p.filter(e => e.id !== id)); await db.from("expenses").delete().eq("id", id); }
 
-  // ── Export rows ──
+  // ── Build export rows ──
   function buildPayroll() {
-    const hdr = ["Date Range","Name","Full Day Shifts","Night Shifts","Hours","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes"];
+    const hdr = ["Date Range", "Name", "Full Day Shifts", "Night Shifts", "Hours", "Cash (£)", "Card (£)", "Tips (£)", "Additions (£)", "Deductions (£)", "Total (£)", "Notes"];
     const rows = [hdr];
-    staff.forEach(s => { const p = calcPay(s); const ex = getExtras(s.id); rows.push([fmtRange(weekRange.start, weekRange.end), s.name, p.full, p.night, p.hrs, p.cashAmt, p.cardAmt, p.tips, p.addT, p.dedT, p.total, (ex.notes || []).join("; ")]); });
+    staff.forEach(s => {
+      const p = calcPay(s); const ex = getExtras(s.id);
+      rows.push([fmtRange(weekRange.start, weekRange.end), s.name, p.full, p.night, p.hrs, p.cashAmt, p.cardAmt, p.tips, p.addT, p.dedT, p.total, (ex.notes || []).join("; ")]);
+    });
     return rows;
   }
   function buildDaily() {
-    const dates = [...new Set([...takings.map(s => s.date), ...expenses.map(e => e.date)])].filter(d => d && d !== "default" && !d.startsWith("__")).sort();
-    const hdr = ["Date","Deliveroo","Uber Eats","Cash","Card","Online","Deposit Receipt","Voucher Redemption","Voucher Purchase","Total","Cash in Hand","Net Total","Expenses"];
+    const dates = [...new Set([...takings.map(s => s.date), ...expenses.map(e => e.date)])].filter(d => d && !d.startsWith("__")).sort();
+    const hdr = ["Date", "Deliveroo", "Uber Eats", "Cash", "Card", "Online", "Deposit Receipt", "Voucher Redemption", "Voucher Purchase", "Total", "Cash in Hand", "Net Total", "Expenses"];
     const rows = [hdr];
     dates.forEach(date => {
       const sub = takings.find(s => s.date === date) || {};
       const dayExp = expenses.filter(e => e.date === date);
       const total = TKFIELDS.reduce((s, f) => s + parseFloat(sub[f.db] || 0) * f.sign, 0);
       const cashExp = dayExp.filter(e => e.pay_type === "cash").reduce((s, e) => s + e.amount, 0);
-      rows.push([fmtDate(date), sub.deliveroo||0, sub.uber||0, sub.cash||0, sub.card||0, sub.online||0, sub.deposit_receipt||0, sub.voucher_redemption||0, sub.voucher_purchase||0, total.toFixed(2), (parseFloat(sub.cash||0)-cashExp).toFixed(2), (total-cashExp).toFixed(2), dayExp.map(e => `${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ")]);
+      rows.push([fmtDate(date), sub.deliveroo || 0, sub.uber || 0, sub.cash || 0, sub.card || 0, sub.online || 0, sub.deposit_receipt || 0, sub.voucher_redemption || 0, sub.voucher_purchase || 0, total.toFixed(2), (parseFloat(sub.cash || 0) - cashExp).toFixed(2), (total - cashExp).toFixed(2), dayExp.map(e => `${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ")]);
     });
     return rows;
   }
   function buildWeekly() {
-    const dates = [...new Set([...takings.map(s => s.date), ...expenses.map(e => e.date)])].filter(d => d && d !== "default" && !d.startsWith("__")).sort();
-    const wm = {};
-    dates.forEach(d => { const { start } = payWeekOf(d); if (!wm[start]) wm[start] = []; wm[start].push(d); });
-    const hdr = ["Week (Sun–Sat)","Deliveroo","Uber Eats","Cash","Card","Online","Deposit Receipt","Voucher Redemption","Voucher Purchase","Total","Cash in Hand","Net Total"];
+    const dates = [...new Set([...takings.map(s => s.date), ...expenses.map(e => e.date)])].filter(d => d && !d.startsWith("__")).sort();
+    const wm = {}; dates.forEach(d => { const { start } = payWeekOf(d); if (!wm[start]) wm[start] = []; wm[start].push(d); });
+    const hdr = ["Week (Sun–Sat)", "Deliveroo", "Uber Eats", "Cash", "Card", "Online", "Deposit Receipt", "Voucher Redemption", "Voucher Purchase", "Total", "Cash in Hand", "Net Total"];
     const rows = [["WEEKLY SUMMARY"], hdr];
     Object.entries(wm).sort().forEach(([ws, dates2]) => {
-      const { end } = payWeekOf(ws);
-      let tot = {}; TKFIELDS.forEach(f => tot[f.db] = 0); let cashExp = 0;
-      dates2.forEach(d => {
-        const sub = takings.find(s => s.date === d);
-        if (sub) TKFIELDS.forEach(f => { tot[f.db] += parseFloat(sub[f.db] || 0); });
-        cashExp += expenses.filter(e => e.date === d && e.pay_type === "cash").reduce((a, e) => a + e.amount, 0);
-      });
+      const { end } = payWeekOf(ws); let tot = {}; TKFIELDS.forEach(f => tot[f.db] = 0); let cashExp = 0;
+      dates2.forEach(d => { const sub = takings.find(s => s.date === d); if (sub) TKFIELDS.forEach(f => { tot[f.db] += parseFloat(sub[f.db] || 0); }); cashExp += expenses.filter(e => e.date === d && e.pay_type === "cash").reduce((a, e) => a + e.amount, 0); });
       const total = TKFIELDS.reduce((s, f) => s + tot[f.db] * f.sign, 0);
       rows.push([fmtRange(ws, end), tot.deliveroo.toFixed(2), tot.uber.toFixed(2), tot.cash.toFixed(2), tot.card.toFixed(2), tot.online.toFixed(2), tot.deposit_receipt.toFixed(2), tot.voucher_redemption.toFixed(2), tot.voucher_purchase.toFixed(2), total.toFixed(2), (tot.cash - cashExp).toFixed(2), (total - cashExp).toFixed(2)]);
     });
@@ -921,16 +1007,18 @@ function ManagerApp({ onLogout }) {
   }
 
   async function exportPayroll() {
+    if (!gsConfig.apiKey || !gsConfig.payrollId) return t("⚠️ Google Sheets not configured — tap ⚙️ Settings");
     t("⏳ Pushing to Payroll sheet…");
-    const r = await pushSheet(GS_PAYROLL_ID, "Payroll", buildPayroll());
+    const r = await pushSheet(gsConfig.apiKey, gsConfig.payrollId, "Payroll", buildPayroll());
     t(r.ok ? "✅ Payroll sheet updated!" : "❌ " + r.err);
   }
   async function exportTakings() {
+    if (!gsConfig.apiKey || !gsConfig.takingsId) return t("⚠️ Google Sheets not configured — tap ⚙️ Settings");
     t("⏳ Updating Daily tab…");
-    const r1 = await pushSheet(GS_TAKINGS_ID, "Daily", buildDaily());
+    const r1 = await pushSheet(gsConfig.apiKey, gsConfig.takingsId, "Daily", buildDaily());
     if (!r1.ok) { t("❌ " + r1.err); return; }
     t("⏳ Updating Weekly tab…");
-    const r2 = await pushSheet(GS_TAKINGS_ID, "Weekly", buildWeekly());
+    const r2 = await pushSheet(gsConfig.apiKey, gsConfig.takingsId, "Weekly", buildWeekly());
     t(r2.ok ? "✅ Takings sheet updated!" : "❌ " + r2.err);
   }
 
@@ -940,7 +1028,7 @@ function ManagerApp({ onLogout }) {
     const days = rota[sId] || [];
     const lines = days.map(d => {
       const dayName = DAYS_MON[jsToMon(d.jsDay)];
-      let shift = d.type === "Off" ? "Off" : d.type === "Custom" ? `${d.customIn||"?"}–${d.customOut||"?"}` : d.type;
+      const shift = d.type === "Off" ? "Off" : d.type === "Custom" ? `${d.customIn || "?"}–${d.customOut || "?"}` : d.type;
       return `${dayName} ${fmtDate(d.date)}: ${s.name} — ${shift}`;
     });
     return `Rota for ${s.name}\n${fmtDate(rotaMon)} – ${fmtDate(addDays(rotaMon, 6))}\n\n${lines.join("\n")}`;
@@ -960,7 +1048,7 @@ function ManagerApp({ onLogout }) {
     });
   }
 
-  // ── AddDeductRow component ──
+  // ── AddDeductRow ──
   function AddDeductRow({ sId, type }) {
     const ex = getExtras(sId);
     const key = type === "add" ? "additions" : "deductions";
@@ -972,24 +1060,24 @@ function ManagerApp({ onLogout }) {
     return (
       <div>
         {items.map((item, i) => (
-          <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"3px 0", borderBottom:"1px dashed #F0F0F0" }}>
-            <span style={{ fontSize:12, color:"#555" }}>{item.label}: £{item.amount}</span>
-            <button onClick={() => updateExtras(sId, ex => ({ ...ex, [key]:items.filter((_, j) => j !== i) }))} style={{ background:"none", border:"none", cursor:"pointer", fontSize:13, color:"#ccc" }}>✕</button>
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px dashed #F0F0F0" }}>
+            <span style={{ fontSize: 12, color: "#555" }}>{item.label}: £{item.amount}</span>
+            <button onClick={() => updateExtras(sId, ex => ({ ...ex, [key]: items.filter((_, j) => j !== i) }))} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#ccc" }}>✕</button>
           </div>
         ))}
         <div className="addrow">
-          <select className="addinp" style={{ flex:"none", width:"auto", padding:"6px 7px", fontSize:11 }} value={label} onChange={e => setLabel(e.target.value)}>
+          <select className="addinp" style={{ flex: "none", width: "auto", padding: "6px 7px", fontSize: 11 }} value={label} onChange={e => setLabel(e.target.value)}>
             {labels.map(l => <option key={l}>{l}</option>)}
           </select>
-          <input className="addinp" type="number" min="0" placeholder="£0" value={amount} onChange={e => setAmount(e.target.value)} style={{ width:62 }} />
+          <input className="addinp" type="number" min="0" placeholder="£0" value={amount} onChange={e => setAmount(e.target.value)} style={{ width: 62 }} />
           <button className={`addbtn${type === "ded" ? " r" : ""}`} onClick={() => {
             if (!amount) return;
             const fl = label === "Other" && custom ? custom : label;
-            updateExtras(sId, ex => ({ ...ex, [key]:[...(ex[key]||[]), { label:fl, amount }] }));
+            updateExtras(sId, ex => ({ ...ex, [key]: [...(ex[key] || []), { label: fl, amount }] }));
             setAmount(""); setCustom("");
           }}>+ Add</button>
         </div>
-        {label === "Other" && <input className="addinp" style={{ marginTop:5, width:"100%" }} placeholder="Custom label…" value={custom} onChange={e => setCustom(e.target.value)} />}
+        {label === "Other" && <input className="addinp" style={{ marginTop: 5, width: "100%" }} placeholder="Custom label…" value={custom} onChange={e => setCustom(e.target.value)} />}
       </div>
     );
   }
@@ -1001,14 +1089,17 @@ function ManagerApp({ onLogout }) {
     const [shiftRate, setSR] = useState(s.shiftRate || "");
     const [nightRate, setNR] = useState(s.nightRate || "");
     const [cardFixed, setCF] = useState(s.cardFixed || "0");
-    const [cardOverride, setCO] = useState(s.cardOverride || "0");
     const [saving, setSaving] = useState(false);
 
     async function save() {
       setSaving(true);
-      const { error } = await db.from("staff").update({ pay_type:payType, rate, shift_rate:shiftRate, night_rate:nightRate, card_fixed:cardFixed, card_override:cardOverride }).eq("id", s.id);
-      if (!error) { setStaff(p => p.map(x => x.id === s.id ? { ...x, payType, rate, shiftRate, nightRate, cardFixed, cardOverride } : x)); t(`✅ ${s.name} settings saved`); onClose(); }
-      else t("❌ " + error.message);
+      const { error } = await db.from("staff").update({
+        pay_type: payType, rate, shift_rate: shiftRate, night_rate: nightRate, card_fixed: cardFixed
+      }).eq("id", s.id);
+      if (!error) {
+        setStaff(p => p.map(x => x.id === s.id ? { ...x, payType, rate, shiftRate, nightRate, cardFixed } : x));
+        t(`✅ ${s.name} settings saved`); onClose();
+      } else t("❌ " + error.message);
       setSaving(false);
     }
 
@@ -1017,30 +1108,33 @@ function ManagerApp({ onLogout }) {
         <div className="sheet" onClick={e => e.stopPropagation()}>
           <div className="stitle">⚙️ {s.name}</div>
           <div className="ssub2">Pay settings — private</div>
+
           <label className="lbl">Pay Method</label>
-          <div className="toggle" style={{ marginBottom:14 }}>
-            <button className={`tgl${payType==="hourly"?" on":""}`} onClick={() => setPT("hourly")}>By Hour</button>
-            <button className={`tgl${payType==="shift"?" on":""}`} onClick={() => setPT("shift")}>By Shift</button>
+          <div className="toggle" style={{ marginBottom: 14 }}>
+            <button className={`tgl${payType === "hourly" ? " on" : ""}`} onClick={() => setPT("hourly")}>By Hour</button>
+            <button className={`tgl${payType === "shift" ? " on" : ""}`} onClick={() => setPT("shift")}>By Shift</button>
           </div>
-          {payType === "hourly" ? (
-            <><label className="lbl">Hourly Rate (£)</label><input className="inp" type="number" placeholder="e.g. 12.50" value={rate} onChange={e => setRate(e.target.value)} /></>
-          ) : (
-            <>
-              <label className="lbl">Full Day Shift Rate (£)</label>
-              <input className="inp" type="number" placeholder="e.g. 80.00" value={shiftRate} onChange={e => setSR(e.target.value)} />
-              <label className="lbl">Night Shift Rate (£)</label>
-              <input className="inp" type="number" placeholder="e.g. 60.00" value={nightRate} onChange={e => setNR(e.target.value)} />
-            </>
-          )}
+
+          {/* Show all three rates always — pay method controls which is used for calculation */}
+          <label className="lbl">Hourly Rate (£)</label>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>{payType === "hourly" ? "✅ Used for calculation" : "Not used (pay method is By Shift)"}</div>
+          <input className="inp" type="number" placeholder="e.g. 12.50" value={rate} onChange={e => setRate(e.target.value)} />
+
+          <label className="lbl">Full Day Shift Rate (£)</label>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>{payType === "shift" ? "✅ Used for calculation" : "Not used (pay method is By Hour)"}</div>
+          <input className="inp" type="number" placeholder="e.g. 80.00" value={shiftRate} onChange={e => setSR(e.target.value)} />
+
+          <label className="lbl">Night Shift Rate (£)</label>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>{payType === "shift" ? "✅ Used for calculation" : "Not used (pay method is By Hour)"}</div>
+          <input className="inp" type="number" placeholder="e.g. 60.00" value={nightRate} onChange={e => setNR(e.target.value)} />
+
           <label className="lbl">Fixed Card Payment (£)</label>
-          <div style={{ fontSize:12, color:"#888", marginBottom:6 }}>Permanent default — cash auto-calculates as Total minus this</div>
+          <div style={{ fontSize: 12, color: "#888", marginBottom: 6 }}>Permanent default. Cash = Total − this amount. Can override per week in payroll.</div>
           <input className="inp" type="number" placeholder="e.g. 200.00" value={cardFixed} onChange={e => setCF(e.target.value)} />
-          <label className="lbl">This Week Card Override (£)</label>
-          <div style={{ fontSize:12, color:"#888", marginBottom:6 }}>Leave as 0 to use the fixed amount above</div>
-          <input className="inp" type="number" placeholder="0 = use fixed amount" value={cardOverride} onChange={e => setCO(e.target.value)} />
+
           <button className="btn" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save Settings"}</button>
           <button className="btn sec" onClick={onClose}>Cancel</button>
-          <div style={{ marginTop:14, paddingTop:12, borderTop:"1px dashed #F0F0F0" }}>
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px dashed #F0F0F0" }}>
             <button className="btn danger" onClick={() => { onClose(); removeStaff(s); }}>🗑️ Remove {s.name} from system</button>
           </div>
         </div>
@@ -1050,22 +1144,16 @@ function ManagerApp({ onLogout }) {
 
   // ── Change PIN Modal ──
   function PinModal({ onClose }) {
-    const [curr, setCurr] = useState("");
-    const [n1, setN1] = useState("");
-    const [n2, setN2] = useState("");
-    const [err, setErr] = useState("");
-    const [saving, setSaving] = useState(false);
-
+    const [curr, setCurr] = useState(""); const [n1, setN1] = useState(""); const [n2, setN2] = useState(""); const [err, setErr] = useState(""); const [saving, setSaving] = useState(false);
     async function save() {
       setErr(""); setSaving(true);
       const { data } = await db.from("app_settings").select("value").eq("key", "manager_pin").maybeSingle();
       if (curr !== (data?.value || "00000000")) { setErr("Current PIN is wrong"); setSaving(false); return; }
-      if (!/^\d{8}$/.test(n1)) { setErr("New PIN must be exactly 8 digits"); setSaving(false); return; }
-      if (n1 !== n2) { setErr("New PINs don't match"); setSaving(false); return; }
-      await db.from("app_settings").upsert({ key:"manager_pin", value:n1 });
-      t("✅ Manager PIN updated!"); onClose(); setSaving(false);
+      if (!/^\d{8}$/.test(n1)) { setErr("New PIN must be 8 digits"); setSaving(false); return; }
+      if (n1 !== n2) { setErr("PINs don't match"); setSaving(false); return; }
+      await db.from("app_settings").upsert({ key: "manager_pin", value: n1 });
+      t("✅ PIN updated!"); onClose(); setSaving(false);
     }
-
     return (
       <div className="overlay" onClick={onClose}>
         <div className="sheet" onClick={e => e.stopPropagation()}>
@@ -1084,34 +1172,189 @@ function ManagerApp({ onLogout }) {
     );
   }
 
+  // ── Google Sheets Settings Modal ──
+  function SettingsModal({ onClose }) {
+    const [apiKey, setApiKey] = useState(gsConfig.apiKey || "");
+    const [payrollId, setPayrollId] = useState(gsConfig.payrollId || "");
+    const [takingsId, setTakingsId] = useState(gsConfig.takingsId || "");
+    const [saving, setSaving] = useState(false);
+    async function save() {
+      setSaving(true);
+      await saveGsConfig({ apiKey, payrollId, takingsId });
+      setSaving(false); onClose();
+    }
+    return (
+      <div className="overlay" onClick={onClose}>
+        <div className="sheet" onClick={e => e.stopPropagation()}>
+          <div className="stitle">🔗 Google Sheets</div>
+          <div className="ssub2">Saved permanently — only need to do this once</div>
+          <div style={{ background: "#F7F4EF", borderRadius: 10, padding: "10px 12px", fontSize: 12, color: "#555", marginBottom: 14, lineHeight: 1.7 }}>
+            <strong>Setup:</strong><br />
+            1. Both spreadsheets must be set to <strong>"Anyone with link can edit"</strong><br />
+            2. Payroll sheet needs a tab named <strong>Payroll</strong><br />
+            3. Takings sheet needs tabs named <strong>Daily</strong> and <strong>Weekly</strong>
+          </div>
+          <label className="lbl">Google API Key</label>
+          <input className="inp sm" style={{ display: "block", width: "100%", marginBottom: 14 }} placeholder="AIzaSy…" value={apiKey} onChange={e => setApiKey(e.target.value)} />
+          <label className="lbl">Payroll Spreadsheet ID</label>
+          <input className="inp sm" style={{ display: "block", width: "100%", marginBottom: 14 }} placeholder="1Wj0EH…" value={payrollId} onChange={e => setPayrollId(e.target.value)} />
+          <label className="lbl">Takings Spreadsheet ID</label>
+          <input className="inp sm" style={{ display: "block", width: "100%", marginBottom: 14 }} placeholder="1K-UMB…" value={takingsId} onChange={e => setTakingsId(e.target.value)} />
+          <button className="btn" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save & Connect"}</button>
+          <button className="btn sec" onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
   if (loading) return <Loading text="Loading manager data…" />;
-  const { cash:totCash, card:totCard, gross:totGross } = payTotals();
+  const { cash: totCash, card: totCard, gross: totGross } = payTotals();
+  const gsReady = !!(gsConfig.apiKey && gsConfig.payrollId && gsConfig.takingsId);
 
   return (
     <div className="app">
       <Toast msg={msg} />
       <div className="mhdr">
         <div><div className="mtitle">🔑 Manager Panel</div><div className="msub">Restaurant back office</div></div>
-        <div style={{ display:"flex", gap:7, alignItems:"center" }}>
-          <button onClick={() => setPinModal(true)} style={{ background:"rgba(255,255,255,.12)", border:"none", color:"rgba(255,255,255,.7)", borderRadius:7, padding:"5px 9px", cursor:"pointer", fontSize:12 }}>🔒 PIN</button>
+        <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
+          <button onClick={() => setSettingsModal(true)} style={{ background: "rgba(255,255,255,.12)", border: "none", color: gsReady ? "#50DC78" : "#F5A623", borderRadius: 7, padding: "5px 9px", cursor: "pointer", fontSize: 12 }}>⚙️ Sheets</button>
+          <button onClick={() => setPinModal(true)} style={{ background: "rgba(255,255,255,.12)", border: "none", color: "rgba(255,255,255,.7)", borderRadius: 7, padding: "5px 9px", cursor: "pointer", fontSize: 12 }}>🔒 PIN</button>
           <button className="mlo" onClick={onLogout}>Sign out</button>
         </div>
       </div>
 
       <div className="mtabs">
         {[
-          { id:"rota", label:"📋 Rota" },
-          { id:"clock", label:"⏱ Clock" },
-          { id:"payroll", label:"💷 Payroll" },
-          { id:"takings", label:`📊 Takings${newCount > 0 ? ` (${newCount})` : ""}` },
-          { id:"expenses", label:"🧾 Expenses" },
-          { id:"absence", label:"📅 Absences" },
+          { id: "staff", label: "👥 Staff" },
+          { id: "rota", label: "📋 Rota" },
+          { id: "clock", label: "⏱ Clock" },
+          { id: "payroll", label: "💷 Payroll" },
+          { id: "takings", label: `📊 Takings${newCount > 0 ? ` (${newCount})` : ""}` },
+          { id: "expenses", label: "🧾 Expenses" },
+          { id: "absence", label: "📅 Absences" },
         ].map(tb => <button key={tb.id} className={`mtab${tab === tb.id ? " on" : ""}`} onClick={() => setTab(tb.id)}>{tb.label}</button>)}
       </div>
 
       <div className="mbody">
 
-        {/* ── ROTA ── */}
+        {/* ══ STAFF ══ */}
+        {tab === "staff" && (
+          <>
+            <div className="sec">Staff Management</div>
+            <div className="ssub">Manage accounts, pay settings and remove staff</div>
+
+            {staff.length === 0 && (
+              <div className="empty"><div className="emptyicon">👥</div><div className="emptytxt">No staff registered yet</div></div>
+            )}
+
+            {staff.map(s => {
+              const payLabel = s.payType === "shift"
+                ? `Full £${s.shiftRate || "0"} / Night £${s.nightRate || "0"} per shift`
+                : `£${s.rate || "0"} per hour`;
+              const cardLabel = parseFloat(s.cardFixed || 0) > 0 ? `💳 Card fixed: £${s.cardFixed}` : "💳 Card: not set";
+              return (
+                <div key={s.id} className="card w" style={{ marginBottom: 12 }}>
+                  {/* Header row */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      <div className="avatar" style={{ width: 38, height: 38, fontSize: 15 }}>{s.name[0]}</div>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: "#1A2744" }}>{s.name}</div>
+                        <div style={{ fontSize: 11, color: "#aaa" }}>Code: {s.code}</div>
+                      </div>
+                    </div>
+                    <span className="chip" style={{
+                      background: s.payType === "shift" ? "#DBEAFE" : "#D1FAE5",
+                      color: s.payType === "shift" ? "#1E40AF" : "#065F46"
+                    }}>
+                      {s.payType === "shift" ? "By Shift" : "By Hour"}
+                    </span>
+                  </div>
+
+                  {/* Pay summary */}
+                  <div style={{ background: "#F7F4EF", borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#555", marginBottom: 4 }}>{payLabel}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{cardLabel} · 💵 Cash = Total − Card</div>
+                  </div>
+
+                  {/* Inline pay settings — all fields editable directly */}
+                  <div style={{ marginBottom: 8 }}>
+                    <label className="lbl">Pay Method</label>
+                    <div className="toggle" style={{ marginBottom: 12 }}>
+                      <button className={`tgl${s.payType === "hourly" ? " on" : ""}`}
+                        onClick={async () => {
+                          setStaff(p => p.map(x => x.id === s.id ? { ...x, payType: "hourly" } : x));
+                          await db.from("staff").update({ pay_type: "hourly" }).eq("id", s.id);
+                          t(`${s.name} → Pay by Hour`);
+                        }}>By Hour</button>
+                      <button className={`tgl${s.payType === "shift" ? " on" : ""}`}
+                        onClick={async () => {
+                          setStaff(p => p.map(x => x.id === s.id ? { ...x, payType: "shift" } : x));
+                          await db.from("staff").update({ pay_type: "shift" }).eq("id", s.id);
+                          t(`${s.name} → Pay by Shift`);
+                        }}>By Shift</button>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {/* Hourly rate */}
+                      <div style={{ flex: 1, minWidth: 80 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: s.payType === "hourly" ? "#065F46" : "#aaa", marginBottom: 3 }}>
+                          £/HR {s.payType === "hourly" ? "✅" : ""}
+                        </div>
+                        <input type="number" min="0" className="inp sm" style={{ width: "100%", borderColor: s.payType === "hourly" ? "#50DC78" : "#E5E5E5" }}
+                          placeholder="0.00" value={s.rate || ""}
+                          onChange={e => setStaff(p => p.map(x => x.id === s.id ? { ...x, rate: e.target.value } : x))}
+                          onBlur={async e => { await db.from("staff").update({ rate: e.target.value }).eq("id", s.id); t(`${s.name} hourly rate saved`); }} />
+                      </div>
+                      {/* Full day shift rate */}
+                      <div style={{ flex: 1, minWidth: 80 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: s.payType === "shift" ? "#1E40AF" : "#aaa", marginBottom: 3 }}>
+                          FULL SHIFT £ {s.payType === "shift" ? "✅" : ""}
+                        </div>
+                        <input type="number" min="0" className="inp sm" style={{ width: "100%", borderColor: s.payType === "shift" ? "#BFDBFE" : "#E5E5E5" }}
+                          placeholder="0.00" value={s.shiftRate || ""}
+                          onChange={e => setStaff(p => p.map(x => x.id === s.id ? { ...x, shiftRate: e.target.value } : x))}
+                          onBlur={async e => { await db.from("staff").update({ shift_rate: e.target.value }).eq("id", s.id); t(`${s.name} full shift rate saved`); }} />
+                      </div>
+                      {/* Night shift rate */}
+                      <div style={{ flex: 1, minWidth: 80 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: s.payType === "shift" ? "#1E40AF" : "#aaa", marginBottom: 3 }}>
+                          NIGHT £ {s.payType === "shift" ? "✅" : ""}
+                        </div>
+                        <input type="number" min="0" className="inp sm" style={{ width: "100%", borderColor: s.payType === "shift" ? "#BFDBFE" : "#E5E5E5" }}
+                          placeholder="0.00" value={s.nightRate || ""}
+                          onChange={e => setStaff(p => p.map(x => x.id === s.id ? { ...x, nightRate: e.target.value } : x))}
+                          onBlur={async e => { await db.from("staff").update({ night_rate: e.target.value }).eq("id", s.id); t(`${s.name} night rate saved`); }} />
+                      </div>
+                      {/* Fixed card */}
+                      <div style={{ flex: 1, minWidth: 80 }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: "#aaa", marginBottom: 3 }}>CARD FIXED £</div>
+                        <input type="number" min="0" className="inp sm" style={{ width: "100%" }}
+                          placeholder="0.00" value={s.cardFixed || ""}
+                          onChange={e => setStaff(p => p.map(x => x.id === s.id ? { ...x, cardFixed: e.target.value } : x))}
+                          onBlur={async e => { await db.from("staff").update({ card_fixed: e.target.value }).eq("id", s.id); t(`${s.name} card amount saved`); }} />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Remove */}
+                  <button className="btn danger" style={{ marginTop: 6, padding: "10px" }}
+                    onClick={() => removeStaff(s)}>
+                    🗑️ Remove {s.name.split(" ")[0]} from system
+                  </button>
+                </div>
+              );
+            })}
+
+            {/* Hint about registering */}
+            <div style={{ background: "#F7F4EF", borderRadius: 12, padding: "12px 14px", fontSize: 12, color: "#888", lineHeight: 1.6 }}>
+              <strong style={{ color: "#1A2744" }}>Adding new staff?</strong><br />
+              Ask them to open the app, tap "I'm a Staff Member" → "New here? Register" and create their own account. You can then set their pay here.
+            </div>
+          </>
+        )}
+
+        {/* ══ ROTA ══ */}
         {tab === "rota" && (
           <>
             <div className="sec">Assign Rota</div>
@@ -1121,12 +1364,12 @@ function ManagerApp({ onLogout }) {
               <button className="wnavbtn" onClick={() => setRotaMon(addDays(rotaMon, 7))}>›</button>
             </div>
             {rejections.length > 0 && (
-              <div style={{ marginBottom:10 }}>
-                <div style={{ fontSize:12, fontWeight:700, color:"#E05252", marginBottom:6 }}>⚠️ Rejections</div>
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#E05252", marginBottom: 6 }}>⚠️ Rejections</div>
                 {rejections.map(r => (
                   <div key={r.id} className="rejbanner">
                     <span><strong>{r.staff_name}</strong> can't do <strong>{r.day}</strong>{r.reason ? ` — "${r.reason}"` : ""}</span>
-                    <button onClick={async () => { await db.from("rejections").delete().eq("id", r.id); setRejections(p => p.filter(x => x.id !== r.id)); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:16 }}>✓</button>
+                    <button onClick={async () => { await db.from("rejections").delete().eq("id", r.id); setRejections(p => p.filter(x => x.id !== r.id)); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16 }}>✓</button>
                   </div>
                 ))}
               </div>
@@ -1138,38 +1381,38 @@ function ManagerApp({ onLogout }) {
                 <div key={s.id} className="card">
                   <div className="chead">
                     <div><div className="cname">👤 {s.name}</div><div className="csub">{s.payType === "shift" ? `Full £${s.shiftRate} / Night £${s.nightRate}` : `£${s.rate}/hr`}</div></div>
-                    <div style={{ display:"flex", gap:6 }}>
-                      <button onClick={() => setShareModal(s.id)} style={{ background:"#DBEAFE", border:"none", borderRadius:7, padding:"5px 10px", fontSize:11, fontWeight:700, cursor:"pointer", color:"#1E40AF" }}>📤 Share</button>
-                      <button onClick={() => setSetupModal(s)} style={{ background:"#E8F0E9", border:"none", borderRadius:7, padding:"5px 10px", fontSize:11, fontWeight:700, cursor:"pointer" }}>⚙️ Pay</button>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => setShareModal(s.id)} style={{ background: "#DBEAFE", border: "none", borderRadius: 7, padding: "5px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", color: "#1E40AF" }}>📤 Share</button>
+                      <button onClick={() => setSetupModal(s)} style={{ background: "#E8F0E9", border: "none", borderRadius: 7, padding: "5px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>⚙️ Pay</button>
                     </div>
                   </div>
                   {conflicts.length > 0 && <div className="warn"><div className="warn-t">⚠️ Absence Conflict</div><div className="warn-s">{conflicts.map(c => `${dispDate(c.date, true)} (${c.period})`).join(", ")}</div></div>}
                   {days.map((d, idx) => (
-                    <div key={idx} style={{ display:"flex", alignItems:"center", gap:5, marginBottom:5 }}>
-                      <div style={{ minWidth:56, fontSize:11, fontWeight:700 }}>
-                        <div style={{ color:"#555" }}>{DAYS_MON[jsToMon(d.jsDay)]}</div>
-                        <div style={{ color:"#aaa", fontSize:10 }}>{fmtDate(d.date)}</div>
+                    <div key={idx} style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 5 }}>
+                      <div style={{ minWidth: 56, fontSize: 11, fontWeight: 700 }}>
+                        <div style={{ color: "#555" }}>{DAYS_MON[jsToMon(d.jsDay)]}</div>
+                        <div style={{ color: "#aaa", fontSize: 10 }}>{fmtDate(d.date)}</div>
                       </div>
-                      <select className="inp sm" style={{ flex:1 }} value={d.type || "Off"} onChange={e => setShift(s.id, idx, "type", e.target.value)}>
+                      <select className="inp sm" style={{ flex: 1 }} value={d.type || "Off"} onChange={e => setShift(s.id, idx, "type", e.target.value)}>
                         {SHIFTS.map(o => <option key={o}>{o}</option>)}
                       </select>
                       {d.type === "Custom" && (
                         <>
                           <input type="time" className="inp time" value={d.customIn || ""} onChange={e => setShift(s.id, idx, "customIn", e.target.value)} />
-                          <span style={{ fontSize:10, color:"#aaa" }}>–</span>
+                          <span style={{ fontSize: 10, color: "#aaa" }}>–</span>
                           <input type="time" className="inp time" value={d.customOut || ""} onChange={e => setShift(s.id, idx, "customOut", e.target.value)} />
                         </>
                       )}
                     </div>
                   ))}
-                  <button className="btn green" style={{ marginTop:8, padding:"11px" }} onClick={() => t(`✅ Rota saved for ${s.name}!`)}>📤 Send Rota to {s.name.split(" ")[0]}</button>
+                  <button className="btn green" style={{ marginTop: 8, padding: "11px" }} onClick={() => t(`✅ Rota saved for ${s.name}!`)}>📤 Send Rota to {s.name.split(" ")[0]}</button>
                 </div>
               );
             })}
           </>
         )}
 
-        {/* ── CLOCK ── */}
+        {/* ══ CLOCK ══ */}
         {tab === "clock" && (
           <>
             <div className="sec">Clock Logs</div>
@@ -1179,25 +1422,25 @@ function ManagerApp({ onLogout }) {
               return (
                 <div key={s.id} className="card">
                   <div className="cname">👤 {s.name}</div>
-                  <div className="csub" style={{ marginBottom:10 }}>Total: {totalH.toFixed(1)} hrs</div>
-                  {sLogs.length === 0 && <div style={{ fontSize:12, color:"#ccc", fontStyle:"italic" }}>No records yet</div>}
+                  <div className="csub" style={{ marginBottom: 10 }}>Total: {totalH.toFixed(1)} hrs</div>
+                  {sLogs.length === 0 && <div style={{ fontSize: 12, color: "#ccc", fontStyle: "italic" }}>No records yet</div>}
                   {sLogs.map(l => (
                     <div key={l.id} className="logentry">
                       <div className="logtop">
-                        <span style={{ fontSize:13, fontWeight:700, color:"#1A2744" }}>{dispDate(l.date, true)}</span>
-                        <span style={{ fontSize:13, fontWeight:800, color:l.time_out ? "#1A2744" : "#50DC78" }}>{l.time_out ? parseHrs(l.time_in, l.time_out).toFixed(1) + "h" : "active"}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#1A2744" }}>{dispDate(l.date, true)}</span>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: l.time_out ? "#1A2744" : "#50DC78" }}>{l.time_out ? parseHrs(l.time_in, l.time_out).toFixed(1) + "h" : "active"}</span>
                       </div>
                       <div className="logedit">
                         <span className="logelbl">In</span>
-                        <input type="time" className="inp time" value={l.time_in || ""} onChange={e => { const v = e.target.value; setClockLogs(p => p.map(x => x.id === l.id ? { ...x, time_in:v } : x)); db.from("clock_logs").update({ time_in:v }).eq("id", l.id); }} />
+                        <input type="time" className="inp time" value={l.time_in || ""} onChange={e => { const v = e.target.value; setClockLogs(p => p.map(x => x.id === l.id ? { ...x, time_in: v } : x)); db.from("clock_logs").update({ time_in: v }).eq("id", l.id); }} />
                         <span className="logelbl">Out</span>
-                        <input type="time" className="inp time" value={l.time_out || ""} onChange={e => { const v = e.target.value; setClockLogs(p => p.map(x => x.id === l.id ? { ...x, time_out:v } : x)); db.from("clock_logs").update({ time_out:v }).eq("id", l.id); }} />
+                        <input type="time" className="inp time" value={l.time_out || ""} onChange={e => { const v = e.target.value; setClockLogs(p => p.map(x => x.id === l.id ? { ...x, time_out: v } : x)); db.from("clock_logs").update({ time_out: v }).eq("id", l.id); }} />
                       </div>
-                      <textarea className="lognote" rows={2} placeholder="Note…" value={l.note || ""} onChange={e => { const v = e.target.value; setClockLogs(p => p.map(x => x.id === l.id ? { ...x, note:v } : x)); db.from("clock_logs").update({ note:v }).eq("id", l.id); }} />
+                      <textarea className="lognote" rows={2} placeholder="Note…" value={l.note || ""} onChange={e => { const v = e.target.value; setClockLogs(p => p.map(x => x.id === l.id ? { ...x, note: v } : x)); db.from("clock_logs").update({ note: v }).eq("id", l.id); }} />
                     </div>
                   ))}
-                  <button className="btn sm" style={{ marginTop:9, background:"#F5A623" }} onClick={async () => {
-                    const { data, error } = await db.from("clock_logs").insert({ staff_id:s.id, staff_name:s.name, date:todayISO(), time_in:"", time_out:"", note:"" }).select().single();
+                  <button className="btn sm" style={{ marginTop: 9, background: "#F5A623" }} onClick={async () => {
+                    const { data, error } = await db.from("clock_logs").insert({ staff_id: s.id, staff_name: s.name, date: todayISO(), time_in: "", time_out: "", note: "" }).select().single();
                     if (!error) setClockLogs(p => [data, ...p]);
                     else t("❌ " + error.message);
                   }}>+ Add Entry</button>
@@ -1207,17 +1450,18 @@ function ManagerApp({ onLogout }) {
           </>
         )}
 
-        {/* ── PAYROLL ── */}
+        {/* ══ PAYROLL ══ */}
         {tab === "payroll" && (
           <>
             <div className="sec">Payroll</div>
             <div className="ssub">Private — staff never see salaries</div>
-            <div style={{ display:"flex", gap:6, marginBottom:12, alignItems:"center" }}>
-              <input type="date" className="inp sm" style={{ flex:1 }} value={weekRange.start} onChange={e => setWeekRange(p => ({ ...p, start:e.target.value }))} />
-              <span style={{ fontSize:12, color:"#aaa" }}>→</span>
-              <input type="date" className="inp sm" style={{ flex:1 }} value={weekRange.end} onChange={e => setWeekRange(p => ({ ...p, end:e.target.value }))} />
+            <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center" }}>
+              <input type="date" className="inp sm" style={{ flex: 1 }} value={weekRange.start} onChange={e => setWeekRange(p => ({ ...p, start: e.target.value }))} />
+              <span style={{ fontSize: 12, color: "#aaa" }}>→</span>
+              <input type="date" className="inp sm" style={{ flex: 1 }} value={weekRange.end} onChange={e => setWeekRange(p => ({ ...p, end: e.target.value }))} />
             </div>
-            <div style={{ fontSize:13, fontWeight:800, color:"#1A2744", marginBottom:8 }}>Front of House</div>
+
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#1A2744", marginBottom: 8 }}>Front of House</div>
             {staff.map(s => {
               const p = calcPay(s);
               const ex = getExtras(s.id);
@@ -1228,6 +1472,25 @@ function ManagerApp({ onLogout }) {
                     <div className="ptotal">£{p.total}</div>
                   </div>
                   <div className="pbody">
+                    {/* Editable shift/hour counts */}
+                    <div style={{ background: "#F7F4EF", borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 8 }}>EDIT COUNTS <span style={{ fontWeight: 400 }}>(leave blank to use rota/clock data)</span></div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 10, color: "#aaa", marginBottom: 3 }}>Full Day Shifts</div>
+                          <input type="number" min="0" className="inp sm" style={{ width: "100%" }} placeholder={String(p.full)} value={ex.manualFull || ""} onChange={e => updateExtras(s.id, ex => ({ ...ex, manualFull: e.target.value }))} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 10, color: "#aaa", marginBottom: 3 }}>Night Shifts</div>
+                          <input type="number" min="0" className="inp sm" style={{ width: "100%" }} placeholder={String(p.night)} value={ex.manualNight || ""} onChange={e => updateExtras(s.id, ex => ({ ...ex, manualNight: e.target.value }))} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 10, color: "#aaa", marginBottom: 3 }}>Hours</div>
+                          <input type="number" min="0" step="0.5" className="inp sm" style={{ width: "100%" }} placeholder={p.hrs} value={ex.manualHrs || ""} onChange={e => updateExtras(s.id, ex => ({ ...ex, manualHrs: e.target.value }))} />
+                        </div>
+                      </div>
+                    </div>
+
                     {s.payType === "shift" ? (
                       <>
                         <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{s.shiftRate} = £{(p.full * parseFloat(s.shiftRate || 0)).toFixed(2)}</span></div>
@@ -1236,71 +1499,83 @@ function ManagerApp({ onLogout }) {
                     ) : (
                       <div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{s.rate} = £{p.base}</span></div>
                     )}
-                    <div className="row"><span>Tips (£)</span><input type="number" className="mini" min="0" placeholder="0.00" value={ex.tips || ""} onChange={e => updateExtras(s.id, ex => ({ ...ex, tips:e.target.value }))} /></div>
-                    <div style={{ marginTop:8 }}><div style={{ fontSize:11, fontWeight:700, color:"#50DC78", marginBottom:4 }}>ADDITIONS</div><AddDeductRow sId={s.id} type="add" /></div>
-                    <div style={{ marginTop:8 }}><div style={{ fontSize:11, fontWeight:700, color:"#E05252", marginBottom:4 }}>DEDUCTIONS</div><AddDeductRow sId={s.id} type="ded" /></div>
-                    <div style={{ marginTop:8 }}>
-                      <div style={{ fontSize:11, fontWeight:700, color:"#888", marginBottom:4 }}>NOTES</div>
+
+                    <div className="row"><span>Tips (£)</span><input type="number" className="mini" min="0" placeholder="0.00" value={ex.tips || ""} onChange={e => updateExtras(s.id, ex => ({ ...ex, tips: e.target.value }))} /></div>
+                    <div style={{ marginTop: 8 }}><div style={{ fontSize: 11, fontWeight: 700, color: "#50DC78", marginBottom: 4 }}>ADDITIONS</div><AddDeductRow sId={s.id} type="add" /></div>
+                    <div style={{ marginTop: 8 }}><div style={{ fontSize: 11, fontWeight: 700, color: "#E05252", marginBottom: 4 }}>DEDUCTIONS</div><AddDeductRow sId={s.id} type="ded" /></div>
+
+                    {/* Notes */}
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#888", marginBottom: 4 }}>NOTES</div>
                       {(ex.notes || []).map((n, i) => (
-                        <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"2px 0" }}>
-                          <span style={{ fontSize:12, color:"#555" }}>📌 {n}</span>
-                          <button onClick={() => updateExtras(s.id, ex => ({ ...ex, notes:ex.notes.filter((_, j) => j !== i) }))} style={{ background:"none", border:"none", cursor:"pointer", fontSize:12, color:"#ccc" }}>✕</button>
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                          <span style={{ fontSize: 12, color: "#555" }}>📌 {n}</span>
+                          <button onClick={() => updateExtras(s.id, ex => ({ ...ex, notes: ex.notes.filter((_, j) => j !== i) }))} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#ccc" }}>✕</button>
                         </div>
                       ))}
-                      <div className="addrow" style={{ marginTop:5 }}>
-                        <select className="addinp" style={{ fontSize:11, padding:"5px 7px" }} id={`ns-${s.id}`}>
-                          {["Bank Holiday","Red Day","Custom"].map(l => <option key={l}>{l}</option>)}
+                      <div className="addrow" style={{ marginTop: 5 }}>
+                        <select className="addinp" style={{ fontSize: 11, padding: "5px 7px" }} id={`ns-${s.id}`}>
+                          {["Bank Holiday", "Red Day", "Custom"].map(l => <option key={l}>{l}</option>)}
                         </select>
                         <button className="addbtn" onClick={() => {
                           const sel = document.getElementById(`ns-${s.id}`);
-                          if (sel.value === "Custom") { const cn = window.prompt("Enter custom note:"); if (cn) updateExtras(s.id, ex => ({ ...ex, notes:[...(ex.notes||[]), cn] })); }
-                          else updateExtras(s.id, ex => ({ ...ex, notes:[...(ex.notes||[]), sel.value] }));
+                          if (sel.value === "Custom") { const cn = window.prompt("Enter custom note:"); if (cn) updateExtras(s.id, ex => ({ ...ex, notes: [...(ex.notes || []), cn] })); }
+                          else updateExtras(s.id, ex => ({ ...ex, notes: [...(ex.notes || []), sel.value] }));
                         }}>+ Note</button>
                       </div>
                     </div>
-                    <div className="divider" />
-                    <div className="row"><span>💵 Cash (auto)</span><span className="rowb">£{p.cashAmt}</span></div>
-                    <div className="row"><span>💳 Card <span style={{ fontSize:10, color:"#aaa" }}>(edit in ⚙️ Pay)</span></span><span className="rowb">£{p.cardAmt}</span></div>
-                    <div className="row"><span style={{ fontWeight:800 }}>Total</span><span style={{ fontWeight:900, color:"#F5A623", fontSize:15 }}>£{p.total}</span></div>
+
+                    <div style={{ height: 1, background: "#F0F0F0", margin: "10px 0" }} />
+                    {/* Editable card override inline */}
+                    <div className="row">
+                      <span>💳 Card payment (£) <span style={{ fontSize: 10, color: "#aaa" }}>override this week</span></span>
+                      <input type="number" className="mini" min="0" placeholder={s.cardFixed || "0"} value={s.cardOverride && s.cardOverride !== "0" ? s.cardOverride : ""} onChange={async e => {
+                        const v = e.target.value;
+                        setStaff(pp => pp.map(x => x.id === s.id ? { ...x, cardOverride: v } : x));
+                        await db.from("staff").update({ card_override: v || "0" }).eq("id", s.id);
+                      }} />
+                    </div>
+                    <div className="row"><span>💵 Cash (auto = Total − Card)</span><span className="rowb">£{p.cashAmt}</span></div>
+                    <div className="row"><span style={{ fontWeight: 800 }}>Total</span><span style={{ fontWeight: 900, color: "#F5A623", fontSize: 15 }}>£{p.total}</span></div>
                   </div>
                 </div>
               );
             })}
 
             {/* Kitchen */}
-            <div style={{ fontSize:13, fontWeight:800, color:"#1A2744", margin:"14px 0 8px" }}>Kitchen Staff</div>
-            <div style={{ display:"flex", gap:6, marginBottom:10 }}>
-              <input className="inp sm" style={{ flex:1 }} placeholder="Kitchen staff name…" value={newKName} onChange={e => setNewKName(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && addKitchen()} />
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#1A2744", margin: "14px 0 8px" }}>Kitchen Staff</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              <input className="inp sm" style={{ flex: 1 }} placeholder="Add kitchen staff name…" value={newKName} onChange={e => setNewKName(e.target.value)} onKeyDown={e => e.key === "Enter" && addKitchen()} />
               <button className="btn sm navy" onClick={addKitchen}>Add</button>
             </div>
-            {kitchenStaff.length === 0 && <div style={{ fontSize:13, color:"#ccc", marginBottom:10, fontStyle:"italic" }}>No kitchen staff added yet</div>}
+            {kitchenStaff.length === 0 && <div style={{ fontSize: 13, color: "#ccc", marginBottom: 10, fontStyle: "italic" }}>No kitchen staff yet</div>}
             {kitchenStaff.map(k => {
-              const pay = (parseFloat(k.hours || 0) * parseFloat(k.rate || 0)).toFixed(2);
+              const kh = kitchenHours[k.id] || { hours: "" };
+              const pay = (parseFloat(kh.hours || 0) * parseFloat(k.rate || 0)).toFixed(2);
               return (
                 <div key={k.id} className="card w">
                   <div className="chead">
                     <div className="cname">👨‍🍳 {k.name}</div>
-                    <button onClick={() => delKitchen(k.id)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:15, color:"#ddd" }}>🗑️</button>
+                    <button onClick={() => delKitchen(k.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#ddd" }}>🗑️</button>
                   </div>
-                  <div style={{ display:"flex", gap:7, marginBottom:8, flexWrap:"wrap" }}>
-                    <div style={{ flex:1, minWidth:76 }}>
-                      <div style={{ fontSize:10, fontWeight:700, color:"#aaa", marginBottom:3 }}>HOURS</div>
-                      <input type="number" min="0" className="inp sm" style={{ width:"100%" }} placeholder="0" value={k.hours || ""} onChange={e => updKitchen(k.id, "hours", e.target.value)} />
+                  <div style={{ display: "flex", gap: 7, marginBottom: 8, flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 76 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#aaa", marginBottom: 3 }}>HOURS (this week)</div>
+                      <input type="number" min="0" className="inp sm" style={{ width: "100%" }} placeholder="0" value={kh.hours || ""} onChange={e => updKitchenHours(k.id, e.target.value)} />
                     </div>
-                    <div style={{ flex:1, minWidth:76 }}>
-                      <div style={{ fontSize:10, fontWeight:700, color:"#aaa", marginBottom:3 }}>£/HR</div>
-                      <input type="number" min="0" className="inp sm" style={{ width:"100%" }} placeholder="0.00" value={k.rate || ""} onChange={e => updKitchen(k.id, "rate", e.target.value)} />
+                    <div style={{ flex: 1, minWidth: 76 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#aaa", marginBottom: 3 }}>£/HR (permanent)</div>
+                      <input type="number" min="0" className="inp sm" style={{ width: "100%" }} placeholder="0.00" value={k.rate || ""} onChange={e => updKitchenField(k.id, "rate", e.target.value)} />
                     </div>
-                    <div style={{ flex:1, minWidth:76 }}>
-                      <div style={{ fontSize:10, fontWeight:700, color:"#aaa", marginBottom:3 }}>GROSS</div>
-                      <div style={{ fontSize:16, fontWeight:900, color:"#F5A623", paddingTop:5 }}>£{pay}</div>
+                    <div style={{ flex: 1, minWidth: 76 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "#aaa", marginBottom: 3 }}>GROSS</div>
+                      <div style={{ fontSize: 16, fontWeight: 900, color: "#F5A623", paddingTop: 5 }}>£{pay}</div>
                     </div>
                   </div>
-                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                    <div style={{ fontSize:11, color:"#888", fontWeight:700 }}>Pay by:</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontSize: 11, color: "#888", fontWeight: 700 }}>Pay by:</div>
                     <div className="toggle">
-                      {["cash","card"].map(c => <button key={c} className={`tgl${k.cash_card===c?" on":""}`} onClick={() => updKitchen(k.id, "cash_card", c)}>{c === "cash" ? "💵" : "💳"} {c}</button>)}
+                      {["cash", "card"].map(c => <button key={c} className={`tgl${k.cash_card === c ? " on" : ""}`} onClick={() => updKitchenField(k.id, "cash_card", c)}>{c === "cash" ? "💵" : "💳"} {c}</button>)}
                     </div>
                   </div>
                 </div>
@@ -1316,101 +1591,129 @@ function ManagerApp({ onLogout }) {
             </div>
             <div className="expsec">
               <div className="exptitle">📤 Export Payroll</div>
-              <button className="expbtn p" onClick={exportPayroll}>🔗 Push to Payroll Sheet</button>
-              <button className="expbtn s" onClick={() => copyTSV(buildPayroll(), t)}>📋 Copy — Paste into Sheet</button>
+              {!gsReady && <div className="gs-banner">⚠️ <strong>Google Sheets not connected.</strong> Tap ⚙️ Sheets in the header to set up.</div>}
+              <button className="expbtn p" onClick={exportPayroll}>{gsReady ? "🔗 Push to Payroll Sheet" : "📋 Copy — Paste into Sheet"}</button>
+              {!gsReady && <button className="expbtn s" onClick={() => copyTSV(buildPayroll(), t)}>📋 Copy — Paste into Sheet</button>}
               <button className="expbtn s" onClick={() => setCashPopup(true)}>💵 View Cash Payments</button>
             </div>
           </>
         )}
 
-        {/* ── TAKINGS ── */}
+        {/* ══ TAKINGS ══ */}
         {tab === "takings" && (
           <>
             <div className="sec">Daily Takings</div>
 
-            {/* Per-day defaults — 2 slots */}
+            {/* Takings assignment — list of staff with day toggles */}
             <div className="card">
-              <div className="cname" style={{ marginBottom:4 }}>📅 Default Takings Person by Day</div>
-              <div style={{ fontSize:12, color:"#888", marginBottom:10 }}>Set once. Auto-assigned every week. Two options per day.</div>
-              {DAYS_SUN.map((dayName, dow) => (
-                <div key={dow} style={{ marginBottom:10, paddingBottom:10, borderBottom:"1px dashed #E5E5E5" }}>
-                  <div style={{ fontSize:12, fontWeight:800, color:"#1A2744", marginBottom:5 }}>{dayName}</div>
-                  <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
-                    {[1, 2].map(slot => (
-                      <div key={slot} className="dayrow">
-                        <div className="daylbl" style={{ fontSize:11, color:"#aaa" }}>Option {slot}</div>
-                        <select className="inp sm" style={{ flex:1 }} value={dayDefaults[dow]?.[`slot${slot}`] || ""} onChange={e => saveDaySlot(dow, slot, e.target.value || null)}>
-                          <option value="">— None —</option>
-                          {staff.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        </select>
+              <div className="cname" style={{ marginBottom: 4 }}>📅 Who Records Takings</div>
+              <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>
+                Assign up to 2 staff. Each day can only have one person. Set once — saved permanently.
+              </div>
+              {/* Show only up to 2 staff as assignable */}
+              {staff.slice(0, 2).map(s => {
+                const myDays = staffAssignedDays(s.id);
+                return (
+                  <div key={s.id} style={{ marginBottom: 14, paddingBottom: 14, borderBottom: "1px dashed #E5E5E5" }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: "#1A2744", marginBottom: 8 }}>👤 {s.name}</div>
+                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                      {DAYS_MON.map((dayName, monIdx) => {
+                        // monIdx 0=Mon…6=Sun, convert to JS dow
+                        const dow = monIdx === 6 ? 0 : monIdx + 1;
+                        const isOn = takingDefaults[dow] === s.id;
+                        // Is this day taken by someone else?
+                        const takenByOther = takingDefaults[dow] && takingDefaults[dow] !== s.id;
+                        return (
+                          <button
+                            key={dow}
+                            className={`day-tog${isOn ? " on" : ""}`}
+                            disabled={takenByOther}
+                            title={takenByOther ? `Already assigned to ${staff.find(x => x.id === takingDefaults[dow])?.name}` : ""}
+                            onClick={() => saveTakingDefault(s.id, dow, !isOn)}
+                          >
+                            {dayName}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {myDays.length > 0 && (
+                      <div style={{ fontSize: 11, color: "#888", marginTop: 6 }}>
+                        Assigned: {myDays.map(dow => DAYS_SUN[dow]).join(", ")}
                       </div>
-                    ))}
+                    )}
                   </div>
+                );
+              })}
+              {staff.length > 2 && (
+                <div style={{ fontSize: 12, color: "#aaa", fontStyle: "italic" }}>
+                  Only the first 2 staff members can be assigned takings. To change, reassign via ⚙️ Pay.
                 </div>
-              ))}
+              )}
             </div>
 
             {/* Today override */}
             <div className="card">
-              <div className="cname" style={{ marginBottom:4 }}>🔄 Override for Today Only</div>
-              <select className="inp sm" style={{ display:"block", width:"100%", marginBottom:8 }} value={todayOverride || ""} onChange={e => saveTodayOverride(e.target.value || null)}>
+              <div className="cname" style={{ marginBottom: 4 }}>🔄 Override for Today Only</div>
+              <select className="inp sm" style={{ display: "block", width: "100%", marginBottom: 8 }} value={todayOverride || ""} onChange={e => saveTodayOverride(e.target.value || null)}>
                 <option value="">— Use day default —</option>
                 {staff.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
-              <div style={{ fontSize:12, color:"#888" }}>
-                Today ({DAYS_SUN[todayDow]}) defaults: {[todaySlot1, todaySlot2].filter(Boolean).map(id => staff.find(s => s.id === id)?.name).filter(Boolean).join(" & ") || "Manager"}
+              <div style={{ fontSize: 12, color: "#888" }}>
+                Today ({DAYS_SUN[todayDow]}): <strong>{staff.find(s => s.id === effectiveTodayPerson)?.name || "Manager (no default set)"}</strong>
               </div>
             </div>
 
             {/* Submissions */}
             {takings.filter(s => s.staff_id !== "manager").length > 0 && (
               <>
-                <div style={{ fontSize:13, fontWeight:800, color:"#1A2744", marginBottom:8 }}>📨 Staff Submissions</div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#1A2744", marginBottom: 8 }}>📨 Staff Submissions</div>
                 {[...takings].filter(s => s.staff_id !== "manager").sort((a, b) => b.date.localeCompare(a.date)).map(sub => {
                   const total = TKFIELDS.reduce((s, f) => s + parseFloat(sub[f.db] || 0) * f.sign, 0);
                   return (
                     <div key={sub.id} className={`tmsg${sub.is_new ? " new" : ""}`}>
-                      <div className="tmsg-h">{sub.is_new ? "🆕 New — " : "✓ "}{sub.staff_name} · {dispDate(sub.date, true)}<span style={{ float:"right", fontSize:14, fontWeight:900 }}>£{total.toFixed(2)}</span></div>
+                      <div className="tmsg-h">{sub.is_new ? "🆕 New — " : "✓ "}{sub.staff_name} · {dispDate(sub.date, true)}<span style={{ float: "right", fontSize: 14, fontWeight: 900 }}>£{total.toFixed(2)}</span></div>
                       <div className="tmsg-d">{TKFIELDS.filter(f => parseFloat(sub[f.db] || 0) > 0).map(f => `${f.label.replace(/[🛵💵💳🌐🎟️🎫]/g, "").trim()}: £${sub[f.db]}`).join(" · ")}</div>
-                      {sub.note && <div style={{ marginTop:4, fontSize:12, opacity:.8 }}>📝 {sub.note}</div>}
-                      {sub.is_new && <button className="btn sm" style={{ marginTop:8, background:"#065F46", color:"#fff" }} onClick={async () => { await db.from("takings").update({ is_new:false }).eq("id", sub.id); setTakings(p => p.map(x => x.id === sub.id ? { ...x, is_new:false } : x)); }}>Mark Seen ✓</button>}
+                      {sub.note && <div style={{ marginTop: 4, fontSize: 12, opacity: .8 }}>📝 {sub.note}</div>}
+                      {sub.is_new && <button className="btn sm" style={{ marginTop: 8, background: "#065F46", color: "#fff" }} onClick={async () => { await db.from("takings").update({ is_new: false }).eq("id", sub.id); setTakings(p => p.map(x => x.id === sub.id ? { ...x, is_new: false } : x)); }}>Mark Seen ✓</button>}
                     </div>
                   );
                 })}
               </>
             )}
 
-            {/* Manager manual entry */}
-            <div className="card" style={{ marginTop:10 }}>
-              <div className="cname" style={{ marginBottom:8 }}>✏️ Enter Takings Manually</div>
+            <div className="card" style={{ marginTop: 10 }}>
+              <div className="cname" style={{ marginBottom: 8 }}>✏️ Enter Takings Manually</div>
               <TakingsForm setTakings={setTakings} toast={t} />
             </div>
 
             <div className="expsec">
               <div className="exptitle">📤 Export Takings</div>
-              <button className="expbtn p" onClick={exportTakings}>🔗 Push to Takings Sheet (Daily + Weekly)</button>
-              <button className="expbtn s" onClick={() => copyTSV([...buildDaily(), [""], [""], ...buildWeekly()], t)}>📋 Copy — Paste into Sheet</button>
+              {!gsReady && <div className="gs-banner">⚠️ <strong>Google Sheets not connected.</strong> Tap ⚙️ Sheets in the header.</div>}
+              <button className="expbtn p" onClick={exportTakings}>{gsReady ? "🔗 Push to Takings Sheet (Daily + Weekly)" : "📋 Copy — Paste into Sheet"}</button>
+              {!gsReady && <button className="expbtn s" onClick={() => copyTSV([...buildDaily(), [""], [""], ...buildWeekly()], t)}>📋 Copy — Paste into Sheet</button>}
             </div>
           </>
         )}
 
-        {/* ── EXPENSES ── */}
+        {/* ══ EXPENSES ══ */}
         {tab === "expenses" && <ExpensesTab expenses={expenses} onAdd={addExpense} onDelete={delExpense} toast={t} />}
 
-        {/* ── ABSENCES ── */}
+        {/* ══ ABSENCES ══ */}
         {tab === "absence" && (
           <>
             <div className="sec">Absences</div>
-            <button className="btn navy" style={{ marginBottom:14 }} onClick={() => { setAbsModal(true); setAbsStaff(""); setAbsDate(""); setAbsPeriod(""); }}>+ Log Absence for Staff</button>
+            <button className="btn navy" style={{ marginBottom: 14 }} onClick={() => { setAbsModal(true); setAbsStaff(""); setAbsDate(""); setAbsPeriod(""); }}>+ Log Absence for Staff</button>
             {absences.length === 0
               ? <div className="empty"><div className="emptyicon">📅</div><div className="emptytxt">No absences reported</div></div>
               : absences.map(a => (
-                <div key={a.id} style={{ background:"#FFF8EC", border:"1.5px solid #F5A623", borderRadius:12, padding:"10px 13px", marginBottom:9, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                  <div><div style={{ fontWeight:800, color:"#1A2744", fontSize:13 }}>👤 {a.staff_name}</div><div style={{ fontSize:12, color:"#888", marginTop:2 }}>{dispDate(a.date, true)} — {a.period}</div></div>
-                  <button onClick={async () => { await db.from("absences").delete().eq("id", a.id); setAbsences(p => p.filter(x => x.id !== a.id)); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:15, color:"#ccc" }}>🗑️</button>
+                <div key={a.id} style={{ background: "#FFF8EC", border: "1.5px solid #F5A623", borderRadius: 12, padding: "10px 13px", marginBottom: 9, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontWeight: 800, color: "#1A2744", fontSize: 13 }}>👤 {a.staff_name}</div>
+                    <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>{dispDate(a.date, true)} — {a.period}</div>
+                  </div>
+                  <button onClick={async () => { await db.from("absences").delete().eq("id", a.id); setAbsences(p => p.filter(x => x.id !== a.id)); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15, color: "#ccc" }}>🗑️</button>
                 </div>
-              ))
-            }
+              ))}
           </>
         )}
       </div>
@@ -1418,7 +1721,9 @@ function ManagerApp({ onLogout }) {
       {/* Modals */}
       {setupModal && <SetupModal s={setupModal} onClose={() => setSetupModal(null)} />}
       {pinModal && <PinModal onClose={() => setPinModal(false)} />}
+      {settingsModal && <SettingsModal onClose={() => setSettingsModal(false)} />}
 
+      {/* Cash popup */}
       {cashPopup && (
         <div className="overlay" onClick={() => setCashPopup(false)}>
           <div className="sheet" onClick={e => e.stopPropagation()}>
@@ -1428,50 +1733,52 @@ function ManagerApp({ onLogout }) {
               const p = calcPay(s);
               return <div key={s.id} className="cashrow"><span className="cashname">{s.name}</span><span className="cashamt">£{p.cashAmt}</span></div>;
             })}
-            {staff.filter(s => parseFloat(calcPay(s).cashAmt) > 0).length === 0 && <div style={{ textAlign:"center", color:"#aaa", padding:"20px 0" }}>No cash payments this week</div>}
-            <div style={{ borderTop:"2px solid #F0F0F0", marginTop:10, paddingTop:10, display:"flex", justifyContent:"space-between", fontSize:15, fontWeight:800, color:"#1A2744" }}>
+            {staff.filter(s => parseFloat(calcPay(s).cashAmt) > 0).length === 0 && <div style={{ textAlign: "center", color: "#aaa", padding: "20px 0" }}>No cash payments this week</div>}
+            <div style={{ borderTop: "2px solid #F0F0F0", marginTop: 10, paddingTop: 10, display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 800, color: "#1A2744" }}>
               <span>Total Cash Out</span><span>£{totCash}</span>
             </div>
-            <button className="btn sec" style={{ marginTop:14 }} onClick={() => setCashPopup(false)}>Close</button>
+            <button className="btn sec" style={{ marginTop: 14 }} onClick={() => setCashPopup(false)}>Close</button>
           </div>
         </div>
       )}
 
+      {/* Rota share modal */}
       {shareModal && (
         <div className="overlay" onClick={() => setShareModal(null)}>
           <div className="sheet" onClick={e => e.stopPropagation()}>
             <div className="stitle">📤 Share Rota</div>
             <div className="ssub2">{staff.find(s => s.id === shareModal)?.name} · {fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon, 6))}</div>
-            <textarea className="lognote" rows={12} readOnly style={{ fontFamily:"monospace", fontSize:12, background:"#F7F4EF" }} value={buildRotaText(shareModal)} />
-            <button className="btn" style={{ marginTop:12 }} onClick={() => { navigator.clipboard.writeText(buildRotaText(shareModal)).then(() => t("📋 Rota copied!")); setShareModal(null); }}>📋 Copy to Clipboard</button>
+            <textarea className="lognote" rows={12} readOnly style={{ fontFamily: "monospace", fontSize: 12, background: "#F7F4EF" }} value={buildRotaText(shareModal)} />
+            <button className="btn" style={{ marginTop: 12 }} onClick={() => { navigator.clipboard.writeText(buildRotaText(shareModal)).then(() => t("📋 Rota copied!")); setShareModal(null); }}>📋 Copy to Clipboard</button>
             <button className="btn sec" onClick={() => setShareModal(null)}>Close</button>
           </div>
         </div>
       )}
 
+      {/* Manager absence modal */}
       {absModal && (
         <div className="overlay" onClick={() => setAbsModal(false)}>
           <div className="sheet" onClick={e => e.stopPropagation()}>
             <div className="stitle">📅 Log Absence</div>
             <label className="lbl">Staff Member</label>
-            <select className="inp sm" style={{ display:"block", width:"100%", marginBottom:14 }} value={absStaff} onChange={e => setAbsStaff(e.target.value)}>
+            <select className="inp sm" style={{ display: "block", width: "100%", marginBottom: 14 }} value={absStaff} onChange={e => setAbsStaff(e.target.value)}>
               <option value="">— Select staff —</option>
               {staff.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
             <label className="lbl">Date</label>
-            <input type="date" className="inp sm" style={{ display:"block", width:"100%", marginBottom:14 }} value={absDate} onChange={e => setAbsDate(e.target.value)} />
-            <label className="lbl" style={{ marginBottom:8 }}>Period</label>
+            <input type="date" className="inp sm" style={{ display: "block", width: "100%", marginBottom: 14 }} value={absDate} onChange={e => setAbsDate(e.target.value)} />
+            <label className="lbl" style={{ marginBottom: 8 }}>Period</label>
             <div className="peribtns">
-              {["Morning","Evening","Full Day"].map(p => (
+              {["Morning", "Evening", "Full Day"].map(p => (
                 <button key={p} className={`pbtn${absPeriod === p ? " sel" : ""}`} onClick={() => setAbsPeriod(p)}>
                   {p === "Morning" ? "🌅" : p === "Evening" ? "🌙" : "☀️"}<br />{p}
                 </button>
               ))}
             </div>
-            <button className="btn" style={{ marginTop:12 }} onClick={async () => {
+            <button className="btn" style={{ marginTop: 12 }} onClick={async () => {
               if (!absStaff || !absDate || !absPeriod) return t("Fill in all fields");
               const s = staff.find(x => x.id === absStaff);
-              const { data, error } = await db.from("absences").insert({ staff_id:absStaff, staff_name:s?.name||"", date:absDate, period:absPeriod }).select().single();
+              const { data, error } = await db.from("absences").insert({ staff_id: absStaff, staff_name: s?.name || "", date: absDate, period: absPeriod }).select().single();
               if (!error) { setAbsences(p => [...p, data]); setAbsModal(false); t("📅 Absence logged"); }
               else t("❌ " + error.message);
             }}>Save Absence</button>
@@ -1484,7 +1791,7 @@ function ManagerApp({ onLogout }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// TAKINGS FORM (manager manual entry)
+// TAKINGS FORM (manager manual)
 // ═══════════════════════════════════════════════════════════════════
 function TakingsForm({ setTakings, toast }) {
   const [values, setValues] = useState({});
@@ -1497,7 +1804,7 @@ function TakingsForm({ setTakings, toast }) {
     setSaving(true);
     const vals = {};
     TKFIELDS.forEach(f => { vals[f.db] = parseFloat(values[f.key] || 0); if (f.ccDb) vals[f.ccDb] = cc[f.key] || "cash"; });
-    const { data, error } = await db.from("takings").insert({ staff_id:"manager", staff_name:"Manager", date, ...vals, note, is_new:false }).select().single();
+    const { data, error } = await db.from("takings").insert({ staff_id: "manager", staff_name: "Manager", date, ...vals, note, is_new: false }).select().single();
     if (!error) { setTakings(p => [data, ...p]); setValues({}); setNote(""); setDate(todayISO()); toast("✅ Takings saved!"); }
     else toast("❌ " + error.message);
     setSaving(false);
@@ -1506,23 +1813,23 @@ function TakingsForm({ setTakings, toast }) {
   return (
     <>
       <label className="lbl">Date</label>
-      <input type="date" className="inp sm" style={{ display:"block", width:"100%", marginBottom:12 }} value={date} onChange={e => setDate(e.target.value)} />
+      <input type="date" className="inp sm" style={{ display: "block", width: "100%", marginBottom: 12 }} value={date} onChange={e => setDate(e.target.value)} />
       {TKFIELDS.map(f => (
         <div key={f.key} className="tfield">
           <div className="tlbl">
             <span>{f.label}</span>
             {f.cc && (
-              <div className="toggle" style={{ transform:"scale(.8)", transformOrigin:"right" }}>
-                {["cash","card"].map(c => <button key={c} className={`tgl${(cc[f.key]||"cash")===c?" on":""}`} onClick={() => setCC(p => ({ ...p, [f.key]:c }))}>{c}</button>)}
+              <div className="toggle" style={{ transform: "scale(.8)", transformOrigin: "right" }}>
+                {["cash", "card"].map(c => <button key={c} className={`tgl${(cc[f.key] || "cash") === c ? " on" : ""}`} onClick={() => setCC(p => ({ ...p, [f.key]: c }))}>{c}</button>)}
               </div>
             )}
           </div>
           {f.hint && <div className="thint">{f.hint}</div>}
-          <input className="inp sm" style={{ display:"block", width:"100%", marginTop:3 }} type="number" min="0" placeholder="0.00" value={values[f.key] || ""} onChange={e => setValues(p => ({ ...p, [f.key]:e.target.value }))} />
+          <input className="inp sm" style={{ display: "block", width: "100%", marginTop: 3 }} type="number" min="0" placeholder="0.00" value={values[f.key] || ""} onChange={e => setValues(p => ({ ...p, [f.key]: e.target.value }))} />
         </div>
       ))}
-      <label className="lbl" style={{ marginTop:8 }}>Note</label>
-      <textarea className="lognote" rows={2} style={{ marginBottom:10 }} placeholder="Any notes…" value={note} onChange={e => setNote(e.target.value)} />
+      <label className="lbl" style={{ marginTop: 8 }}>Note</label>
+      <textarea className="lognote" rows={2} style={{ marginBottom: 10 }} placeholder="Any notes…" value={note} onChange={e => setNote(e.target.value)} />
       <button className="btn" onClick={submit} disabled={saving}>{saving ? "Saving…" : "Save Takings"}</button>
     </>
   );
@@ -1554,18 +1861,18 @@ function ExpensesTab({ expenses, onAdd, onDelete, toast }) {
       <div className="sec">Shop Expenses</div>
       <div className="card">
         <label className="lbl">Date of Expense</label>
-        <input type="date" className="inp sm" style={{ display:"block", width:"100%", marginBottom:10 }} value={date} onChange={e => setDate(e.target.value)} />
+        <input type="date" className="inp sm" style={{ display: "block", width: "100%", marginBottom: 10 }} value={date} onChange={e => setDate(e.target.value)} />
         <label className="lbl">Description</label>
-        <input className="inp sm" style={{ display:"block", width:"100%", marginBottom:10 }} placeholder="e.g. Cleaning supplies" value={desc} onChange={e => setDesc(e.target.value)} />
-        <div style={{ display:"flex", gap:8, marginBottom:10, alignItems:"flex-end" }}>
-          <div style={{ flex:1 }}>
+        <input className="inp sm" style={{ display: "block", width: "100%", marginBottom: 10 }} placeholder="e.g. Cleaning supplies" value={desc} onChange={e => setDesc(e.target.value)} />
+        <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "flex-end" }}>
+          <div style={{ flex: 1 }}>
             <label className="lbl">Amount (£)</label>
-            <input className="inp sm" style={{ width:"100%" }} type="number" min="0" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)} />
+            <input className="inp sm" style={{ width: "100%" }} type="number" min="0" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)} />
           </div>
           <div>
             <label className="lbl">Paid by</label>
             <div className="toggle">
-              {["cash","card"].map(c => <button key={c} className={`tgl${payType===c?" on":""}`} onClick={() => setPayType(c)}>{c === "cash" ? "💵" : "💳"} {c}</button>)}
+              {["cash", "card"].map(c => <button key={c} className={`tgl${payType === c ? " on" : ""}`} onClick={() => setPayType(c)}>{c === "cash" ? "💵" : "💳"} {c}</button>)}
             </div>
           </div>
         </div>
@@ -1577,18 +1884,18 @@ function ExpensesTab({ expenses, onAdd, onDelete, toast }) {
           <>
             <div className="sec">Logged Expenses</div>
             {[...expenses].sort((a, b) => b.date.localeCompare(a.date)).map(e => (
-              <div key={e.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"9px 0", borderBottom:"1px solid #F0F0F0" }}>
+              <div key={e.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 0", borderBottom: "1px solid #F0F0F0" }}>
                 <div>
-                  <div style={{ fontSize:13, fontWeight:700, color:"#1A2744" }}>{e.description}</div>
-                  <div style={{ fontSize:11, color:"#aaa" }}>{fmtDate(e.date)} · {e.pay_type === "cash" ? "💵 Cash" : "💳 Card"}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#1A2744" }}>{e.description}</div>
+                  <div style={{ fontSize: 11, color: "#aaa" }}>{fmtDate(e.date)} · {e.pay_type === "cash" ? "💵 Cash" : "💳 Card"}</div>
                 </div>
-                <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-                  <div style={{ fontSize:13, fontWeight:800, color:"#E05252" }}>-£{e.amount.toFixed(2)}</div>
-                  <button onClick={() => onDelete(e.id)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:14, color:"#ccc" }}>🗑️</button>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: "#E05252" }}>-£{e.amount.toFixed(2)}</div>
+                  <button onClick={() => onDelete(e.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#ccc" }}>🗑️</button>
                 </div>
               </div>
             ))}
-            <div style={{ display:"flex", justifyContent:"space-between", padding:"10px 0 0", fontSize:14, fontWeight:800, color:"#1A2744", borderTop:"2px solid #F0F0F0", marginTop:4 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 0", fontSize: 14, fontWeight: 800, color: "#1A2744", borderTop: "2px solid #F0F0F0", marginTop: 4 }}>
               <span>Total</span><span>£{total.toFixed(2)}</span>
             </div>
           </>
@@ -1620,7 +1927,7 @@ export default function App() {
       const dow = new Date().getDay();
       Promise.all([
         db.from("takings_assignment").select("staff_id").eq("date", todayISO()).maybeSingle(),
-        db.from("takings_defaults").select("staff_id").eq("day_of_week", dow).eq("slot", 1).maybeSingle(),
+        db.from("takings_defaults").select("staff_id").eq("day_of_week", dow).maybeSingle(),
       ]).then(([ovR, defR]) => {
         setEffectiveTakingsPerson(ovR.data?.staff_id || defR.data?.staff_id || null);
       });
