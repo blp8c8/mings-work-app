@@ -17,19 +17,32 @@ const db = createClient(
 // in the app for the exact script to paste in and how to deploy it.
 async function pushSheet(webAppUrl, spreadsheetId, tabName, rows) {
   if (!webAppUrl || !spreadsheetId) return { ok: false, err: "Google Sheets not configured — tap ⚙️ Sheets" };
+  const payload = JSON.stringify({ spreadsheetId, tab: tabName, rows });
   try {
     const res = await fetch(webAppUrl, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids CORS preflight, which Apps Script doesn't handle
-      body: JSON.stringify({ spreadsheetId, tab: tabName, rows })
+      body: payload
     });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) return { ok: false, err: data?.error || `Sheets sync failed (HTTP ${res.status})` };
     return { ok: true };
   } catch (e) {
-    // A bare "Failed to fetch" almost always means: wrong URL, deployment access
-    // isn't set to "Anyone", or the script wasn't redeployed after editing.
-    return { ok: false, err: "Could not reach the Sheets bridge. Check in ⚙️ Sheets: the Web App URL is correct (ends in /exec), access is set to \"Anyone\" (not \"Anyone with Google account\"), and you redeployed after any script changes." };
+    // Some browsers/networks block reading the response from an Apps Script
+    // redirect even when everything is configured correctly. Fall back to a
+    // "fire and forget" no-cors request — Google still receives and runs it,
+    // we just can't read the confirmation back this way.
+    try {
+      await fetch(webAppUrl, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: payload
+      });
+      return { ok: true, unconfirmed: true };
+    } catch (e2) {
+      return { ok: false, err: "Could not reach the Sheets bridge at all. Check in ⚙️ Sheets: the Web App URL is correct (ends in /exec), access is set to \"Anyone\" (not \"Anyone with Google account\"), and you redeployed after any script changes." };
+    }
   }
 }
 // Simple connectivity check used by the "Test Connection" button in Settings.
@@ -78,6 +91,9 @@ const addDays   = (iso,n) => { const d=new Date(iso+"T12:00:00"); d.setDate(d.ge
 const dispDate  = (iso,wd=false) => { if(!iso)return""; const d=new Date(iso+"T12:00:00"); return wd?d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}):d.toLocaleDateString("en-GB",{day:"numeric",month:"short"}); };
 const fmtRange  = (s,e) => `${fmtDate(s)} – ${fmtDate(e)}`;
 const parseHrs  = (i,o) => { if(!i||!o)return 0; const p=t=>{const[h,m]=t.split(":").map(Number);return h+m/60;}; return Math.max(0,p(o)-p(i)); };
+// Rounds a clocked duration UP to the nearest 15-minute mark before converting to hours,
+// e.g. 3:00pm–5:12pm (2h12m) becomes 2h15m = 2.25h. Only matters for hourly-paid staff.
+const roundHrsUp = hrs => hrs<=0?0:Math.ceil(hrs*4-1e-9)/4;
 const jsToMon   = d => d===0?6:d-1;
 const weekDates = monISO => Array.from({length:7},(_,i)=>addDays(monISO,i));
 const kId       = id => `k_${id}`; // kitchen staff key prefix for payroll_extras
@@ -430,6 +446,8 @@ function ManagerApp({onLogout}){
   const[gsConfig,setGsConfig]=useState({webAppUrl:"",payrollId:"",takingsId:""});
   // Add FOH staff from manager
   const[addStaffModal,setAddStaffModal]=useState(false);
+  const[clockDate,setClockDate]=useState(()=>todayISO());
+  const[clockShowAll,setClockShowAll]=useState(false);
   const[cardWarning,setCardWarning]=useState(null); // {name, entered, total, focusId}
   function checkCardWarning(name,entered,grossTotal,focusId){
     const val=parseFloat(entered||0);
@@ -556,7 +574,7 @@ function ManagerApp({onLogout}){
     const ex=getExtras(s.id);
     let full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):myRota.filter(sh=>sh?.type==="Full Day (11am–close)").length;
     let night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):myRota.filter(sh=>sh?.type==="Night (5:30pm–close)").length;
-    let hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):logsInRange.reduce((a,l)=>a+parseHrs(l.time_in,l.time_out),0);
+    let hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):logsInRange.reduce((a,l)=>a+roundHrsUp(parseHrs(l.time_in,l.time_out)),0);
     const tips=parseFloat(ex.tips||0);
     const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
@@ -712,7 +730,8 @@ function ManagerApp({onLogout}){
     if(!r1.ok){t("❌ "+r1.err);return;}
     t("⏳ Pushing PayrollWeekly tab…");
     const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollWeekly",buildPayrollWeekly());
-    t(r2.ok?"✅ Payroll & Weekly tabs updated!":"❌ "+r2.err);
+    if(!r2.ok){t("❌ "+r2.err);return;}
+    t((r1.unconfirmed||r2.unconfirmed)?"✅ Sent — please double-check the sheet (couldn't confirm delivery)":"✅ Payroll & Weekly tabs updated!");
   }
   async function exportTakings(){
     if(!gsConfig.webAppUrl||!gsConfig.takingsId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
@@ -721,7 +740,8 @@ function ManagerApp({onLogout}){
     if(!r1.ok){t("❌ "+r1.err);return;}
     t("⏳ Updating Weekly tab…");
     const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Weekly",buildWeekly());
-    t(r2.ok?"✅ Takings sheets updated!":"❌ "+r2.err);
+    if(!r2.ok){t("❌ "+r2.err);return;}
+    t((r1.unconfirmed||r2.unconfirmed)?"✅ Sent — please double-check the sheet (couldn't confirm delivery)":"✅ Takings sheets updated!");
   }
 
   // ── Rota share ──
@@ -1086,18 +1106,32 @@ function ManagerApp({onLogout}){
         {tab==="clock"&&(
           <>
             <div className="sec">Clock Logs</div>
-            {staff.map(s=>{const sLogs=clockLogs.filter(l=>l.staff_id===s.id);const totalH=sLogs.reduce((a,l)=>a+parseHrs(l.time_in,l.time_out),0);return(
+            <div className="wnav">
+              <button className="wnavbtn" onClick={()=>setClockDate(addDays(clockDate,-1))} disabled={clockShowAll}>‹</button>
+              <div className="wnavlbl">{clockShowAll?"Showing all history":dispDate(clockDate,true)}</div>
+              <button className="wnavbtn" onClick={()=>setClockDate(addDays(clockDate,1))} disabled={clockShowAll}>›</button>
+            </div>
+            <div style={{display:"flex",gap:6,marginBottom:14,alignItems:"center"}}>
+              <input type="date" className="inp sm" style={{flex:1}} value={clockDate} onChange={e=>{setClockDate(e.target.value);setClockShowAll(false);}} disabled={clockShowAll}/>
+              <button className="btn sm sec" onClick={()=>{setClockDate(todayISO());setClockShowAll(false);}}>Today</button>
+              <button className={`btn sm${clockShowAll?" navy":" sec"}`} onClick={()=>setClockShowAll(v=>!v)}>{clockShowAll?"✓ All Dates":"All Dates"}</button>
+            </div>
+            {staff.map(s=>{
+              const sLogsAll=clockLogs.filter(l=>l.staff_id===s.id);
+              const sLogs=clockShowAll?sLogsAll:sLogsAll.filter(l=>l.date===clockDate);
+              const totalH=sLogs.reduce((a,l)=>a+roundHrsUp(parseHrs(l.time_in,l.time_out)),0);
+              return(
               <div key={s.id} className="card">
-                <div className="cname">👤 {s.name}</div><div className="csub" style={{marginBottom:10}}>Total: {totalH.toFixed(1)} hrs</div>
-                {sLogs.length===0&&<div style={{fontSize:12,color:"#ccc",fontStyle:"italic"}}>No records yet</div>}
+                <div className="cname">👤 {s.name}</div><div className="csub" style={{marginBottom:10}}>{clockShowAll?"All time":dispDate(clockDate,true)} total: {totalH.toFixed(2)} hrs</div>
+                {sLogs.length===0&&<div style={{fontSize:12,color:"#ccc",fontStyle:"italic"}}>No records {clockShowAll?"yet":"for this date"}</div>}
                 {sLogs.map(l=>(
                   <div key={l.id} className="logentry">
-                    <div className="logtop"><span style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(l.date,true)}</span><span style={{fontSize:13,fontWeight:800,color:l.time_out?"#1A2744":"#50DC78"}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(1)+"h":"active"}</span></div>
+                    <div className="logtop"><span style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(l.date,true)}</span><span style={{fontSize:13,fontWeight:800,color:l.time_out?"#1A2744":"#50DC78"}}>{l.time_out?roundHrsUp(parseHrs(l.time_in,l.time_out)).toFixed(2)+"h":"active"}</span></div>
                     <div className="logedit"><span className="logelbl">In</span><input type="time" className="inp time" value={l.time_in||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v}:x));db.from("clock_logs").update({time_in:v}).eq("id",l.id);}}/><span className="logelbl">Out</span><input type="time" className="inp time" value={l.time_out||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v}:x));db.from("clock_logs").update({time_out:v}).eq("id",l.id);}}/></div>
                     <textarea className="lognote" rows={2} placeholder="Note…" value={l.note||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:v}:x));db.from("clock_logs").update({note:v}).eq("id",l.id);}}/>
                   </div>
                 ))}
-                <button className="btn sm" style={{marginTop:9,background:"#F5A623"}} onClick={async()=>{const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:todayISO(),time_in:"",time_out:"",note:""}).select().single();if(!error)setClockLogs(p=>[data,...p]);else t("❌ "+error.message);}}>+ Add Entry</button>
+                <button className="btn sm" style={{marginTop:9,background:"#F5A623"}} onClick={async()=>{const dateForEntry=clockShowAll?todayISO():clockDate;const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:""}).select().single();if(!error)setClockLogs(p=>[data,...p]);else t("❌ "+error.message);}}>+ Add Entry {clockShowAll?"":`for ${dispDate(clockDate)}`}</button>
               </div>
             );})}
           </>
