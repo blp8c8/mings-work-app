@@ -90,6 +90,7 @@ const fmtDate   = iso => { if(!iso)return""; const[y,m,d]=iso.split("-"); return
 const addDays   = (iso,n) => { const d=new Date(iso+"T12:00:00"); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
 const dispDate  = (iso,wd=false) => { if(!iso)return""; const d=new Date(iso+"T12:00:00"); return wd?d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}):d.toLocaleDateString("en-GB",{day:"numeric",month:"short"}); };
 const fmtRange  = (s,e) => `${fmtDate(s)} – ${fmtDate(e)}`;
+const fmtRangeExport = (s,e) => `${fmtDate(s)}-${fmtDate(e)}`; // plain hyphen, no spaces, for spreadsheet exports
 const parseHrs  = (i,o) => { if(!i||!o)return 0; const p=t=>{const[h,m]=t.split(":").map(Number);return h+m/60;}; return Math.max(0,p(o)-p(i)); };
 // Rounds a clocked duration UP to the nearest 15-minute mark before converting to hours,
 // e.g. 3:00pm–5:12pm (2h12m) becomes 2h15m = 2.25h. Only matters for hourly-paid staff.
@@ -574,7 +575,14 @@ function ManagerApp({onLogout}){
     const ex=getExtras(s.id);
     let full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):myRota.filter(sh=>sh?.type==="Full Day (11am–close)").length;
     let night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):myRota.filter(sh=>sh?.type==="Night (5:30pm–close)").length;
-    let hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):logsInRange.reduce((a,l)=>a+roundHrsUp(parseHrs(l.time_in,l.time_out)),0);
+    // Sum raw hours per calendar day first (a staff may clock in/out more than
+    // once in a day), THEN round each day's total up to the nearest 15 minutes,
+    // then add up those rounded daily totals for the week. Rounding each
+    // individual clock-in/out session separately would unfairly inflate hours
+    // for anyone with a split shift or a break.
+    const dailyRaw={};
+    logsInRange.forEach(l=>{dailyRaw[l.date]=(dailyRaw[l.date]||0)+parseHrs(l.time_in,l.time_out);});
+    let hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):Object.values(dailyRaw).reduce((a,dayHrs)=>a+roundHrsUp(dayHrs),0);
     const tips=parseFloat(ex.tips||0);
     const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
@@ -680,47 +688,51 @@ function ManagerApp({onLogout}){
 
   // ── Export builders ──
   function buildPayroll(){
-    const hdr=["Date Range","Name","Type","Full Shifts","Night Shifts","Hours","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes","Override?"];
+    const hdr=["Date Range","Name","Type","Full Shifts","Night Shifts","Hours","Rate/Hour (£)","Rate/Full Shift (£)","Rate/Night Shift (£)","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes","Override?"];
     const rows=[hdr];
-    staff.forEach(s=>{const p=calcPay(s);const ex=getExtras(s.id);rows.push([fmtRange(weekRange.start,weekRange.end),s.name,"FOH",p.full,p.night,p.hrs,p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,(ex.notes||[]).join("; "),p.isOverride?"MANUAL":""]);});
-    kitchenStaff.forEach(k=>{const p=calcKitchenPay(k);const ex=getExtras(kId(k.id));rows.push([fmtRange(weekRange.start,weekRange.end),k.name,"Kitchen",p.full||"",p.night||"",p.hrs,p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,(ex.notes||[]).join("; "),p.isOverride?"MANUAL":""]);});
+    staff.forEach(s=>{const p=calcPay(s);const ex=getExtras(s.id);rows.push([fmtRangeExport(weekRange.start,weekRange.end),s.name,"FOH",p.full,p.night,p.hrs,s.rate||"0",s.shiftRate||"0",s.nightRate||"0",p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,(ex.notes||[]).join("; "),p.isOverride?"MANUAL":""]);});
+    kitchenStaff.forEach(k=>{const p=calcKitchenPay(k);const ex=getExtras(kId(k.id));rows.push([fmtRangeExport(weekRange.start,weekRange.end),k.name,"Kitchen",p.full||"",p.night||"",p.hrs,k.rate||"0",k.shiftRate||"0",k.nightRate||"0",p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,(ex.notes||[]).join("; "),p.isOverride?"MANUAL":""]);});
     return rows;
   }
   function buildPayrollWeekly(){
-    // Single current week only — header + one data row. Re-exporting simply
-    // overwrites this same row with fresh numbers, nothing accumulates.
-    const hdr=["Date Range","Cash Total (£)","Card Total (£)","Grand Total (£)","Avg £/Hour","Avg £/Full Shift","Avg £/Night Shift"];
+    // Header + single current-week row. Re-exporting overwrites this same row.
+    const hdr=["Date Range","Total Cash (£)","Total Card (£)","Total (£)"];
     const{cash,card,gross}=payTotals();
-    const allPeople=[...staff,...kitchenStaff];
-    const hourlyPeople=allPeople.filter(x=>(x.payType||"hourly")==="hourly");
-    const shiftPeople=allPeople.filter(x=>x.payType==="shift");
-    const avgHr=hourlyPeople.length?(hourlyPeople.reduce((a,x)=>a+parseFloat(x.rate||0),0)/hourlyPeople.length).toFixed(2):"0.00";
-    const avgFull=shiftPeople.length?(shiftPeople.reduce((a,x)=>a+parseFloat(x.shiftRate||0),0)/shiftPeople.length).toFixed(2):"0.00";
-    const avgNight=shiftPeople.length?(shiftPeople.reduce((a,x)=>a+parseFloat(x.nightRate||0),0)/shiftPeople.length).toFixed(2):"0.00";
-    return[hdr,[fmtRange(weekRange.start,weekRange.end),cash,card,gross,avgHr,avgFull,avgNight]];
+    return[hdr,[fmtRangeExport(weekRange.start,weekRange.end),cash,card,gross]];
   }
   function buildDailyForDate(date){
     const sub=takings.find(s=>s.date===date)||{};
     const dayExp=expenses.filter(e=>e.date===date);
     const total=TKFIELDS.reduce((s,f)=>s+parseFloat(sub[f.db]||0)*f.sign,0);
     const cashExp=dayExp.filter(e=>e.pay_type==="cash").reduce((s,e)=>s+e.amount,0);
-    return[[fmtDate(date),sub.deliveroo||0,sub.uber||0,sub.cash||0,sub.card||0,sub.online||0,sub.deposit_receipt||0,sub.voucher_redemption||0,sub.voucher_purchase||0,total.toFixed(2),(parseFloat(sub.cash||0)-cashExp).toFixed(2),(total-cashExp).toFixed(2),dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ")]];
+    const allExp=dayExp.reduce((s,e)=>s+e.amount,0);
+    // Cash in Hand only drops for expenses actually paid in cash; card-paid expenses
+    // don't touch cash in hand, but DO still reduce Net Total (the true bottom line).
+    const cashInHand=parseFloat(sub.cash||0)-cashExp;
+    const netTotal=total-allExp;
+    return[[fmtDate(date),sub.deliveroo||0,sub.uber||0,sub.cash||0,sub.card||0,sub.online||0,allExp.toFixed(2),sub.deposit_receipt||0,sub.voucher_redemption||0,sub.voucher_purchase||0,total.toFixed(2),cashInHand.toFixed(2),netTotal.toFixed(2),dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ")]];
   }
   function buildDaily(){
     const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
-    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Deposit Receipt","Voucher Redemption","Voucher Purchase","Total","Cash in Hand","Net Total","Expenses"];
+    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt","Voucher Redemption","Voucher Purchase","Total","Cash in Hand","Net Total","Expense Notes"];
     return[hdr,...dates.map(date=>buildDailyForDate(date)[0])];
   }
   function buildWeekly(){
     const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
     const wm={};dates.forEach(d=>{const{start}=payWeekOf(d);if(!wm[start])wm[start]=[];wm[start].push(d);});
-    const hdr=["Week (Sun–Sat)","Deliveroo","Uber Eats","Cash","Card","Online","Deposit Receipt","Voucher Redemption","Voucher Purchase","Total","Cash in Hand","Net Total"];
+    const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt","Voucher Redemption","Voucher Purchase","Total","Cash in Hand","Net Total"];
     const rows=[hdr];
     Object.entries(wm).sort().forEach(([ws,dates2])=>{
-      const{end}=payWeekOf(ws);let tot={};TKFIELDS.forEach(f=>tot[f.db]=0);let cashExp=0;
-      dates2.forEach(d=>{const sub=takings.find(s=>s.date===d);if(sub)TKFIELDS.forEach(f=>{tot[f.db]+=parseFloat(sub[f.db]||0);});cashExp+=expenses.filter(e=>e.date===d&&e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);});
+      const{end}=payWeekOf(ws);let tot={};TKFIELDS.forEach(f=>tot[f.db]=0);let cashExp=0;let allExp=0;
+      dates2.forEach(d=>{
+        const sub=takings.find(s=>s.date===d);
+        if(sub)TKFIELDS.forEach(f=>{tot[f.db]+=parseFloat(sub[f.db]||0);});
+        const dayExp=expenses.filter(e=>e.date===d);
+        cashExp+=dayExp.filter(e=>e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);
+        allExp+=dayExp.reduce((a,e)=>a+e.amount,0);
+      });
       const total=TKFIELDS.reduce((s,f)=>s+tot[f.db]*f.sign,0);
-      rows.push([fmtRange(ws,end),tot.deliveroo.toFixed(2),tot.uber.toFixed(2),tot.cash.toFixed(2),tot.card.toFixed(2),tot.online.toFixed(2),tot.deposit_receipt.toFixed(2),tot.voucher_redemption.toFixed(2),tot.voucher_purchase.toFixed(2),total.toFixed(2),(tot.cash-cashExp).toFixed(2),(total-cashExp).toFixed(2)]);
+      rows.push([fmtRangeExport(ws,end),tot.deliveroo.toFixed(2),tot.uber.toFixed(2),tot.cash.toFixed(2),tot.card.toFixed(2),tot.online.toFixed(2),allExp.toFixed(2),tot.deposit_receipt.toFixed(2),tot.voucher_redemption.toFixed(2),tot.voucher_purchase.toFixed(2),total.toFixed(2),(tot.cash-cashExp).toFixed(2),(total-allExp).toFixed(2)]);
     });
     return rows;
   }
@@ -1121,14 +1133,14 @@ function ManagerApp({onLogout}){
             {staff.map(s=>{
               const sLogsAll=clockLogs.filter(l=>l.staff_id===s.id);
               const sLogs=clockShowAll?sLogsAll:sLogsAll.filter(l=>l.date===clockDate);
-              const totalH=sLogs.reduce((a,l)=>a+roundHrsUp(parseHrs(l.time_in,l.time_out)),0);
+              const totalH=sLogs.reduce((a,l)=>a+parseHrs(l.time_in,l.time_out),0);
               return(
               <div key={s.id} className="card">
                 <div className="cname">👤 {s.name}</div><div className="csub" style={{marginBottom:10}}>{clockShowAll?"All time":dispDate(clockDate,true)} total: {totalH.toFixed(2)} hrs</div>
                 {sLogs.length===0&&<div style={{fontSize:12,color:"#ccc",fontStyle:"italic"}}>No records {clockShowAll?"yet":"for this date"}</div>}
                 {sLogs.map(l=>(
                   <div key={l.id} className="logentry">
-                    <div className="logtop"><span style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(l.date,true)}</span><span style={{fontSize:13,fontWeight:800,color:l.time_out?"#1A2744":"#50DC78"}}>{l.time_out?roundHrsUp(parseHrs(l.time_in,l.time_out)).toFixed(2)+"h":"active"}</span></div>
+                    <div className="logtop"><span style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(l.date,true)}</span><span style={{fontSize:13,fontWeight:800,color:l.time_out?"#1A2744":"#50DC78"}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(2)+"h":"active"}</span></div>
                     <div className="logedit"><span className="logelbl">In</span><input type="time" className="inp time" value={l.time_in||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v}:x));db.from("clock_logs").update({time_in:v}).eq("id",l.id);}}/><span className="logelbl">Out</span><input type="time" className="inp time" value={l.time_out||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v}:x));db.from("clock_logs").update({time_out:v}).eq("id",l.id);}}/></div>
                     <textarea className="lognote" rows={2} placeholder="Note…" value={l.note||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:v}:x));db.from("clock_logs").update({note:v}).eq("id",l.id);}}/>
                   </div>
