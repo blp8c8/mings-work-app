@@ -26,7 +26,25 @@ async function pushSheet(webAppUrl, spreadsheetId, tabName, rows) {
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) return { ok: false, err: data?.error || `Sheets sync failed (HTTP ${res.status})` };
     return { ok: true };
-  } catch (e) { return { ok: false, err: e.message }; }
+  } catch (e) {
+    // A bare "Failed to fetch" almost always means: wrong URL, deployment access
+    // isn't set to "Anyone", or the script wasn't redeployed after editing.
+    return { ok: false, err: "Could not reach the Sheets bridge. Check in ⚙️ Sheets: the Web App URL is correct (ends in /exec), access is set to \"Anyone\" (not \"Anyone with Google account\"), and you redeployed after any script changes." };
+  }
+}
+// Simple connectivity check used by the "Test Connection" button in Settings.
+async function testWebApp(webAppUrl) {
+  if (!webAppUrl) return { ok: false, err: "Enter a Web App URL first" };
+  try {
+    const res = await fetch(webAppUrl, { method: "GET" });
+    const text = await res.text();
+    let data; try { data = JSON.parse(text); } catch { data = null; }
+    if (data && data.ok) return { ok: true };
+    if (text.includes("accounts.google.com") || text.includes("ServiceLogin")) return { ok: false, err: "Google is asking to sign in — deployment access must be set to \"Anyone\", not \"Anyone with Google account\"." };
+    return { ok: false, err: `Unexpected response (HTTP ${res.status}) — check the URL ends in /exec and the script was deployed as a Web App.` };
+  } catch (e) {
+    return { ok: false, err: "Could not reach that URL at all. Double check it was copied correctly from the Deploy dialog." };
+  }
 }
 function copyTSV(rows, toast) {
   const tsv = rows.map(r => r.map(c => String(c ?? "")).join("\t")).join("\n");
@@ -412,6 +430,11 @@ function ManagerApp({onLogout}){
   const[gsConfig,setGsConfig]=useState({webAppUrl:"",payrollId:"",takingsId:""});
   // Add FOH staff from manager
   const[addStaffModal,setAddStaffModal]=useState(false);
+  const[cardWarning,setCardWarning]=useState(null); // {name, entered, total, focusId}
+  function checkCardWarning(name,entered,grossTotal,focusId){
+    const val=parseFloat(entered||0);
+    if(val>grossTotal+0.001){setCardWarning({name,entered:val.toFixed(2),total:grossTotal.toFixed(2),focusId});}
+  }
 
   const newCount=takings.filter(s=>s.is_new).length;
   function t(m){setMsg(m);setTimeout(()=>setMsg(""),3000);}
@@ -438,7 +461,7 @@ function ManagerApp({onLogout}){
     setStaff((staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardMode:s.card_mode||"fixed"})));
     setAbsences(absR.data||[]);setClockLogs(logR.data||[]);setRejections(rejR.data||[]);
     setTakings(takR.data||[]);setExpenses(expR.data||[]);
-    setKitchenStaff((kitR.data||[]).map(k=>({...k,payType:k.pay_type||"hourly",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0"})));
+    setKitchenStaff((kitR.data||[]).map(k=>({...k,payType:k.pay_type||"hourly",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0",cardMode:k.card_mode||"fixed",cardFixed:k.card_fixed||"0"})));
     setTodayOverride(ovR.data?.staff_id||null);
     const dd={};(defR.data||[]).forEach(r=>{dd[r.day_of_week]=r.staff_id;});setTakingDefaults(dd);
     const em={};
@@ -515,6 +538,19 @@ function ManagerApp({onLogout}){
   }
 
   // ── Pay calculations ──
+  // Shared card-split logic for FOH and kitchen. Never silently invents money:
+  // if a fixed card amount is bigger than what was actually earned, we flag it
+  // (cardExceeds) instead of quietly capping it and moving on — the manager
+  // must be shown a warning and correct the fixed amount themselves.
+  function splitCard(mode,fixedAmt,total){
+    if(mode==="cash")return{cardAmt:0,cashAmt:total,exceeds:false};
+    if(mode==="card")return{cardAmt:total,cashAmt:0,exceeds:false};
+    const fixed=parseFloat(fixedAmt||0);
+    const exceeds=fixed>total+0.001; // small epsilon for float rounding
+    const cardAmt=exceeds?total:fixed; // still can't show more card than was earned
+    return{cardAmt,cashAmt:Math.max(0,total-cardAmt),exceeds};
+  }
+
   function calcPay(s){
     const myRota=rota[s.id]||[];const logsInRange=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=weekRange.start&&l.date<=weekRange.end);
     const ex=getExtras(s.id);
@@ -526,18 +562,14 @@ function ManagerApp({onLogout}){
     const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const base=s.payType==="hourly"?hrs*parseFloat(s.rate||0):full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
     const calcTotal=Math.max(0,base+tips+addT-dedT);
-    // Card mode: "cash" = all cash, "card" = all card, "fixed" (default) = fixed £ by card, rest cash.
-    // A fixed card amount can never exceed what was actually earned that week.
     const cardMode=s.cardMode||"fixed";
-    let calcCard,calcCash;
-    if(cardMode==="cash"){calcCard=0;calcCash=calcTotal;}
-    else if(cardMode==="card"){calcCard=calcTotal;calcCash=0;}
-    else{calcCard=Math.min(parseFloat(s.cardFixed||0),calcTotal);calcCash=Math.max(0,calcTotal-calcCard);}
-    // Manual overwrite takes priority over everything above
-    const total=ex.manualTotal&&ex.manualTotal!==""?parseFloat(ex.manualTotal):calcTotal;
+    const{cardAmt:calcCard,cashAmt:calcCash,exceeds}=splitCard(cardMode,s.cardFixed,calcTotal);
+    // Manual overwrite takes priority over everything above (and clears the warning)
+    const isOverride=!!(ex.manualTotal&&ex.manualTotal!=="");
+    const total=isOverride?parseFloat(ex.manualTotal):calcTotal;
     const cardAmt=ex.manualCard&&ex.manualCard!==""?parseFloat(ex.manualCard):calcCard;
     const cashAmt=ex.manualCash&&ex.manualCash!==""?parseFloat(ex.manualCash):calcCash;
-    return{full,night,hrs:typeof hrs==="number"?hrs.toFixed(2):hrs,base:base.toFixed(2),tips:tips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:total.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride:!!(ex.manualTotal&&ex.manualTotal!=="")};
+    return{full,night,hrs:typeof hrs==="number"?hrs.toFixed(2):hrs,base:base.toFixed(2),tips:tips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:total.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride,grossTotal:calcTotal,cardExceeds:!isOverride&&cardMode==="fixed"&&exceeds};
   }
 
   function calcKitchenPay(k){
@@ -551,11 +583,13 @@ function ManagerApp({onLogout}){
     const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const base=(k.payType||"hourly")==="hourly"?hrs*parseFloat(k.rate||0):full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0);
     const calcTotal=Math.max(0,base+tips+addT-dedT);
-    const total=ex.manualTotal&&ex.manualTotal!==""?parseFloat(ex.manualTotal):calcTotal;
-    // kitchen card is fixed from cash_card setting — if card, full amount is card
-    const cardAmt=ex.manualCard&&ex.manualCard!==""?parseFloat(ex.manualCard):(k.cash_card==="card"?total:0);
-    const cashAmt=ex.manualCash&&ex.manualCash!==""?parseFloat(ex.manualCash):Math.max(0,total-cardAmt);
-    return{hrs:hrs.toFixed(2),full,night,base:base.toFixed(2),tips:tips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:total.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride:!!(ex.manualTotal&&ex.manualTotal!=="")};
+    const cardMode=k.cardMode||"fixed";
+    const{cardAmt:calcCard,cashAmt:calcCash,exceeds}=splitCard(cardMode,k.cardFixed,calcTotal);
+    const isOverride=!!(ex.manualTotal&&ex.manualTotal!=="");
+    const total=isOverride?parseFloat(ex.manualTotal):calcTotal;
+    const cardAmt=ex.manualCard&&ex.manualCard!==""?parseFloat(ex.manualCard):calcCard;
+    const cashAmt=ex.manualCash&&ex.manualCash!==""?parseFloat(ex.manualCash):calcCash;
+    return{hrs:hrs.toFixed(2),full,night,base:base.toFixed(2),tips:tips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:total.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride,grossTotal:calcTotal,cardExceeds:!isOverride&&cardMode==="fixed"&&exceeds};
   }
 
   function payTotals(){
@@ -568,8 +602,8 @@ function ManagerApp({onLogout}){
   // ── Kitchen ──
   async function addKitchen(){
     if(!newKName.trim())return t("Please enter a name");
-    const{data,error}=await db.from("kitchen_staff").insert({name:newKName.trim(),cash_card:"cash",pay_type:"hourly",shift_rate:"0",night_rate:"0",rate:"0"}).select().single();
-    if(!error){setKitchenStaff(p=>[...p,{...data,payType:"hourly",shiftRate:"0",nightRate:"0"}]);setNewKName("");t("✅ "+data.name+" added");}
+    const{data,error}=await db.from("kitchen_staff").insert({name:newKName.trim(),cash_card:"cash",pay_type:"hourly",shift_rate:"0",night_rate:"0",rate:"0",card_mode:"fixed",card_fixed:"0"}).select().single();
+    if(!error){setKitchenStaff(p=>[...p,{...data,payType:"hourly",shiftRate:"0",nightRate:"0",cardMode:"fixed",cardFixed:"0"}]);setNewKName("");t("✅ "+data.name+" added");}
     else t("❌ "+error.message);
   }
   async function updKitchenField(id,field,val){
@@ -764,24 +798,33 @@ function ManagerApp({onLogout}){
             </div>
           </div>
           <div className="divider"/>
-          {/* Card payment mode — editable directly in payroll */}
-          {!isKitchen&&(
-            <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
-              <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>CARD PAYMENT</div>
-              <div className="toggle" style={{marginBottom:cardMode==="fixed"?10:0,width:"100%"}}>
-                <button className={`tgl${cardMode==="fixed"?" on":""}`} style={{flex:1}} onClick={async()=>{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"fixed"}:x));await db.from("staff").update({card_mode:"fixed"}).eq("id",staffId);}}>Fixed £</button>
-                <button className={`tgl${cardMode==="cash"?" on":""}`} style={{flex:1}} onClick={async()=>{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"cash"}:x));await db.from("staff").update({card_mode:"cash"}).eq("id",staffId);}}>All Cash</button>
-                <button className={`tgl${cardMode==="card"?" on":""}`} style={{flex:1}} onClick={async()=>{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"card"}:x));await db.from("staff").update({card_mode:"card"}).eq("id",staffId);}}>All Card</button>
-              </div>
-              {cardMode==="fixed"&&(
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <span style={{fontSize:12,color:"#555"}}>Fixed card amount (£)</span>
-                  <input type="number" className="mini" min="0" placeholder="0.00" value={localCardFixed} onChange={e=>setLocalCardFixed(e.target.value)} onBlur={async e=>{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardFixed:e.target.value}:x));await db.from("staff").update({card_fixed:e.target.value}).eq("id",staffId);}}/>
-                </div>
-              )}
-              <div style={{fontSize:10,color:"#aaa",marginTop:6}}>{cardMode==="fixed"?"Card never exceeds what was earned — rest is cash":cardMode==="cash"?"Entire amount paid in cash":"Entire amount paid by card"}</div>
+          {/* Card payment mode — editable directly in payroll, same for FOH and kitchen */}
+          {p.cardExceeds&&(
+            <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+              <div style={{fontSize:12,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Fixed card amount is more than was earned</div>
+              <div style={{fontSize:11,color:"#991B1B",marginBottom:8}}>Fixed at £{parseFloat(cardFixed||0).toFixed(2)} but only £{p.grossTotal.toFixed(2)} was earned this week. Please correct the amount below.</div>
+              <button className="btn danger" style={{marginTop:0,padding:"7px"}} onClick={()=>{const el=document.getElementById(isKitchen?`cf-pk-${kitchenId}`:`cf-ps-${staffId}`);el?.focus();el?.scrollIntoView({behavior:"smooth",block:"center"});}}>Edit Fixed Amount</button>
             </div>
           )}
+          <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>CARD PAYMENT</div>
+            <div className="toggle" style={{marginBottom:cardMode==="fixed"?10:0,width:"100%"}}>
+              <button className={`tgl${cardMode==="fixed"?" on":""}`} style={{flex:1}} onClick={async()=>{if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardMode:"fixed"}:x));await db.from("kitchen_staff").update({card_mode:"fixed"}).eq("id",kitchenId);}else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"fixed"}:x));await db.from("staff").update({card_mode:"fixed"}).eq("id",staffId);}}}>Fixed £</button>
+              <button className={`tgl${cardMode==="cash"?" on":""}`} style={{flex:1}} onClick={async()=>{if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardMode:"cash"}:x));await db.from("kitchen_staff").update({card_mode:"cash"}).eq("id",kitchenId);}else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"cash"}:x));await db.from("staff").update({card_mode:"cash"}).eq("id",staffId);}}}>All Cash</button>
+              <button className={`tgl${cardMode==="card"?" on":""}`} style={{flex:1}} onClick={async()=>{if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardMode:"card"}:x));await db.from("kitchen_staff").update({card_mode:"card"}).eq("id",kitchenId);}else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"card"}:x));await db.from("staff").update({card_mode:"card"}).eq("id",staffId);}}}>All Card</button>
+            </div>
+            {cardMode==="fixed"&&(
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:12,color:"#555"}}>Fixed card amount (£)</span>
+                <input id={isKitchen?`cf-pk-${kitchenId}`:`cf-ps-${staffId}`} type="number" className="mini" min="0" placeholder="0.00" value={localCardFixed} onChange={e=>setLocalCardFixed(e.target.value)} onBlur={async e=>{
+                  checkCardWarning(name,e.target.value,p.grossTotal,isKitchen?`cf-pk-${kitchenId}`:`cf-ps-${staffId}`);
+                  if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardFixed:e.target.value}:x));await db.from("kitchen_staff").update({card_fixed:e.target.value}).eq("id",kitchenId);}
+                  else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardFixed:e.target.value}:x));await db.from("staff").update({card_fixed:e.target.value}).eq("id",staffId);}
+                }}/>
+              </div>
+            )}
+            <div style={{fontSize:10,color:"#aaa",marginTop:6}}>{cardMode==="fixed"?"Card never exceeds what was earned — rest is cash":cardMode==="cash"?"Entire amount paid in cash":"Entire amount paid by card"}</div>
+          </div>
           <div className="row"><span>💵 Cash</span><span className="rowb">£{p.cashAmt}</span></div>
           <div className="row"><span>💳 Card</span><span className="rowb">£{p.cardAmt}</span></div>
           <div className="row"><span style={{fontWeight:800}}>Total</span><span style={{fontWeight:900,color:"#F5A623",fontSize:15}}>£{p.total}</span></div>
@@ -837,9 +880,10 @@ function ManagerApp({onLogout}){
   }
 
   function SettingsModal({onClose}){
-    const[webAppUrl,setWebAppUrl]=useState(gsConfig.webAppUrl||"");const[payrollId,setPayrollId]=useState(gsConfig.payrollId||"");const[takingsId,setTakingsId]=useState(gsConfig.takingsId||"");const[saving,setSaving]=useState(false);const[showScript,setShowScript]=useState(false);
+    const[webAppUrl,setWebAppUrl]=useState(gsConfig.webAppUrl||"");const[payrollId,setPayrollId]=useState(gsConfig.payrollId||"");const[takingsId,setTakingsId]=useState(gsConfig.takingsId||"");const[saving,setSaving]=useState(false);const[showScript,setShowScript]=useState(false);const[testing,setTesting]=useState(false);const[testResult,setTestResult]=useState(null);
     async function save(){setSaving(true);await saveGsConfig({webAppUrl,payrollId,takingsId});setSaving(false);onClose();}
-    const scriptCode=`function doPost(e) {\n  try {\n    var body = JSON.parse(e.postData.contents);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    sheet.clearContents();\n    if (body.rows && body.rows.length > 0) {\n      sheet.getRange(1, 1, body.rows.length, body.rows[0].length).setValues(body.rows);\n    }\n    return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message})).setMimeType(ContentService.MimeType.JSON);\n  }\n}`;
+    async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(webAppUrl);setTestResult(r);setTesting(false);}
+    const scriptCode=`function doGet(e) {\n  return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doPost(e) {\n  try {\n    var body = JSON.parse(e.postData.contents);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    sheet.clearContents();\n    if (body.rows && body.rows.length > 0) {\n      sheet.getRange(1, 1, body.rows.length, body.rows[0].length).setValues(body.rows);\n    }\n    return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message})).setMimeType(ContentService.MimeType.JSON);\n  }\n}`;
     return(<div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">🔗 Google Sheets</div><div className="ssub2">Saved permanently in Supabase — set once, never lost</div>
       <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:10,padding:"10px 12px",fontSize:12,color:"#7F1D1D",marginBottom:14,lineHeight:1.6}}>
         <strong>Important:</strong> Google no longer allows a simple API key to write to Sheets (only to read). Instead this app talks to a tiny free script that runs on your own Google account — a "Web App". You only set this up once, it takes about 3 minutes.
@@ -849,17 +893,28 @@ function ManagerApp({onLogout}){
         <div style={{background:"#F7F4EF",borderRadius:10,padding:"12px 13px",fontSize:12,color:"#444",marginBottom:14,lineHeight:1.8}}>
           <strong>Step 1</strong> — Go to <strong>script.google.com</strong> → click <strong>New project</strong><br/>
           <strong>Step 2</strong> — Delete anything in the editor, paste in this code:
-          <textarea readOnly className="lognote" rows={10} style={{fontFamily:"monospace",fontSize:10,marginTop:6,marginBottom:6,background:"#fff"}} value={scriptCode} onClick={e=>e.target.select()}/>
+          <textarea readOnly className="lognote" rows={12} style={{fontFamily:"monospace",fontSize:10,marginTop:6,marginBottom:6,background:"#fff"}} value={scriptCode} onClick={e=>e.target.select()}/>
           <button className="btn sm" style={{marginBottom:10}} onClick={()=>{navigator.clipboard.writeText(scriptCode);t("📋 Script copied!");}}>📋 Copy Script</button><br/>
           <strong>Step 3</strong> — Click <strong>Deploy</strong> (top right) → <strong>New deployment</strong><br/>
           <strong>Step 4</strong> — Click the gear ⚙️ next to "Select type" → choose <strong>Web app</strong><br/>
-          <strong>Step 5</strong> — Set "Execute as" = <strong>Me</strong>, "Who has access" = <strong>Anyone</strong> → click <strong>Deploy</strong><br/>
-          <strong>Step 6</strong> — It will ask to authorize — click through and allow it (this is your own script, on your own account)<br/>
-          <strong>Step 7</strong> — Copy the <strong>Web app URL</strong> it gives you (ends in <strong>/exec</strong>) and paste it below<br/>
-          <strong>Step 8</strong> — Make sure both your Google Sheets are set to <strong>"Anyone with the link can edit"</strong>
+          <div style={{background:"#FEE2E2",border:"1px solid #E05252",borderRadius:8,padding:"8px 10px",margin:"6px 0"}}>
+            <strong>Step 5 — the step people get wrong:</strong> Set "Execute as" = <strong>Me</strong>. Set "Who has access" = <strong>Anyone</strong> — NOT "Anyone with Google account". Picking the wrong one makes it ask for a Google sign-in and the app can't reach it.
+          </div>
+          <strong>Step 6</strong> — Click <strong>Deploy</strong> — it will ask to authorize, click through and allow it (this is your own script on your own account)<br/>
+          <strong>Step 7</strong> — Copy the <strong>Web app URL</strong> it gives you — it must end in <strong>/exec</strong> (not /dev) — and paste it below<br/>
+          <strong>Step 8</strong> — Make sure both your Google Sheets are set to <strong>"Anyone with the link can edit"</strong><br/>
+          <div style={{background:"#FFF8EC",border:"1px solid #F5A623",borderRadius:8,padding:"8px 10px",marginTop:6}}>
+            <strong>If you ever edit the script later:</strong> you must go to Deploy → Manage deployments → ✏️ edit → Version: <strong>New version</strong> → Deploy again, or your changes won't take effect.
+          </div>
         </div>
       )}
-      <label className="lbl">Web App URL</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} placeholder="https://script.google.com/macros/s/…/exec" value={webAppUrl} onChange={e=>setWebAppUrl(e.target.value)}/>
+      <label className="lbl">Web App URL</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:8}} placeholder="https://script.google.com/macros/s/…/exec" value={webAppUrl} onChange={e=>{setWebAppUrl(e.target.value);setTestResult(null);}}/>
+      <button className="btn sec" style={{marginTop:0,marginBottom:14}} onClick={runTest} disabled={testing||!webAppUrl}>{testing?"Testing…":"🔍 Test Connection"}</button>
+      {testResult&&(
+        <div style={{background:testResult.ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${testResult.ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:12,color:testResult.ok?"#065F46":"#7F1D1D"}}>
+          {testResult.ok?"✅ Connected! The script is reachable and working.":`❌ ${testResult.err}`}
+        </div>
+      )}
       <label className="lbl">Payroll Spreadsheet ID</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} placeholder="1Wj0EH…" value={payrollId} onChange={e=>setPayrollId(e.target.value)}/>
       <label className="lbl">Takings Spreadsheet ID</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} placeholder="1K-UMB…" value={takingsId} onChange={e=>setTakingsId(e.target.value)}/>
       <div style={{fontSize:11,color:"#aaa",marginBottom:10}}>The Spreadsheet ID is the long code in the sheet's URL between <strong>/d/</strong> and <strong>/edit</strong>.</div>
@@ -941,7 +996,7 @@ function ManagerApp({onLogout}){
                   {(s.cardMode||"fixed")==="fixed"&&(
                     <div style={{marginBottom:4}}>
                       <div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>FIXED CARD AMOUNT (£) <span style={{fontWeight:400}}>— rest is cash, never exceeds what's earned</span></div>
-                      <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={s.cardFixed||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,cardFixed:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({card_fixed:e.target.value}).eq("id",s.id);t(`${s.name} card amount saved`);}}/>
+                      <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={s.cardFixed||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,cardFixed:e.target.value}:x))} onBlur={async e=>{checkCardWarning(s.name,e.target.value,calcPay(s).grossTotal,`cf-s-${s.id}`);await db.from("staff").update({card_fixed:e.target.value}).eq("id",s.id);t(`${s.name} card amount saved`);}} id={`cf-s-${s.id}`}/>
                     </div>
                   )}
 
@@ -975,10 +1030,18 @@ function ManagerApp({onLogout}){
                   <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>FULL SHIFT £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.shiftRate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,shiftRate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"shift_rate",e.target.value)}/></div>
                   <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>NIGHT £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.nightRate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,nightRate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"night_rate",e.target.value)}/></div>
                 </div>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div style={{fontSize:11,color:"#888",fontWeight:700}}>Pay by:</div>
-                  <div className="toggle">{["cash","card"].map(c=><button key={c} className={`tgl${k.cash_card===c?" on":""}`} onClick={()=>updKitchenField(k.id,"cash_card",c)}>{c==="cash"?"💵":"💳"} {c}</button>)}</div>
+                <label className="lbl" style={{marginTop:12}}>Card Payment</label>
+                <div className="toggle" style={{marginBottom:10,width:"100%"}}>
+                  <button className={`tgl${(k.cardMode||"fixed")==="fixed"?" on":""}`} style={{flex:1}} onClick={()=>{updKitchenField(k.id,"card_mode","fixed");setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,cardMode:"fixed"}:x));}}>Fixed £</button>
+                  <button className={`tgl${k.cardMode==="cash"?" on":""}`} style={{flex:1}} onClick={()=>{updKitchenField(k.id,"card_mode","cash");setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,cardMode:"cash"}:x));}}>All Cash</button>
+                  <button className={`tgl${k.cardMode==="card"?" on":""}`} style={{flex:1}} onClick={()=>{updKitchenField(k.id,"card_mode","card");setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,cardMode:"card"}:x));}}>All Card</button>
                 </div>
+                {(k.cardMode||"fixed")==="fixed"&&(
+                  <div style={{marginBottom:4}}>
+                    <div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>FIXED CARD AMOUNT (£) <span style={{fontWeight:400}}>— rest is cash, never exceeds what's earned</span></div>
+                    <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.cardFixed||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,cardFixed:e.target.value}:x))} onBlur={e=>{checkCardWarning(k.name,e.target.value,calcKitchenPay(k).grossTotal,`cf-k-${k.id}`);updKitchenField(k.id,"card_fixed",e.target.value);}} id={`cf-k-${k.id}`}/>
+                  </div>
+                )}
               </div>
             ))}
             <div style={{background:"#F7F4EF",borderRadius:12,padding:"12px 14px",fontSize:12,color:"#888",lineHeight:1.6,marginTop:8}}>
@@ -1058,7 +1121,7 @@ function ManagerApp({onLogout}){
               <button className="btn sm navy" onClick={addKitchen}>Add</button>
             </div>
             {kitchenStaff.length===0&&<div style={{fontSize:13,color:"#ccc",marginBottom:10,fontStyle:"italic"}}>No kitchen staff yet — add via Staff tab</div>}
-            {kitchenStaff.map(k=><PayrollCard key={k.id} name={k.name} icon="👨‍🍳" sid={kId(k.id)} payType={k.payType||"hourly"} rate={k.rate} shiftRate={k.shiftRate} nightRate={k.nightRate} calcFn={()=>calcKitchenPay(k)} isKitchen={true} kitchenId={k.id}/>)}
+            {kitchenStaff.map(k=><PayrollCard key={k.id} name={k.name} icon="👨‍🍳" sid={kId(k.id)} payType={k.payType||"hourly"} rate={k.rate} shiftRate={k.shiftRate} nightRate={k.nightRate} calcFn={()=>calcKitchenPay(k)} isKitchen={true} kitchenId={k.id} cardMode={k.cardMode||"fixed"} cardFixed={k.cardFixed}/>)}
             <div className="psum">
               <div className="psumtitle">Week Summary — {fmtRange(weekRange.start,weekRange.end)}</div>
               <div className="psumrow"><span>💵 Total Cash</span><span className="psumamt">£{totCash}</span></div>
@@ -1109,6 +1172,23 @@ function ManagerApp({onLogout}){
       {addStaffModal&&<AddStaffModal onClose={()=>setAddStaffModal(false)}/>}
       {pinModal&&<PinModal onClose={()=>setPinModal(false)}/>}
       {settingsModal&&<SettingsModal onClose={()=>setSettingsModal(false)}/>}
+
+      {cardWarning&&(
+        <div className="overlay" onClick={()=>setCardWarning(null)}>
+          <div className="sheet" onClick={e=>e.stopPropagation()}>
+            <div className="stitle">⚠️ Card Amount Too High</div>
+            <div className="ssub2">{cardWarning.name}'s fixed card payment is more than they earned</div>
+            <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:10,padding:"12px 14px",marginBottom:16}}>
+              <div style={{fontSize:13,color:"#7F1D1D",lineHeight:1.7}}>
+                You entered a fixed card amount of <strong>£{cardWarning.entered}</strong>, but {cardWarning.name} only earned <strong>£{cardWarning.total}</strong> this week.<br/><br/>
+                Please go back and correct the fixed amount — it should never be more than the total earned.
+              </div>
+            </div>
+            <button className="btn" onClick={()=>{const el=document.getElementById(cardWarning.focusId);setCardWarning(null);setTimeout(()=>{el?.focus();el?.select?.();el?.scrollIntoView({behavior:"smooth",block:"center"});},50);}}>Edit Fixed Amount Now</button>
+            <button className="btn sec" onClick={()=>setCardWarning(null)}>Dismiss</button>
+          </div>
+        </div>
+      )}
 
       {cashPopup&&<div className="overlay" onClick={()=>setCashPopup(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">💵 Cash Payments</div><div className="ssub2">{fmtRange(weekRange.start,weekRange.end)}</div>{staff.filter(s=>parseFloat(calcPay(s).cashAmt)>0).map(s=>{const p=calcPay(s);return<div key={s.id} className="cashrow"><span className="cashname">{s.name}</span><span className="cashamt">£{p.cashAmt}</span></div>;})}  {kitchenStaff.filter(k=>parseFloat(calcKitchenPay(k).cashAmt)>0).map(k=>{const p=calcKitchenPay(k);return<div key={k.id} className="cashrow"><span className="cashname">👨‍🍳 {k.name}</span><span className="cashamt">£{p.cashAmt}</span></div>;})} <div style={{borderTop:"2px solid #F0F0F0",marginTop:10,paddingTop:10,display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:800,color:"#1A2744"}}><span>Total Cash Out</span><span>£{totCash}</span></div><button className="btn sec" style={{marginTop:14}} onClick={()=>setCashPopup(false)}>Close</button></div></div>}
       {shareModal&&<div className="overlay" onClick={()=>setShareModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">📤 Share Rota</div><div className="ssub2">{staff.find(s=>s.id===shareModal)?.name}</div><textarea className="lognote" rows={12} readOnly style={{fontFamily:"monospace",fontSize:12,background:"#F7F4EF"}} value={buildRotaText(shareModal)}/><button className="btn" style={{marginTop:12}} onClick={()=>{navigator.clipboard.writeText(buildRotaText(shareModal)).then(()=>t("📋 Copied!"));setShareModal(null);}}>📋 Copy</button><button className="btn sec" onClick={()=>setShareModal(null)}>Close</button></div></div>}
