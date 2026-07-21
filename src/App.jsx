@@ -9,16 +9,22 @@ const db = createClient(
 );
 
 // ─── Google Sheets ───────────────────────────────────────────────────
-async function pushSheet(apiKey, sheetId, tabName, rows) {
-  if (!apiKey || !sheetId) return { ok: false, err: "Google Sheets not configured — tap ⚙️ Sheets" };
+// Google Sheets WRITES require OAuth2 — a plain API key can only read public
+// sheets, never write (Google rejects it with "API keys are not supported by
+// this API"). The supported no-backend workaround is a small Google Apps
+// Script "Web App" that runs under the sheet owner's own permissions and
+// accepts a simple POST from the browser. See the ⚙️ Sheets settings screen
+// in the app for the exact script to paste in and how to deploy it.
+async function pushSheet(webAppUrl, spreadsheetId, tabName, rows) {
+  if (!webAppUrl || !spreadsheetId) return { ok: false, err: "Google Sheets not configured — tap ⚙️ Sheets" };
   try {
-    const base = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}`;
-    await fetch(`${base}/values/${encodeURIComponent(tabName + "!A1:Z2000")}:clear?key=${apiKey}`, { method: "POST" });
-    const res = await fetch(
-      `${base}/values/${encodeURIComponent(tabName + "!A1")}?valueInputOption=USER_ENTERED&key=${apiKey}`,
-      { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ values: rows }) }
-    );
-    if (!res.ok) { const e = await res.json(); return { ok: false, err: e.error?.message || "Sheets API error" }; }
+    const res = await fetch(webAppUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids CORS preflight, which Apps Script doesn't handle
+      body: JSON.stringify({ spreadsheetId, tab: tabName, rows })
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.ok === false) return { ok: false, err: data?.error || `Sheets sync failed (HTTP ${res.status})` };
     return { ok: true };
   } catch (e) { return { ok: false, err: e.message }; }
 }
@@ -279,7 +285,7 @@ function StaffRegister({onBack,onRegister}){
     if(!/^\d{8}$/.test(code))return setErr("Code must be exactly 8 digits");
     if(code!==confirm)return setErr("Codes don't match");
     setSaving(true);
-    const{error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:"hourly",rate:"0",shift_rate:"0",night_rate:"0",card_fixed:"0",card_override:"0"});
+    const{error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:"hourly",rate:"0",shift_rate:"0",night_rate:"0",card_fixed:"0",card_mode:"fixed"});
     if(error){setSaving(false);return setErr(error.code==="23505"?"That code is already taken":"Error: "+error.message);}
     onRegister({id:code,name:name.trim(),code});
   }
@@ -396,7 +402,6 @@ function ManagerApp({onLogout}){
   const[todayOverride,setTodayOverride]=useState(null);
   const[weekRange,setWeekRange]=useState(()=>payWeekOf(todayISO()));
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
-  const[setupModal,setSetupModal]=useState(null);
   const[cashPopup,setCashPopup]=useState(false);
   const[pinModal,setPinModal]=useState(false);
   const[settingsModal,setSettingsModal]=useState(false);
@@ -404,7 +409,7 @@ function ManagerApp({onLogout}){
   const[shareModal,setShareModal]=useState(null);
   const[newKName,setNewKName]=useState("");
   const[absStaff,setAbsStaff]=useState("");const[absDate,setAbsDate]=useState("");const[absPeriod,setAbsPeriod]=useState("");
-  const[gsConfig,setGsConfig]=useState({apiKey:"",payrollId:"",takingsId:""});
+  const[gsConfig,setGsConfig]=useState({webAppUrl:"",payrollId:"",takingsId:""});
   // Add FOH staff from manager
   const[addStaffModal,setAddStaffModal]=useState(false);
 
@@ -428,9 +433,9 @@ function ManagerApp({onLogout}){
       db.from("takings_defaults").select("*"),
       db.from("takings_assignment").select("staff_id").eq("date",todayISO()).maybeSingle(),
       db.from("payroll_extras").select("*"),
-      db.from("app_settings").select("key,value").in("key",["gs_api_key","gs_payroll_id","gs_takings_id","manager_pin"]),
+      db.from("app_settings").select("key,value").in("key",["gs_webapp_url","gs_payroll_id","gs_takings_id","manager_pin"]),
     ]);
-    setStaff((staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardOverride:s.card_override||"0"})));
+    setStaff((staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardMode:s.card_mode||"fixed"})));
     setAbsences(absR.data||[]);setClockLogs(logR.data||[]);setRejections(rejR.data||[]);
     setTakings(takR.data||[]);setExpenses(expR.data||[]);
     setKitchenStaff((kitR.data||[]).map(k=>({...k,payType:k.pay_type||"hourly",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0"})));
@@ -440,7 +445,7 @@ function ManagerApp({onLogout}){
     (extR.data||[]).forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",id:e.id,ws:e.week_start};});
     setExtras(em);
     const gsRows=gsR.data||[];
-    setGsConfig({apiKey:gsRows.find(r=>r.key==="gs_api_key")?.value||"",payrollId:gsRows.find(r=>r.key==="gs_payroll_id")?.value||"",takingsId:gsRows.find(r=>r.key==="gs_takings_id")?.value||""});
+    setGsConfig({webAppUrl:gsRows.find(r=>r.key==="gs_webapp_url")?.value||"",payrollId:gsRows.find(r=>r.key==="gs_payroll_id")?.value||"",takingsId:gsRows.find(r=>r.key==="gs_takings_id")?.value||""});
     setLoading(false);
   }
 
@@ -460,7 +465,7 @@ function ManagerApp({onLogout}){
 
   async function saveGsConfig(cfg){
     setGsConfig(cfg);
-    for(const[key,value]of[["gs_api_key",cfg.apiKey],["gs_payroll_id",cfg.payrollId],["gs_takings_id",cfg.takingsId]]){
+    for(const[key,value]of[["gs_webapp_url",cfg.webAppUrl],["gs_payroll_id",cfg.payrollId],["gs_takings_id",cfg.takingsId]]){
       await db.from("app_settings").upsert({key,value});
     }
     t("✅ Google Sheets config saved!");
@@ -521,9 +526,14 @@ function ManagerApp({onLogout}){
     const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const base=s.payType==="hourly"?hrs*parseFloat(s.rate||0):full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
     const calcTotal=Math.max(0,base+tips+addT-dedT);
-    const calcCard=parseFloat(s.cardOverride&&s.cardOverride!=="0"?s.cardOverride:s.cardFixed||0);
-    const calcCash=Math.max(0,calcTotal-calcCard);
-    // Manual overwrite takes priority
+    // Card mode: "cash" = all cash, "card" = all card, "fixed" (default) = fixed £ by card, rest cash.
+    // A fixed card amount can never exceed what was actually earned that week.
+    const cardMode=s.cardMode||"fixed";
+    let calcCard,calcCash;
+    if(cardMode==="cash"){calcCard=0;calcCash=calcTotal;}
+    else if(cardMode==="card"){calcCard=calcTotal;calcCash=0;}
+    else{calcCard=Math.min(parseFloat(s.cardFixed||0),calcTotal);calcCash=Math.max(0,calcTotal-calcCard);}
+    // Manual overwrite takes priority over everything above
     const total=ex.manualTotal&&ex.manualTotal!==""?parseFloat(ex.manualTotal):calcTotal;
     const cardAmt=ex.manualCard&&ex.manualCard!==""?parseFloat(ex.manualCard):calcCard;
     const cashAmt=ex.manualCash&&ex.manualCash!==""?parseFloat(ex.manualCash):calcCash;
@@ -609,11 +619,11 @@ function ManagerApp({onLogout}){
 
   // ── Auto-push single day to Daily sheet ──
   async function autoPushDay(date){
-    if(!gsConfig.apiKey||!gsConfig.takingsId)return;
+    if(!gsConfig.webAppUrl||!gsConfig.takingsId)return;
     const dayRows=buildDailyForDate(date);
     // Append to daily by rebuilding full sheet
     const allRows=buildDaily();
-    await pushSheet(gsConfig.apiKey,gsConfig.takingsId,"Daily",allRows);
+    await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",allRows);
   }
 
   // ── Export builders ──
@@ -662,21 +672,21 @@ function ManagerApp({onLogout}){
   }
 
   async function exportPayroll(){
-    if(!gsConfig.apiKey||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
+    if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
     t("⏳ Pushing Payroll tab…");
-    const r1=await pushSheet(gsConfig.apiKey,gsConfig.payrollId,"Payroll",buildPayroll());
+    const r1=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"Payroll",buildPayroll());
     if(!r1.ok){t("❌ "+r1.err);return;}
     t("⏳ Pushing PayrollWeekly tab…");
-    const r2=await pushSheet(gsConfig.apiKey,gsConfig.payrollId,"PayrollWeekly",buildPayrollWeekly());
+    const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollWeekly",buildPayrollWeekly());
     t(r2.ok?"✅ Payroll & Weekly tabs updated!":"❌ "+r2.err);
   }
   async function exportTakings(){
-    if(!gsConfig.apiKey||!gsConfig.takingsId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
+    if(!gsConfig.webAppUrl||!gsConfig.takingsId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
     t("⏳ Updating Daily tab…");
-    const r1=await pushSheet(gsConfig.apiKey,gsConfig.takingsId,"Daily",buildDaily());
+    const r1=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",buildDaily());
     if(!r1.ok){t("❌ "+r1.err);return;}
     t("⏳ Updating Weekly tab…");
-    const r2=await pushSheet(gsConfig.apiKey,gsConfig.takingsId,"Weekly",buildWeekly());
+    const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Weekly",buildWeekly());
     t(r2.ok?"✅ Takings sheets updated!":"❌ "+r2.err);
   }
 
@@ -719,9 +729,11 @@ function ManagerApp({onLogout}){
   }
 
   // ── Payroll card (shared for FOH and kitchen) ──
-  function PayrollCard({name,icon,sid,payType,rate,shiftRate,nightRate,calcFn,isKitchen,kitchenId}){
+  function PayrollCard({name,icon,sid,payType,rate,shiftRate,nightRate,calcFn,isKitchen,kitchenId,cardMode,cardFixed,staffId}){
     const p=calcFn();const ex=getExtras(sid);
     const[showOverride,setShowOverride]=useState(!!(ex.manualTotal&&ex.manualTotal!==""));
+    const[localCardFixed,setLocalCardFixed]=useState(cardFixed||"0");
+    useEffect(()=>{setLocalCardFixed(cardFixed||"0");},[cardFixed]);
     return(
       <div className="paycard">
         <div className="phead">
@@ -752,10 +764,24 @@ function ManagerApp({onLogout}){
             </div>
           </div>
           <div className="divider"/>
-          {/* Card inline edit */}
-          {!isKitchen&&<div className="row"><span>💳 Card override (£) <span style={{fontSize:10,color:"#aaa"}}>blank = use fixed</span></span>
-            <input type="number" className="mini" min="0" placeholder={rate||"0"} value={ex.manualCard&&ex.manualCard!==""?ex.manualCard:""} onChange={async e=>{const v=e.target.value;updateExtras(sid,ex=>({...ex,manualCard:v}));}}/>
-          </div>}
+          {/* Card payment mode — editable directly in payroll */}
+          {!isKitchen&&(
+            <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+              <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>CARD PAYMENT</div>
+              <div className="toggle" style={{marginBottom:cardMode==="fixed"?10:0,width:"100%"}}>
+                <button className={`tgl${cardMode==="fixed"?" on":""}`} style={{flex:1}} onClick={async()=>{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"fixed"}:x));await db.from("staff").update({card_mode:"fixed"}).eq("id",staffId);}}>Fixed £</button>
+                <button className={`tgl${cardMode==="cash"?" on":""}`} style={{flex:1}} onClick={async()=>{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"cash"}:x));await db.from("staff").update({card_mode:"cash"}).eq("id",staffId);}}>All Cash</button>
+                <button className={`tgl${cardMode==="card"?" on":""}`} style={{flex:1}} onClick={async()=>{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"card"}:x));await db.from("staff").update({card_mode:"card"}).eq("id",staffId);}}>All Card</button>
+              </div>
+              {cardMode==="fixed"&&(
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:12,color:"#555"}}>Fixed card amount (£)</span>
+                  <input type="number" className="mini" min="0" placeholder="0.00" value={localCardFixed} onChange={e=>setLocalCardFixed(e.target.value)} onBlur={async e=>{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardFixed:e.target.value}:x));await db.from("staff").update({card_fixed:e.target.value}).eq("id",staffId);}}/>
+                </div>
+              )}
+              <div style={{fontSize:10,color:"#aaa",marginTop:6}}>{cardMode==="fixed"?"Card never exceeds what was earned — rest is cash":cardMode==="cash"?"Entire amount paid in cash":"Entire amount paid by card"}</div>
+            </div>
+          )}
           <div className="row"><span>💵 Cash</span><span className="rowb">£{p.cashAmt}</span></div>
           <div className="row"><span>💳 Card</span><span className="rowb">£{p.cardAmt}</span></div>
           <div className="row"><span style={{fontWeight:800}}>Total</span><span style={{fontWeight:900,color:"#F5A623",fontSize:15}}>£{p.total}</span></div>
@@ -783,9 +809,9 @@ function ManagerApp({onLogout}){
     async function save(){
       setErr("");if(!name.trim())return setErr("Enter a name");if(!/^\d{8}$/.test(code))return setErr("Code must be 8 digits");
       setSaving(true);
-      const{error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:payType,rate:rate||"0",shift_rate:shiftRate||"0",night_rate:nightRate||"0",card_fixed:cardFixed||"0",card_override:"0"});
+      const{error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:payType,rate:rate||"0",shift_rate:shiftRate||"0",night_rate:nightRate||"0",card_fixed:cardFixed||"0",card_mode:"fixed"});
       if(error){setSaving(false);return setErr(error.code==="23505"?"Code already taken":error.message);}
-      setStaff(p=>[...p,{id:code,name:name.trim(),code,payType,rate:rate||"0",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardFixed:cardFixed||"0",cardOverride:"0"}].sort((a,b)=>a.name.localeCompare(b.name)));
+      setStaff(p=>[...p,{id:code,name:name.trim(),code,payType,rate:rate||"0",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardFixed:cardFixed||"0",cardMode:"fixed"}].sort((a,b)=>a.name.localeCompare(b.name)));
       t("✅ "+name.trim()+" added");onClose();setSaving(false);
     }
     return(<div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">➕ Add Staff Member</div><div className="ssub2">Front of house staff added directly by manager</div>
@@ -811,20 +837,39 @@ function ManagerApp({onLogout}){
   }
 
   function SettingsModal({onClose}){
-    const[apiKey,setApiKey]=useState(gsConfig.apiKey||"");const[payrollId,setPayrollId]=useState(gsConfig.payrollId||"");const[takingsId,setTakingsId]=useState(gsConfig.takingsId||"");const[saving,setSaving]=useState(false);
-    async function save(){setSaving(true);await saveGsConfig({apiKey,payrollId,takingsId});setSaving(false);onClose();}
+    const[webAppUrl,setWebAppUrl]=useState(gsConfig.webAppUrl||"");const[payrollId,setPayrollId]=useState(gsConfig.payrollId||"");const[takingsId,setTakingsId]=useState(gsConfig.takingsId||"");const[saving,setSaving]=useState(false);const[showScript,setShowScript]=useState(false);
+    async function save(){setSaving(true);await saveGsConfig({webAppUrl,payrollId,takingsId});setSaving(false);onClose();}
+    const scriptCode=`function doPost(e) {\n  try {\n    var body = JSON.parse(e.postData.contents);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    sheet.clearContents();\n    if (body.rows && body.rows.length > 0) {\n      sheet.getRange(1, 1, body.rows.length, body.rows[0].length).setValues(body.rows);\n    }\n    return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message})).setMimeType(ContentService.MimeType.JSON);\n  }\n}`;
     return(<div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">🔗 Google Sheets</div><div className="ssub2">Saved permanently in Supabase — set once, never lost</div>
-      <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",fontSize:12,color:"#555",marginBottom:14,lineHeight:1.7}}><strong>Setup:</strong><br/>1. Both spreadsheets must be <strong>"Anyone with link can edit"</strong><br/>2. Payroll sheet needs tabs: <strong>Payroll</strong> and <strong>PayrollWeekly</strong><br/>3. Takings sheet needs tabs: <strong>Daily</strong> and <strong>Weekly</strong></div>
-      <label className="lbl">Google API Key</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} placeholder="AIzaSy…" value={apiKey} onChange={e=>setApiKey(e.target.value)}/>
+      <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:10,padding:"10px 12px",fontSize:12,color:"#7F1D1D",marginBottom:14,lineHeight:1.6}}>
+        <strong>Important:</strong> Google no longer allows a simple API key to write to Sheets (only to read). Instead this app talks to a tiny free script that runs on your own Google account — a "Web App". You only set this up once, it takes about 3 minutes.
+      </div>
+      <button className="btn sec" style={{marginTop:0,marginBottom:14}} onClick={()=>setShowScript(v=>!v)}>{showScript?"▲ Hide setup steps":"▼ Show 3-minute setup steps"}</button>
+      {showScript&&(
+        <div style={{background:"#F7F4EF",borderRadius:10,padding:"12px 13px",fontSize:12,color:"#444",marginBottom:14,lineHeight:1.8}}>
+          <strong>Step 1</strong> — Go to <strong>script.google.com</strong> → click <strong>New project</strong><br/>
+          <strong>Step 2</strong> — Delete anything in the editor, paste in this code:
+          <textarea readOnly className="lognote" rows={10} style={{fontFamily:"monospace",fontSize:10,marginTop:6,marginBottom:6,background:"#fff"}} value={scriptCode} onClick={e=>e.target.select()}/>
+          <button className="btn sm" style={{marginBottom:10}} onClick={()=>{navigator.clipboard.writeText(scriptCode);t("📋 Script copied!");}}>📋 Copy Script</button><br/>
+          <strong>Step 3</strong> — Click <strong>Deploy</strong> (top right) → <strong>New deployment</strong><br/>
+          <strong>Step 4</strong> — Click the gear ⚙️ next to "Select type" → choose <strong>Web app</strong><br/>
+          <strong>Step 5</strong> — Set "Execute as" = <strong>Me</strong>, "Who has access" = <strong>Anyone</strong> → click <strong>Deploy</strong><br/>
+          <strong>Step 6</strong> — It will ask to authorize — click through and allow it (this is your own script, on your own account)<br/>
+          <strong>Step 7</strong> — Copy the <strong>Web app URL</strong> it gives you (ends in <strong>/exec</strong>) and paste it below<br/>
+          <strong>Step 8</strong> — Make sure both your Google Sheets are set to <strong>"Anyone with the link can edit"</strong>
+        </div>
+      )}
+      <label className="lbl">Web App URL</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} placeholder="https://script.google.com/macros/s/…/exec" value={webAppUrl} onChange={e=>setWebAppUrl(e.target.value)}/>
       <label className="lbl">Payroll Spreadsheet ID</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} placeholder="1Wj0EH…" value={payrollId} onChange={e=>setPayrollId(e.target.value)}/>
       <label className="lbl">Takings Spreadsheet ID</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} placeholder="1K-UMB…" value={takingsId} onChange={e=>setTakingsId(e.target.value)}/>
+      <div style={{fontSize:11,color:"#aaa",marginBottom:10}}>The Spreadsheet ID is the long code in the sheet's URL between <strong>/d/</strong> and <strong>/edit</strong>.</div>
       <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Save & Connect"}</button><button className="btn sec" onClick={onClose}>Cancel</button>
     </div></div>);
   }
 
   if(loading)return<Loading text="Loading manager data…"/>;
   const{cash:totCash,card:totCard,gross:totGross}=payTotals();
-  const gsReady=!!(gsConfig.apiKey&&gsConfig.payrollId&&gsConfig.takingsId);
+  const gsReady=!!(gsConfig.webAppUrl&&gsConfig.payrollId&&gsConfig.takingsId);
 
   return(
     <div className="app">
@@ -865,7 +910,7 @@ function ManagerApp({onLogout}){
                   </div>
                   <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
                     <div style={{fontSize:12,fontWeight:700,color:"#555",marginBottom:4}}>{payLabel}</div>
-                    <div style={{fontSize:11,color:"#888"}}>💳 Card fixed: £{s.cardFixed||"0"} · 💵 Cash = Total − Card</div>
+                    <div style={{fontSize:11,color:"#888"}}>{(s.cardMode||"fixed")==="cash"?"💵 Always paid in cash":s.cardMode==="card"?"💳 Always paid by card":`💳 Card fixed: £${s.cardFixed||"0"} · 💵 Rest is cash`}</div>
                   </div>
                   <label className="lbl">Pay Method</label>
                   <div className="toggle" style={{marginBottom:12}}>
@@ -885,11 +930,21 @@ function ManagerApp({onLogout}){
                       <div style={{fontSize:10,fontWeight:700,color:s.payType==="shift"?"#1E40AF":"#aaa",marginBottom:3}}>NIGHT £{s.payType==="shift"?" ✅":""}</div>
                       <input type="number" min="0" className="inp sm" style={{width:"100%",borderColor:s.payType==="shift"?"#BFDBFE":"#E5E5E5"}} placeholder="0.00" value={s.nightRate||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,nightRate:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({night_rate:e.target.value}).eq("id",s.id);t(`${s.name} night rate saved`);}}/>
                     </div>
-                    <div style={{flex:1,minWidth:80}}>
-                      <div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>CARD £</div>
-                      <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={s.cardFixed||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,cardFixed:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({card_fixed:e.target.value}).eq("id",s.id);t(`${s.name} card saved`);}}/>
-                    </div>
                   </div>
+
+                  <label className="lbl" style={{marginTop:12}}>Card Payment</label>
+                  <div className="toggle" style={{marginBottom:10,width:"100%"}}>
+                    <button className={`tgl${(s.cardMode||"fixed")==="fixed"?" on":""}`} style={{flex:1}} onClick={async()=>{setStaff(p=>p.map(x=>x.id===s.id?{...x,cardMode:"fixed"}:x));await db.from("staff").update({card_mode:"fixed"}).eq("id",s.id);}}>Fixed £</button>
+                    <button className={`tgl${s.cardMode==="cash"?" on":""}`} style={{flex:1}} onClick={async()=>{setStaff(p=>p.map(x=>x.id===s.id?{...x,cardMode:"cash"}:x));await db.from("staff").update({card_mode:"cash"}).eq("id",s.id);}}>All Cash</button>
+                    <button className={`tgl${s.cardMode==="card"?" on":""}`} style={{flex:1}} onClick={async()=>{setStaff(p=>p.map(x=>x.id===s.id?{...x,cardMode:"card"}:x));await db.from("staff").update({card_mode:"card"}).eq("id",s.id);}}>All Card</button>
+                  </div>
+                  {(s.cardMode||"fixed")==="fixed"&&(
+                    <div style={{marginBottom:4}}>
+                      <div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>FIXED CARD AMOUNT (£) <span style={{fontWeight:400}}>— rest is cash, never exceeds what's earned</span></div>
+                      <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={s.cardFixed||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,cardFixed:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({card_fixed:e.target.value}).eq("id",s.id);t(`${s.name} card amount saved`);}}/>
+                    </div>
+                  )}
+
                   <button className="btn danger" style={{marginTop:10,padding:"10px"}} onClick={()=>removeStaff(s)}>🗑️ Remove {s.name.split(" ")[0]}</button>
                 </div>
               );
@@ -948,7 +1003,6 @@ function ManagerApp({onLogout}){
                   <div><div className="cname">👤 {s.name}</div><div className="csub">{s.payType==="shift"?`Full £${s.shiftRate}/Night £${s.nightRate}`:`£${s.rate}/hr`}</div></div>
                   <div style={{display:"flex",gap:6}}>
                     <button onClick={()=>setShareModal(s.id)} style={{background:"#DBEAFE",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",color:"#1E40AF"}}>📤 Share</button>
-                    <button onClick={()=>setSetupModal(s)} style={{background:"#E8F0E9",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>⚙️ Pay</button>
                   </div>
                 </div>
                 {conflicts.length>0&&<div className="warn"><div className="warn-t">⚠️ Absence Conflict</div><div className="warn-s">{conflicts.map(c=>`${dispDate(c.date,true)} (${c.period})`).join(", ")}</div></div>}
@@ -997,7 +1051,7 @@ function ManagerApp({onLogout}){
               <input type="date" className="inp sm" style={{flex:1}} value={weekRange.end} onChange={e=>setWeekRange(p=>({...p,end:e.target.value}))}/>
             </div>
             <div style={{fontSize:13,fontWeight:800,color:"#1A2744",marginBottom:8}}>Front of House</div>
-            {staff.map(s=><PayrollCard key={s.id} name={s.name} icon="👤" sid={s.id} payType={s.payType} rate={s.rate} shiftRate={s.shiftRate} nightRate={s.nightRate} calcFn={()=>calcPay(s)} isKitchen={false}/>)}
+            {staff.map(s=><PayrollCard key={s.id} name={s.name} icon="👤" sid={s.id} payType={s.payType} rate={s.rate} shiftRate={s.shiftRate} nightRate={s.nightRate} calcFn={()=>calcPay(s)} isKitchen={false} cardMode={s.cardMode||"fixed"} cardFixed={s.cardFixed} staffId={s.id}/>)}
             <div style={{fontSize:13,fontWeight:800,color:"#1A2744",margin:"14px 0 8px"}}>Kitchen Staff</div>
             <div style={{display:"flex",gap:6,marginBottom:10}}>
               <input className="inp sm" style={{flex:1}} placeholder="Add kitchen staff name…" value={newKName} onChange={e=>setNewKName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addKitchen()}/>
@@ -1053,7 +1107,6 @@ function ManagerApp({onLogout}){
 
       {/* Modals */}
       {addStaffModal&&<AddStaffModal onClose={()=>setAddStaffModal(false)}/>}
-      {setupModal&&<SetupModalInner s={setupModal} onClose={()=>setSetupModal(null)} staff={staff} setStaff={setStaff} removeStaff={removeStaff} toast={t}/>}
       {pinModal&&<PinModal onClose={()=>setPinModal(false)}/>}
       {settingsModal&&<SettingsModal onClose={()=>setSettingsModal(false)}/>}
 
@@ -1064,20 +1117,6 @@ function ManagerApp({onLogout}){
   );
 }
 
-// ── Pay Settings Modal (from Rota ⚙️ button) ──
-function SetupModalInner({s,onClose,staff,setStaff,removeStaff,toast}){
-  const[payType,setPT]=useState(s.payType||"hourly");const[rate,setRate]=useState(s.rate||"");const[shiftRate,setSR]=useState(s.shiftRate||"");const[nightRate,setNR]=useState(s.nightRate||"");const[cardFixed,setCF]=useState(s.cardFixed||"0");const[saving,setSaving]=useState(false);
-  async function save(){setSaving(true);const{error}=await db.from("staff").update({pay_type:payType,rate,shift_rate:shiftRate,night_rate:nightRate,card_fixed:cardFixed}).eq("id",s.id);if(!error){setStaff(p=>p.map(x=>x.id===s.id?{...x,payType,rate,shiftRate,nightRate,cardFixed}:x));toast(`✅ ${s.name} saved`);onClose();}else toast("❌ "+error.message);setSaving(false);}
-  return(<div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">⚙️ {s.name}</div><div className="ssub2">Pay settings</div>
-    <label className="lbl">Pay Method</label><div className="toggle" style={{marginBottom:14}}><button className={`tgl${payType==="hourly"?" on":""}`} onClick={()=>setPT("hourly")}>By Hour</button><button className={`tgl${payType==="shift"?" on":""}`} onClick={()=>setPT("shift")}>By Shift</button></div>
-    <label className="lbl">Hourly Rate (£)</label><input className="inp" type="number" placeholder="e.g. 12.50" value={rate} onChange={e=>setRate(e.target.value)}/>
-    <label className="lbl">Full Day Shift Rate (£)</label><input className="inp" type="number" placeholder="e.g. 80.00" value={shiftRate} onChange={e=>setSR(e.target.value)}/>
-    <label className="lbl">Night Shift Rate (£)</label><input className="inp" type="number" placeholder="e.g. 60.00" value={nightRate} onChange={e=>setNR(e.target.value)}/>
-    <label className="lbl">Fixed Card Payment (£)</label><input className="inp" type="number" placeholder="e.g. 200.00" value={cardFixed} onChange={e=>setCF(e.target.value)}/>
-    <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Save"}</button><button className="btn sec" onClick={onClose}>Cancel</button>
-    <div style={{marginTop:14,paddingTop:12,borderTop:"1px dashed #F0F0F0"}}><button className="btn danger" onClick={()=>{onClose();removeStaff(s);}}>🗑️ Remove {s.name}</button></div>
-  </div></div>);
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // TAKINGS TAB (extracted for clarity)
