@@ -687,15 +687,17 @@ function ManagerApp({onLogout}){
     return rows;
   }
   function buildPayrollWeekly(){
-    // One row per pay week — totals from ALL staff
-    const hdr=["Date Range","Cash Total (£)","Card Total (£)","Grand Total (£)"];
-    const rows=[["PAYROLL WEEKLY SUMMARY"],hdr];
-    // Group by week_start from extras, plus current weekRange
-    const weeks=new Set([weekRange.start,...Object.values(extras).map(e=>e.ws).filter(Boolean)]);
-    // For simplicity, show current week only (user navigates weeks via date pickers)
+    // Single current week only — header + one data row. Re-exporting simply
+    // overwrites this same row with fresh numbers, nothing accumulates.
+    const hdr=["Date Range","Cash Total (£)","Card Total (£)","Grand Total (£)","Avg £/Hour","Avg £/Full Shift","Avg £/Night Shift"];
     const{cash,card,gross}=payTotals();
-    rows.push([fmtRange(weekRange.start,weekRange.end),cash,card,gross]);
-    return rows;
+    const allPeople=[...staff,...kitchenStaff];
+    const hourlyPeople=allPeople.filter(x=>(x.payType||"hourly")==="hourly");
+    const shiftPeople=allPeople.filter(x=>x.payType==="shift");
+    const avgHr=hourlyPeople.length?(hourlyPeople.reduce((a,x)=>a+parseFloat(x.rate||0),0)/hourlyPeople.length).toFixed(2):"0.00";
+    const avgFull=shiftPeople.length?(shiftPeople.reduce((a,x)=>a+parseFloat(x.shiftRate||0),0)/shiftPeople.length).toFixed(2):"0.00";
+    const avgNight=shiftPeople.length?(shiftPeople.reduce((a,x)=>a+parseFloat(x.nightRate||0),0)/shiftPeople.length).toFixed(2):"0.00";
+    return[hdr,[fmtRange(weekRange.start,weekRange.end),cash,card,gross,avgHr,avgFull,avgNight]];
   }
   function buildDailyForDate(date){
     const sub=takings.find(s=>s.date===date)||{};
@@ -713,7 +715,7 @@ function ManagerApp({onLogout}){
     const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
     const wm={};dates.forEach(d=>{const{start}=payWeekOf(d);if(!wm[start])wm[start]=[];wm[start].push(d);});
     const hdr=["Week (Sun–Sat)","Deliveroo","Uber Eats","Cash","Card","Online","Deposit Receipt","Voucher Redemption","Voucher Purchase","Total","Cash in Hand","Net Total"];
-    const rows=[["WEEKLY SUMMARY"],hdr];
+    const rows=[hdr];
     Object.entries(wm).sort().forEach(([ws,dates2])=>{
       const{end}=payWeekOf(ws);let tot={};TKFIELDS.forEach(f=>tot[f.db]=0);let cashExp=0;
       dates2.forEach(d=>{const sub=takings.find(s=>s.date===d);if(sub)TKFIELDS.forEach(f=>{tot[f.db]+=parseFloat(sub[f.db]||0);});cashExp+=expenses.filter(e=>e.date===d&&e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);});
@@ -903,7 +905,7 @@ function ManagerApp({onLogout}){
     const[webAppUrl,setWebAppUrl]=useState(gsConfig.webAppUrl||"");const[payrollId,setPayrollId]=useState(gsConfig.payrollId||"");const[takingsId,setTakingsId]=useState(gsConfig.takingsId||"");const[saving,setSaving]=useState(false);const[showScript,setShowScript]=useState(false);const[testing,setTesting]=useState(false);const[testResult,setTestResult]=useState(null);
     async function save(){setSaving(true);await saveGsConfig({webAppUrl,payrollId,takingsId});setSaving(false);onClose();}
     async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(webAppUrl);setTestResult(r);setTesting(false);}
-    const scriptCode=`function doGet(e) {\n  return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doPost(e) {\n  try {\n    var body = JSON.parse(e.postData.contents);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    sheet.clearContents();\n    if (body.rows && body.rows.length > 0) {\n      sheet.getRange(1, 1, body.rows.length, body.rows[0].length).setValues(body.rows);\n    }\n    return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message})).setMimeType(ContentService.MimeType.JSON);\n  }\n}`;
+    const scriptCode=`function doGet(e) {\n  return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doPost(e) {\n  try {\n    var body = JSON.parse(e.postData.contents);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    sheet.clearContents();\n    var rows = body.rows || [];\n    if (rows.length > 0) {\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(1, 1, rows.length, maxCols).setValues(rows);\n    }\n    return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message})).setMimeType(ContentService.MimeType.JSON);\n  }\n}`;
     return(<div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">🔗 Google Sheets</div><div className="ssub2">Saved permanently in Supabase — set once, never lost</div>
       <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:10,padding:"10px 12px",fontSize:12,color:"#7F1D1D",marginBottom:14,lineHeight:1.6}}>
         <strong>Important:</strong> Google no longer allows a simple API key to write to Sheets (only to read). Instead this app talks to a tiny free script that runs on your own Google account — a "Web App". You only set this up once, it takes about 3 minutes.
@@ -1015,8 +1017,8 @@ function ManagerApp({onLogout}){
                   </div>
                   {(s.cardMode||"fixed")==="fixed"&&(
                     <div style={{marginBottom:4}}>
-                      <div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>FIXED CARD AMOUNT (£) <span style={{fontWeight:400}}>— rest is cash, never exceeds what's earned</span></div>
-                      <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={s.cardFixed||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,cardFixed:e.target.value}:x))} onBlur={async e=>{checkCardWarning(s.name,e.target.value,calcPay(s).grossTotal,`cf-s-${s.id}`);await db.from("staff").update({card_fixed:e.target.value}).eq("id",s.id);t(`${s.name} card amount saved`);}} id={`cf-s-${s.id}`}/>
+                      <div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>FIXED CARD AMOUNT (£) <span style={{fontWeight:400}}>— the rest is paid as cash</span></div>
+                      <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={s.cardFixed||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,cardFixed:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({card_fixed:e.target.value}).eq("id",s.id);t(`${s.name} card amount saved`);}} id={`cf-s-${s.id}`}/>
                     </div>
                   )}
 
@@ -1058,8 +1060,8 @@ function ManagerApp({onLogout}){
                 </div>
                 {(k.cardMode||"fixed")==="fixed"&&(
                   <div style={{marginBottom:4}}>
-                    <div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>FIXED CARD AMOUNT (£) <span style={{fontWeight:400}}>— rest is cash, never exceeds what's earned</span></div>
-                    <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.cardFixed||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,cardFixed:e.target.value}:x))} onBlur={e=>{checkCardWarning(k.name,e.target.value,calcKitchenPay(k).grossTotal,`cf-k-${k.id}`);updKitchenField(k.id,"card_fixed",e.target.value);}} id={`cf-k-${k.id}`}/>
+                    <div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>FIXED CARD AMOUNT (£) <span style={{fontWeight:400}}>— the rest is paid as cash</span></div>
+                    <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.cardFixed||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,cardFixed:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"card_fixed",e.target.value)} id={`cf-k-${k.id}`}/>
                   </div>
                 )}
               </div>
