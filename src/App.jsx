@@ -79,7 +79,6 @@ const TKFIELDS = [
   { key:"card",              label:"Card 💳",               db:"card",               sign: 1 },
   { key:"online",            label:"Online 🌐",             db:"online",             sign: 1 },
   { key:"depositReceipt",    label:"Deposit Receipt",       db:"deposit_receipt",    sign: 1, cc:true, ccDb:"deposit_pay_type" },
-  { key:"voucherRedemption", label:"Voucher Redemption 🎟️", db:"voucher_redemption", sign:-1, hint:"Enter as positive — deducted automatically" },
   { key:"voucherPurchase",   label:"Voucher Purchase 🎫",   db:"voucher_purchase",   sign: 1, cc:true, ccDb:"voucher_pay_type" },
 ];
 
@@ -383,7 +382,14 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   }
   async function clockIn(){const time=nowTime();const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:time,note:""}).select().single();if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(time);t("✅ Clocked in at "+time);}else t("❌ "+error.message);}
   async function clockOut(){const active=logs.find(l=>l.date===todayISO()&&l.time_in&&!l.time_out);if(!active)return;const time=nowTime();const{error}=await db.from("clock_logs").update({time_out:time}).eq("id",active.id);if(!error){setLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time}:l));setClockedIn(false);t("👋 Clocked out at "+time);}else t("❌ "+error.message);}
-  async function reportAbsence(){if(!absDate||!absPeriod)return t("Please pick a date and period");const{data,error}=await db.from("absences").insert({staff_id:user.id,staff_name:user.name,date:absDate,period:absPeriod}).select().single();if(!error){setAbsences(p=>[...p,data]);setAbsDate("");setAbsPeriod("");t("📅 Absence sent!");}else t("❌ "+error.message);}
+  async function reportAbsence(){
+    if(!absDate||!absPeriod)return t("Please pick a date and period");
+    const daysNotice=Math.floor((new Date(absDate+"T12:00:00")-new Date(todayISO()+"T12:00:00"))/(1000*60*60*24));
+    if(daysNotice<5)return; // blocked — UI shows warning instead
+    const{data,error}=await db.from("absences").insert({staff_id:user.id,staff_name:user.name,date:absDate,period:absPeriod}).select().single();
+    if(!error){setAbsences(p=>[...p,data]);setAbsDate("");setAbsPeriod("");t("📅 Absence sent!");}else t("❌ "+error.message);
+  }
+  const absNoticeShort=absDate&&Math.floor((new Date(absDate+"T12:00:00")-new Date(todayISO()+"T12:00:00"))/(1000*60*60*24))<5;
   async function confirmShift(idx){const{data,error}=await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:DAYS_MON[idx]}).select().single();if(!error){setConfirmations(p=>[...p,data]);t("✅ Confirmed!");}else t("❌ "+error.message);}
   async function rejectShift(){const{data,error}=await db.from("rejections").insert({staff_id:user.id,staff_name:user.name,day:DAYS_MON[rejectModal],reason:rejectReason}).select().single();if(!error){setRejections(p=>[...p,data]);setRejectModal(null);t("Rejection sent");}else t("❌ "+error.message);}
   async function submitTakings(){const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(tVals[f.key]||0);if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});const{error}=await db.from("takings").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),...vals,note:tNote,is_new:true});if(!error){setTVals({});setTCC({});setTNote("");setSubmitted(true);t("📊 Submitted!");setTab("home");}else t("❌ "+error.message);}
@@ -399,7 +405,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
       <div className="hdr"><div><div className="hdr-greet">Good {now.getHours()<12?"morning":now.getHours()<18?"afternoon":"evening"},</div><div className="hdr-name">{user.name.split(" ")[0]} 👋</div></div><button style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}} onClick={onLogout}>🚪</button></div>
       {tab==="home"&&<div className="body">{assigned&&!submitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-t">📊 You're today's Takings Person!</div><div className="notif-s">Tap to record today's takings →</div></div>}<div className="clkcard"><div className="clktime">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div><div className="clkdate">{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div><div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:"● Not clocked in"}</div><div className="clkbtns"><button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button><button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button></div>{logs.slice(0,3).length>0&&<div className="clkhist">{logs.slice(0,3).map(l=><div key={l.id} className="clkrow"><span>{dispDate(l.date,true)}</span><span>{l.time_in}→{l.time_out||"active"}</span><span style={{fontWeight:700}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(1)+"h":""}</span></div>)}</div>}</div><div className="sec">This Week</div><RotaList/></div>}
       {tab==="rota"&&<div className="body"><div className="sec">My Rota</div><div className="wnav"><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button><div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button></div><RotaList/></div>}
-      {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A2744",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={todayISO()} onChange={e=>setAbsDate(e.target.value)}/><label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#F7F4EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</>}</div>}
+      {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A2744",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={todayISO()} onChange={e=>setAbsDate(e.target.value)}/>{absNoticeShort&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 5 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This absence is too soon to report through the app. Please contact the manager directly as soon as possible to let them know.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod||absNoticeShort}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#F7F4EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</>}</div>}
       {tab==="takings"&&<div className="body"><div className="sec">📊 Daily Takings</div>{submitted?<div className="empty"><div className="emptyicon">✅</div><div className="emptytxt">Already submitted today!</div></div>:!assigned?<div className="empty"><div className="emptyicon">🔒</div><div className="emptytxt">Not assigned today</div></div>:<>{<div style={{fontSize:12,color:"#888",marginBottom:14}}>For {dispDate(todayISO(),true)}. <strong>Enter all amounts as positive numbers.</strong></div>}{TKFIELDS.map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(tCC[f.key]||"cash")===c?" on":""}`} onClick={()=>setTCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:4}} type="number" min="0" placeholder="0.00" value={tVals[f.key]||""} onChange={e=>setTVals(p=>({...p,[f.key]:e.target.value}))}/></div>)}<label className="lbl" style={{marginTop:10}}>Note (optional)</label><textarea className="lognote" rows={3} style={{marginBottom:12}} placeholder="Any notes…" value={tNote} onChange={e=>setTNote(e.target.value)}/><button className="btn green" onClick={submitTakings}>Submit to Manager ✓</button></>}</div>}
       <div className="bnav">{navItems.map(n=><button key={n.id} className={`nbtn${tab===n.id?" on":""}`} onClick={()=>setTab(n.id)}>{n.badge&&<span className="nbadge">!</span>}<span className="ni">{n.icon}</span><span className="nl">{n.label}</span></button>)}</div>
       {rejectModal!==null&&<div className="overlay" onClick={()=>setRejectModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">Can't work {DAYS_MON[rejectModal]}?</div><div className="ssub2">Tell the manager why (optional)</div><textarea className="lognote" rows={3} placeholder="e.g. Doctor appointment…" value={rejectReason} onChange={e=>setRejectReason(e.target.value)}/><button className="btn danger" style={{marginTop:12}} onClick={rejectShift}>Send Rejection</button><button className="btn sec" onClick={()=>setRejectModal(null)}>Cancel</button></div></div>}
@@ -619,10 +625,16 @@ function ManagerApp({onLogout}){
   }
 
   function payTotals(){
-    let cash=0,card=0,gross=0;
-    staff.forEach(s=>{const p=calcPay(s);cash+=parseFloat(p.cashAmt);card+=parseFloat(p.cardAmt);gross+=parseFloat(p.total);});
-    kitchenStaff.forEach(k=>{const p=calcKitchenPay(k);cash+=parseFloat(p.cashAmt);card+=parseFloat(p.cardAmt);gross+=parseFloat(p.total);});
-    return{cash:cash.toFixed(2),card:card.toFixed(2),gross:gross.toFixed(2)};
+    let fhCash=0,fhCard=0,kcCash=0,kcCard=0;
+    staff.forEach(s=>{const p=calcPay(s);fhCash+=parseFloat(p.cashAmt);fhCard+=parseFloat(p.cardAmt);});
+    kitchenStaff.forEach(k=>{const p=calcKitchenPay(k);kcCash+=parseFloat(p.cashAmt);kcCard+=parseFloat(p.cardAmt);});
+    const totCash=fhCash+kcCash,totCard=fhCard+kcCard;
+    return{
+      fhCash:fhCash.toFixed(2),fhCard:fhCard.toFixed(2),
+      kcCash:kcCash.toFixed(2),kcCard:kcCard.toFixed(2),
+      cash:totCash.toFixed(2),card:totCard.toFixed(2),
+      gross:(totCash+totCard).toFixed(2)
+    };
   }
 
   // ── Kitchen ──
@@ -695,44 +707,65 @@ function ManagerApp({onLogout}){
     return rows;
   }
   function buildPayrollWeekly(){
-    // Header + single current-week row. Re-exporting overwrites this same row.
-    const hdr=["Date Range","Total Cash (£)","Total Card (£)","Total (£)"];
-    const{cash,card,gross}=payTotals();
-    return[hdr,[fmtRangeExport(weekRange.start,weekRange.end),cash,card,gross]];
+    const hdr=["Date Range","FH Cash (£)","FH Card (£)","Kitchen Cash (£)","Kitchen Card (£)","Total Cash (£)","Total Card (£)","Total (£)"];
+    const{fhCash,fhCard,kcCash,kcCard,cash,card,gross}=payTotals();
+    return[hdr,[fmtRangeExport(weekRange.start,weekRange.end),fhCash,fhCard,kcCash,kcCard,cash,card,gross]];
   }
   function buildDailyForDate(date){
     const sub=takings.find(s=>s.date===date)||{};
     const dayExp=expenses.filter(e=>e.date===date);
-    const total=TKFIELDS.reduce((s,f)=>s+parseFloat(sub[f.db]||0)*f.sign,0);
-    const cashExp=dayExp.filter(e=>e.pay_type==="cash").reduce((s,e)=>s+e.amount,0);
-    const allExp=dayExp.reduce((s,e)=>s+e.amount,0);
-    // Cash in Hand only drops for expenses actually paid in cash; card-paid expenses
-    // don't touch cash in hand, but DO still reduce Net Total (the true bottom line).
-    const cashInHand=parseFloat(sub.cash||0)-cashExp;
-    const netTotal=total-allExp;
-    return[[fmtDate(date),sub.deliveroo||0,sub.uber||0,sub.cash||0,sub.card||0,sub.online||0,allExp.toFixed(2),sub.deposit_receipt||0,sub.voucher_redemption||0,sub.voucher_purchase||0,total.toFixed(2),cashInHand.toFixed(2),netTotal.toFixed(2),dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ")]];
+    const expCash=dayExp.filter(e=>e.pay_type==="cash").reduce((s,e)=>s+e.amount,0);
+    const expCard=dayExp.filter(e=>e.pay_type==="card").reduce((s,e)=>s+e.amount,0);
+    const expNotes=dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ");
+    const dep=parseFloat(sub.deposit_receipt||0);
+    const depPayType=sub.deposit_pay_type||"cash";
+    const depIfCash=depPayType==="cash"?dep:0;
+    // total = deliveroo+uber+cash+card+online+depositReceipt+voucherPurchase - expCash - expCard
+    const income=["deliveroo","uber","cash","card","online","deposit_receipt","voucher_purchase"]
+      .reduce((a,col)=>a+parseFloat(sub[col]||0),0);
+    const total=(income-expCash-expCard).toFixed(2);
+    const netTotal=total; // same formula per spec
+    // cashInHand = cash - expCash + depositReceipt_if_cash
+    const cashInHand=(parseFloat(sub.cash||0)-expCash+depIfCash).toFixed(2);
+    return[[
+      fmtDate(date),
+      sub.deliveroo||0, sub.uber||0, sub.cash||0, sub.card||0, sub.online||0,
+      expCash.toFixed(2), expCard.toFixed(2),
+      sub.deposit_receipt||0, sub.voucher_purchase||0,
+      total, cashInHand, netTotal, expNotes
+    ]];
   }
   function buildDaily(){
     const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
-    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt","Voucher Redemption","Voucher Purchase","Total","Cash in Hand","Net Total","Expense Notes"];
+    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Expenses Cash (£)","Expenses Card (£)","Deposit Receipt","Voucher Purchase","Total","Cash in Hand","Net Total","Expense Notes"];
     return[hdr,...dates.map(date=>buildDailyForDate(date)[0])];
   }
   function buildWeekly(){
     const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
     const wm={};dates.forEach(d=>{const{start}=payWeekOf(d);if(!wm[start])wm[start]=[];wm[start].push(d);});
-    const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt","Voucher Redemption","Voucher Purchase","Total","Cash in Hand","Net Total"];
+    const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Expenses Cash (£)","Expenses Card (£)","Deposit Receipt","Voucher Purchase","Total","Cash in Hand","Net Total"];
     const rows=[hdr];
     Object.entries(wm).sort().forEach(([ws,dates2])=>{
-      const{end}=payWeekOf(ws);let tot={};TKFIELDS.forEach(f=>tot[f.db]=0);let cashExp=0;let allExp=0;
+      const{end}=payWeekOf(ws);
+      let tot={deliveroo:0,uber:0,cash:0,card:0,online:0,deposit_receipt:0,voucher_purchase:0};
+      let expCash=0,expCard=0;
       dates2.forEach(d=>{
         const sub=takings.find(s=>s.date===d);
-        if(sub)TKFIELDS.forEach(f=>{tot[f.db]+=parseFloat(sub[f.db]||0);});
+        if(sub)Object.keys(tot).forEach(col=>{tot[col]+=parseFloat(sub[col]||0);});
         const dayExp=expenses.filter(e=>e.date===d);
-        cashExp+=dayExp.filter(e=>e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);
-        allExp+=dayExp.reduce((a,e)=>a+e.amount,0);
+        expCash+=dayExp.filter(e=>e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);
+        expCard+=dayExp.filter(e=>e.pay_type==="card").reduce((a,e)=>a+e.amount,0);
       });
-      const total=TKFIELDS.reduce((s,f)=>s+tot[f.db]*f.sign,0);
-      rows.push([fmtRangeExport(ws,end),tot.deliveroo.toFixed(2),tot.uber.toFixed(2),tot.cash.toFixed(2),tot.card.toFixed(2),tot.online.toFixed(2),allExp.toFixed(2),tot.deposit_receipt.toFixed(2),tot.voucher_redemption.toFixed(2),tot.voucher_purchase.toFixed(2),total.toFixed(2),(tot.cash-cashExp).toFixed(2),(total-allExp).toFixed(2)]);
+      const income=tot.deliveroo+tot.uber+tot.cash+tot.card+tot.online+tot.deposit_receipt+tot.voucher_purchase;
+      const total=(income-expCash-expCard).toFixed(2);
+      const cashInHand=(tot.cash-expCash+tot.deposit_receipt).toFixed(2);
+      rows.push([
+        fmtRangeExport(ws,end),
+        tot.deliveroo.toFixed(2),tot.uber.toFixed(2),tot.cash.toFixed(2),tot.card.toFixed(2),tot.online.toFixed(2),
+        expCash.toFixed(2),expCard.toFixed(2),
+        tot.deposit_receipt.toFixed(2),tot.voucher_purchase.toFixed(2),
+        total,cashInHand,total
+      ]);
     });
     return rows;
   }
@@ -1240,7 +1273,7 @@ function ManagerApp({onLogout}){
 
       {cashPopup&&<div className="overlay" onClick={()=>setCashPopup(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">💵 Cash Payments</div><div className="ssub2">{fmtRange(weekRange.start,weekRange.end)}</div>{staff.filter(s=>parseFloat(calcPay(s).cashAmt)>0).map(s=>{const p=calcPay(s);return<div key={s.id} className="cashrow"><span className="cashname">{s.name}</span><span className="cashamt">£{p.cashAmt}</span></div>;})}  {kitchenStaff.filter(k=>parseFloat(calcKitchenPay(k).cashAmt)>0).map(k=>{const p=calcKitchenPay(k);return<div key={k.id} className="cashrow"><span className="cashname">👨‍🍳 {k.name}</span><span className="cashamt">£{p.cashAmt}</span></div>;})} <div style={{borderTop:"2px solid #F0F0F0",marginTop:10,paddingTop:10,display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:800,color:"#1A2744"}}><span>Total Cash Out</span><span>£{totCash}</span></div><button className="btn sec" style={{marginTop:14}} onClick={()=>setCashPopup(false)}>Close</button></div></div>}
       {shareModal&&<div className="overlay" onClick={()=>setShareModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">📤 Share Rota</div><div className="ssub2">{staff.find(s=>s.id===shareModal)?.name}</div><textarea className="lognote" rows={12} readOnly style={{fontFamily:"monospace",fontSize:12,background:"#F7F4EF"}} value={buildRotaText(shareModal)}/><button className="btn" style={{marginTop:12}} onClick={()=>{navigator.clipboard.writeText(buildRotaText(shareModal)).then(()=>t("📋 Copied!"));setShareModal(null);}}>📋 Copy</button><button className="btn sec" onClick={()=>setShareModal(null)}>Close</button></div></div>}
-      {absModal&&<div className="overlay" onClick={()=>setAbsModal(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">📅 Log Absence</div><label className="lbl">Staff Member</label><select className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} value={absStaff} onChange={e=>setAbsStaff(e.target.value)}><option value="">— Select —</option>{staff.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select><label className="lbl">Date</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} value={absDate} onChange={e=>setAbsDate(e.target.value)}/><label className="lbl" style={{marginBottom:8}}>Period</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:12}} onClick={async()=>{if(!absStaff||!absDate||!absPeriod)return t("Fill in all fields");const s=staff.find(x=>x.id===absStaff);const{data,error}=await db.from("absences").insert({staff_id:absStaff,staff_name:s?.name||"",date:absDate,period:absPeriod}).select().single();if(!error){setAbsences(p=>[...p,data]);setAbsModal(false);t("📅 Absence logged");}else t("❌ "+error.message);}}>Save Absence</button><button className="btn sec" onClick={()=>setAbsModal(false)}>Cancel</button></div></div>}
+      {absModal&&<div className="overlay" onClick={()=>setAbsModal(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">📅 Log Absence</div><label className="lbl">Staff Member</label><select className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} value={absStaff} onChange={e=>setAbsStaff(e.target.value)}><option value="">— Select —</option>{staff.length>0&&<optgroup label="Front of House">{staff.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</optgroup>}{kitchenStaff.length>0&&<optgroup label="Kitchen">{kitchenStaff.map(k=><option key={"k_"+k.id} value={"k_"+k.id}>{"👨‍🍳 "+k.name}</option>)}</optgroup>}</select><label className="lbl">Date</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} value={absDate} onChange={e=>setAbsDate(e.target.value)}/><label className="lbl" style={{marginBottom:8}}>Period</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:12}} onClick={async()=>{if(!absStaff||!absDate||!absPeriod)return t("Fill in all fields");const isKitchen=absStaff.startsWith("k_");const foundFoh=staff.find(x=>x.id===absStaff);const foundKit=kitchenStaff.find(x=>"k_"+x.id===absStaff);const personName=(foundFoh||foundKit)?.name||"";const{data,error}=await db.from("absences").insert({staff_id:absStaff,staff_name:personName,date:absDate,period:absPeriod}).select().single();if(!error){setAbsences(p=>[...p,data]);setAbsModal(false);t("📅 Absence logged");}else t("❌ "+error.message);}}>Save Absence</button><button className="btn sec" onClick={()=>setAbsModal(false)}>Cancel</button></div></div>}
     </div>
   );
 }
