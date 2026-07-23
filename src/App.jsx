@@ -73,13 +73,14 @@ const SHIFTS   = ["Off","Full Day (11am–close)","Night (5:30pm–close)","Cust
 const ADD_LBLS = ["Bank Holiday","Red Day","Other"];
 const DED_LBLS = ["Left Early","Sick Leave","Other"];
 const TKFIELDS = [
-  { key:"deliveroo",         label:"Deliveroo 🛵",         db:"deliveroo",          sign: 1 },
-  { key:"uber",              label:"Uber Eats 🛵",          db:"uber",               sign: 1 },
-  { key:"cash",              label:"Cash 💵",               db:"cash",               sign: 1 },
-  { key:"card",              label:"Card 💳",               db:"card",               sign: 1 },
-  { key:"online",            label:"Online 🌐",             db:"online",             sign: 1 },
-  { key:"depositReceipt",    label:"Deposit Receipt",       db:"deposit_receipt",    sign: 1, cc:true, ccDb:"deposit_pay_type" },
-  { key:"voucherPurchase",   label:"Voucher Purchase 🎫",   db:"voucher_purchase",   sign: 1, cc:true, ccDb:"voucher_pay_type" },
+  { key:"deliveroo",        label:"Deliveroo 🛵",        db:"deliveroo",         sign: 1 },
+  { key:"uber",             label:"Uber Eats 🛵",         db:"uber",              sign: 1 },
+  { key:"cash",             label:"Cash 💵",              db:"cash",              sign: 1 },
+  { key:"card",             label:"Card 💳",              db:"card",              sign: 1 },
+  { key:"online",           label:"Online 🌐",            db:"online",            sign: 1 },
+  { key:"shopExpense",      label:"Shop Expense 🧾",      db:"shop_expense",      sign:-1, hint:"Store/supplies expenses — enter as positive, deducted automatically" },
+  { key:"depositReceipt",   label:"Deposit Receipt",      db:"deposit_receipt",   sign: 1, cc:true, ccDb:"deposit_pay_type" },
+  { key:"voucherPurchase",  label:"Voucher Purchase 🎫",  db:"voucher_purchase",  sign: 1, cc:true, ccDb:"voucher_pay_type" },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -714,56 +715,78 @@ function ManagerApp({onLogout}){
   function buildDailyForDate(date){
     const sub=takings.find(s=>s.date===date)||{};
     const dayExp=expenses.filter(e=>e.date===date);
-    const expCash=dayExp.filter(e=>e.pay_type==="cash").reduce((s,e)=>s+e.amount,0);
-    const expCard=dayExp.filter(e=>e.pay_type==="card").reduce((s,e)=>s+e.amount,0);
-    const expNotes=dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ");
+    const otherExpCash=dayExp.filter(e=>e.pay_type==="cash").reduce((s,e)=>s+e.amount,0);
+    const otherExpCard=dayExp.filter(e=>e.pay_type==="card").reduce((s,e)=>s+e.amount,0);
+    const otherExpNotes=dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ");
+    const shopExp=parseFloat(sub.shop_expense||0); // from takings form
     const dep=parseFloat(sub.deposit_receipt||0);
-    const depPayType=sub.deposit_pay_type||"cash";
-    const depIfCash=depPayType==="cash"?dep:0;
-    // total = deliveroo+uber+cash+card+online+depositReceipt+voucherPurchase - expCash - expCard
-    const income=["deliveroo","uber","cash","card","online","deposit_receipt","voucher_purchase"]
-      .reduce((a,col)=>a+parseFloat(sub[col]||0),0);
-    const total=(income-expCash-expCard).toFixed(2);
-    const netTotal=total; // same formula per spec
-    // cashInHand = cash - expCash + depositReceipt_if_cash
-    const cashInHand=(parseFloat(sub.cash||0)-expCash+depIfCash).toFixed(2);
+    const depPay=sub.deposit_pay_type||"cash";
+    const depCash=depPay==="cash"?dep:0;
+    const depCard=depPay==="card"?dep:0;
+    const vp=parseFloat(sub.voucher_purchase||0);
+    const vpPay=sub.voucher_pay_type||"cash";
+    const vpCash=vpPay==="cash"?vp:0;
+    const vpCard=vpPay==="card"?vp:0;
+    const deliveroo=parseFloat(sub.deliveroo||0);
+    const uber=parseFloat(sub.uber||0);
+    const cash=parseFloat(sub.cash||0);
+    const card=parseFloat(sub.card||0);
+    const online=parseFloat(sub.online||0);
+    // total = deliveroo+uber+cash+card+online - shopExp + depositReceipt + voucherPurchase - otherExpCash - otherExpCard
+    const total=(deliveroo+uber+cash+card+online-shopExp+dep+vp-otherExpCash-otherExpCard).toFixed(2);
+    // cashInHand = cash - shopExp - otherExpCash + depositReceipt_if_cash + voucherPurchase_if_cash
+    const cashInHand=(cash-shopExp-otherExpCash+depCash+vpCash).toFixed(2);
     return[[
       fmtDate(date),
-      sub.deliveroo||0, sub.uber||0, sub.cash||0, sub.card||0, sub.online||0,
-      expCash.toFixed(2), expCard.toFixed(2),
-      sub.deposit_receipt||0, sub.voucher_purchase||0,
-      total, cashInHand, netTotal, expNotes
+      deliveroo, uber, cash, card, online,
+      shopExp.toFixed(2),
+      depCash.toFixed(2), depCard.toFixed(2),
+      vpCash.toFixed(2),  vpCard.toFixed(2),
+      otherExpCash.toFixed(2), otherExpCard.toFixed(2),
+      total, cashInHand, total,
+      otherExpNotes
     ]];
   }
   function buildDaily(){
     const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
-    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Expenses Cash (£)","Expenses Card (£)","Deposit Receipt","Voucher Purchase","Total","Cash in Hand","Net Total","Expense Notes"];
+    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Other Expense Notes"];
     return[hdr,...dates.map(date=>buildDailyForDate(date)[0])];
   }
   function buildWeekly(){
     const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
     const wm={};dates.forEach(d=>{const{start}=payWeekOf(d);if(!wm[start])wm[start]=[];wm[start].push(d);});
-    const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Expenses Cash (£)","Expenses Card (£)","Deposit Receipt","Voucher Purchase","Total","Cash in Hand","Net Total"];
+    const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total"];
     const rows=[hdr];
     Object.entries(wm).sort().forEach(([ws,dates2])=>{
       const{end}=payWeekOf(ws);
-      let tot={deliveroo:0,uber:0,cash:0,card:0,online:0,deposit_receipt:0,voucher_purchase:0};
-      let expCash=0,expCard=0;
+      let del=0,uber=0,cash=0,card=0,online=0,shopExp=0;
+      let depCash=0,depCard=0,vpCash=0,vpCard=0;
+      let otherExpCash=0,otherExpCard=0;
       dates2.forEach(d=>{
-        const sub=takings.find(s=>s.date===d);
-        if(sub)Object.keys(tot).forEach(col=>{tot[col]+=parseFloat(sub[col]||0);});
+        const sub=takings.find(s=>s.date===d)||{};
+        del+=parseFloat(sub.deliveroo||0);uber+=parseFloat(sub.uber||0);
+        cash+=parseFloat(sub.cash||0);card+=parseFloat(sub.card||0);online+=parseFloat(sub.online||0);
+        shopExp+=parseFloat(sub.shop_expense||0);
+        const dep=parseFloat(sub.deposit_receipt||0);
+        const depPay=sub.deposit_pay_type||"cash";
+        if(depPay==="cash")depCash+=dep;else depCard+=dep;
+        const vp=parseFloat(sub.voucher_purchase||0);
+        const vpPay=sub.voucher_pay_type||"cash";
+        if(vpPay==="cash")vpCash+=vp;else vpCard+=vp;
         const dayExp=expenses.filter(e=>e.date===d);
-        expCash+=dayExp.filter(e=>e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);
-        expCard+=dayExp.filter(e=>e.pay_type==="card").reduce((a,e)=>a+e.amount,0);
+        otherExpCash+=dayExp.filter(e=>e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);
+        otherExpCard+=dayExp.filter(e=>e.pay_type==="card").reduce((a,e)=>a+e.amount,0);
       });
-      const income=tot.deliveroo+tot.uber+tot.cash+tot.card+tot.online+tot.deposit_receipt+tot.voucher_purchase;
-      const total=(income-expCash-expCard).toFixed(2);
-      const cashInHand=(tot.cash-expCash+tot.deposit_receipt).toFixed(2);
+      const income=del+uber+cash+card+online-shopExp+(depCash+depCard)+(vpCash+vpCard);
+      const total=(income-otherExpCash-otherExpCard).toFixed(2);
+      const cashInHand=(cash-shopExp-otherExpCash+depCash+vpCash).toFixed(2);
       rows.push([
         fmtRangeExport(ws,end),
-        tot.deliveroo.toFixed(2),tot.uber.toFixed(2),tot.cash.toFixed(2),tot.card.toFixed(2),tot.online.toFixed(2),
-        expCash.toFixed(2),expCard.toFixed(2),
-        tot.deposit_receipt.toFixed(2),tot.voucher_purchase.toFixed(2),
+        del.toFixed(2),uber.toFixed(2),cash.toFixed(2),card.toFixed(2),online.toFixed(2),
+        shopExp.toFixed(2),
+        depCash.toFixed(2),depCard.toFixed(2),
+        vpCash.toFixed(2),vpCard.toFixed(2),
+        otherExpCash.toFixed(2),otherExpCard.toFixed(2),
         total,cashInHand,total
       ]);
     });
@@ -1236,7 +1259,7 @@ function ManagerApp({onLogout}){
         )}
 
         {/* ══ EXPENSES ══ */}
-        {tab==="expenses"&&<ExpensesTab expenses={expenses} onAdd={addExpense} onDelete={delExpense} onUpdate={updateExpense} toast={t}/>}
+        {tab==="expenses"&&<ExpensesTab expenses={expenses} onAdd={addExpense} onDelete={delExpense} onUpdate={updateExpense} toast={t} gsReady={gsReady} gsConfig={gsConfig} buildDaily={buildDaily} buildWeekly={buildWeekly} exportTakings={exportTakings}/>}
 
         {/* ══ ABSENCES ══ */}
         {tab==="absence"&&(
@@ -1457,7 +1480,7 @@ function TakingsForm({setTakings,toast}){
 // ═══════════════════════════════════════════════════════════════════
 // EXPENSES TAB
 // ═══════════════════════════════════════════════════════════════════
-function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast}){
+function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast,gsReady,gsConfig,buildDaily,buildWeekly,exportTakings}){
   const[desc,setDesc]=useState("");const[amount,setAmount]=useState("");const[payType,setPayType]=useState("cash");const[date,setDate]=useState(todayISO());const[saving,setSaving]=useState(false);
   const[editMode,setEditMode]=useState(false);
   const[filterDate,setFilterDate]=useState(todayISO());
@@ -1539,6 +1562,12 @@ function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast}){
           <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0 0",fontSize:14,fontWeight:800,color:"#1A2744",borderTop:"2px solid #F0F0F0",marginTop:4}}><span>Total</span><span>£{total.toFixed(2)}</span></div>
         </>
       )}
+      <div className="expsec" style={{marginTop:14}}>
+        <div className="exptitle">📤 Export to Takings Spreadsheet</div>
+        <div style={{fontSize:12,color:"#888",marginBottom:10}}>Expenses (Other Expenses Cash, Other Expenses Card, Note) are included automatically in the Takings Daily and Weekly sheets whenever you export from the Takings page. Use the button below to push now with the latest expense data.</div>
+        {!gsReady&&<div className="gs-banner">⚠️ <strong>Google Sheets not connected.</strong> Tap ⚙️ Sheets in the header.</div>}
+        <button className="expbtn p" onClick={exportTakings}>🔗 Push to Takings Sheet (includes expenses)</button>
+      </div>
     </>
   );
 }
