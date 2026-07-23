@@ -970,46 +970,87 @@ function ManagerApp({onLogout}){
   }
 
   function SettingsModal({onClose}){
-    const[webAppUrl,setWebAppUrl]=useState(gsConfig.webAppUrl||"");const[payrollId,setPayrollId]=useState(gsConfig.payrollId||"");const[takingsId,setTakingsId]=useState(gsConfig.takingsId||"");const[saving,setSaving]=useState(false);const[showScript,setShowScript]=useState(false);const[testing,setTesting]=useState(false);const[testResult,setTestResult]=useState(null);
-    async function save(){setSaving(true);await saveGsConfig({webAppUrl,payrollId,takingsId});setSaving(false);onClose();}
-    async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(webAppUrl);setTestResult(r);setTesting(false);}
+    const[webAppUrl,setWebAppUrl]=useState(gsConfig.webAppUrl||"");
+    const[payrollId,setPayrollId]=useState(gsConfig.payrollId||"");
+    const[takingsId,setTakingsId]=useState(gsConfig.takingsId||"");
+    const[saving,setSaving]=useState(false);
+    const[showScript,setShowScript]=useState(false);
+    const[testing,setTesting]=useState(false);
+    const[testResult,setTestResult]=useState(null);
+
+    const urlTrimmed=webAppUrl.trim();
+    const urlLooksValid=urlTrimmed.startsWith("https://script.google.com/macros/s/")&&urlTrimmed.endsWith("/exec");
+    const urlHasDev=urlTrimmed.endsWith("/dev");
+
+    async function save(){
+      setSaving(true);
+      await saveGsConfig({webAppUrl:urlTrimmed,payrollId:payrollId.trim(),takingsId:takingsId.trim()});
+      setSaving(false);onClose();
+    }
+    async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(urlTrimmed);setTestResult(r);setTesting(false);}
+
     const scriptCode=`function doGet(e) {\n  return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doPost(e) {\n  try {\n    var body = JSON.parse(e.postData.contents);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    sheet.clearContents();\n    var rows = body.rows || [];\n    if (rows.length > 0) {\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(1, 1, rows.length, maxCols).setValues(rows);\n    }\n    return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message})).setMimeType(ContentService.MimeType.JSON);\n  }\n}`;
-    return(<div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">🔗 Google Sheets</div><div className="ssub2">Saved permanently in Supabase — set once, never lost</div>
-      <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:10,padding:"10px 12px",fontSize:12,color:"#7F1D1D",marginBottom:14,lineHeight:1.6}}>
-        <strong>Important:</strong> Google no longer allows a simple API key to write to Sheets (only to read). Instead this app talks to a tiny free script that runs on your own Google account — a "Web App". You only set this up once, it takes about 3 minutes.
+
+    return(
+      <div className="overlay" onClick={onClose}>
+        <div className="sheet" onClick={e=>e.stopPropagation()}>
+          <div className="stitle">🔗 Google Sheets</div>
+          <div className="ssub2">Saved permanently in Supabase — set once, never lost</div>
+
+          <button className="btn sec" style={{marginTop:0,marginBottom:14}} onClick={()=>setShowScript(v=>!v)}>{showScript?"▲ Hide setup steps":"▼ Show 3-minute setup steps"}</button>
+          {showScript&&(
+            <div style={{background:"#F7F4EF",borderRadius:10,padding:"12px 13px",fontSize:12,color:"#444",marginBottom:14,lineHeight:1.8}}>
+              <strong>Step 1</strong> — Go to <strong>script.google.com</strong> → click <strong>New project</strong><br/>
+              <strong>Step 2</strong> — Delete everything in the editor, paste in this code:
+              <textarea readOnly className="lognote" rows={12} style={{fontFamily:"monospace",fontSize:10,marginTop:6,marginBottom:6,background:"#fff"}} value={scriptCode} onClick={e=>e.target.select()}/>
+              <button className="btn sm" style={{marginBottom:10}} onClick={()=>{navigator.clipboard.writeText(scriptCode);t("📋 Script copied!");}}>📋 Copy Script</button><br/>
+              <strong>Step 3</strong> — Click <strong>Deploy</strong> (top right) → <strong>New deployment</strong><br/>
+              <strong>Step 4</strong> — Click ⚙️ gear next to "Select type" → choose <strong>Web app</strong><br/>
+              <div style={{background:"#FEE2E2",border:"1px solid #E05252",borderRadius:8,padding:"8px 10px",margin:"6px 0"}}>
+                <strong>Step 5 — most common mistake:</strong> "Execute as" = <strong>Me</strong>. "Who has access" = <strong>Anyone</strong> — NOT "Anyone with Google account". Wrong choice = Google login page = app cannot connect.
+              </div>
+              <strong>Step 6</strong> — Click <strong>Deploy</strong> → authorize when asked (it is your own script)<br/>
+              <div style={{background:"#FEE2E2",border:"1px solid #E05252",borderRadius:8,padding:"8px 10px",margin:"6px 0"}}>
+                <strong>Step 7 — copy the correct URL:</strong> The URL must end in <strong>/exec</strong> — NOT /dev. The /dev URL requires a Google login. Copy the <strong>Web app URL</strong> from the deployment dialog.
+              </div>
+              <strong>Step 8</strong> — Paste the URL below, tap <strong>Test Connection</strong>, confirm it says "Connected", then save<br/>
+              <strong>Step 9</strong> — Both spreadsheets must be set to <strong>"Anyone with the link can edit"</strong>
+            </div>
+          )}
+
+          <label className="lbl">Web App URL</label>
+          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:4,borderColor:urlTrimmed?(urlLooksValid?"#50DC78":"#E05252"):"#E5E5E5"}}
+            placeholder="https://script.google.com/macros/s/…/exec"
+            value={webAppUrl}
+            onChange={e=>{setWebAppUrl(e.target.value);setTestResult(null);}}
+          />
+          {urlHasDev&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:8}}>⚠️ URL ends in /dev — this will never work. Copy the Web app URL (ends in /exec) from your deployment.</div>}
+          {urlTrimmed&&!urlLooksValid&&!urlHasDev&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:8}}>⚠️ URL must start with https://script.google.com/macros/s/ and end with /exec</div>}
+          {urlLooksValid&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:8}}>✓ URL format looks correct</div>}
+          {urlTrimmed&&<div style={{marginBottom:12}}>
+            <a href={urlTrimmed} target="_blank" rel="noreferrer" style={{fontSize:12,color:"#1E40AF",fontWeight:700}}>🌐 Open URL in browser tab →</a>
+            <div style={{fontSize:11,color:"#888",marginTop:3}}>Should show: <code style={{background:"#F0F0F0",padding:"1px 4px",borderRadius:3}}>{"{"}"ok":true,"msg":"Sheets bridge is live"{"}"}</code>. If it asks you to log in, "Who has access" is set wrong.</div>
+          </div>}
+
+          <button className="btn sec" style={{marginTop:0,marginBottom:14}} onClick={runTest} disabled={testing||!urlTrimmed}>{testing?"Testing…":"🔍 Test Connection"}</button>
+          {testResult&&(
+            <div style={{background:testResult.ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${testResult.ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:12,color:testResult.ok?"#065F46":"#7F1D1D",lineHeight:1.6}}>
+              {testResult.ok?"✅ Connected! The script is reachable and working.":`❌ ${testResult.err}`}
+            </div>
+          )}
+
+          <label className="lbl">Payroll Spreadsheet ID</label>
+          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:6}} placeholder="1Wj0EH…" value={payrollId} onChange={e=>setPayrollId(e.target.value)}/>
+          <div style={{fontSize:11,color:"#888",marginBottom:14}}>From the sheet URL: …/spreadsheets/d/<strong>COPY THIS PART</strong>/edit</div>
+          <label className="lbl">Takings Spreadsheet ID</label>
+          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:6}} placeholder="1K-UMB…" value={takingsId} onChange={e=>setTakingsId(e.target.value)}/>
+          <div style={{fontSize:11,color:"#888",marginBottom:14}}>From the sheet URL: …/spreadsheets/d/<strong>COPY THIS PART</strong>/edit</div>
+
+          <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Save & Connect"}</button>
+          <button className="btn sec" onClick={onClose}>Cancel</button>
+        </div>
       </div>
-      <button className="btn sec" style={{marginTop:0,marginBottom:14}} onClick={()=>setShowScript(v=>!v)}>{showScript?"▲ Hide setup steps":"▼ Show 3-minute setup steps"}</button>
-      {showScript&&(
-        <div style={{background:"#F7F4EF",borderRadius:10,padding:"12px 13px",fontSize:12,color:"#444",marginBottom:14,lineHeight:1.8}}>
-          <strong>Step 1</strong> — Go to <strong>script.google.com</strong> → click <strong>New project</strong><br/>
-          <strong>Step 2</strong> — Delete anything in the editor, paste in this code:
-          <textarea readOnly className="lognote" rows={12} style={{fontFamily:"monospace",fontSize:10,marginTop:6,marginBottom:6,background:"#fff"}} value={scriptCode} onClick={e=>e.target.select()}/>
-          <button className="btn sm" style={{marginBottom:10}} onClick={()=>{navigator.clipboard.writeText(scriptCode);t("📋 Script copied!");}}>📋 Copy Script</button><br/>
-          <strong>Step 3</strong> — Click <strong>Deploy</strong> (top right) → <strong>New deployment</strong><br/>
-          <strong>Step 4</strong> — Click the gear ⚙️ next to "Select type" → choose <strong>Web app</strong><br/>
-          <div style={{background:"#FEE2E2",border:"1px solid #E05252",borderRadius:8,padding:"8px 10px",margin:"6px 0"}}>
-            <strong>Step 5 — the step people get wrong:</strong> Set "Execute as" = <strong>Me</strong>. Set "Who has access" = <strong>Anyone</strong> — NOT "Anyone with Google account". Picking the wrong one makes it ask for a Google sign-in and the app can't reach it.
-          </div>
-          <strong>Step 6</strong> — Click <strong>Deploy</strong> — it will ask to authorize, click through and allow it (this is your own script on your own account)<br/>
-          <strong>Step 7</strong> — Copy the <strong>Web app URL</strong> it gives you — it must end in <strong>/exec</strong> (not /dev) — and paste it below<br/>
-          <strong>Step 8</strong> — Make sure both your Google Sheets are set to <strong>"Anyone with the link can edit"</strong><br/>
-          <div style={{background:"#FFF8EC",border:"1px solid #F5A623",borderRadius:8,padding:"8px 10px",marginTop:6}}>
-            <strong>If you ever edit the script later:</strong> you must go to Deploy → Manage deployments → ✏️ edit → Version: <strong>New version</strong> → Deploy again, or your changes won't take effect.
-          </div>
-        </div>
-      )}
-      <label className="lbl">Web App URL</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:8}} placeholder="https://script.google.com/macros/s/…/exec" value={webAppUrl} onChange={e=>{setWebAppUrl(e.target.value);setTestResult(null);}}/>
-      <button className="btn sec" style={{marginTop:0,marginBottom:14}} onClick={runTest} disabled={testing||!webAppUrl}>{testing?"Testing…":"🔍 Test Connection"}</button>
-      {testResult&&(
-        <div style={{background:testResult.ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${testResult.ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:12,color:testResult.ok?"#065F46":"#7F1D1D"}}>
-          {testResult.ok?"✅ Connected! The script is reachable and working.":`❌ ${testResult.err}`}
-        </div>
-      )}
-      <label className="lbl">Payroll Spreadsheet ID</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} placeholder="1Wj0EH…" value={payrollId} onChange={e=>setPayrollId(e.target.value)}/>
-      <label className="lbl">Takings Spreadsheet ID</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} placeholder="1K-UMB…" value={takingsId} onChange={e=>setTakingsId(e.target.value)}/>
-      <div style={{fontSize:11,color:"#aaa",marginBottom:10}}>The Spreadsheet ID is the long code in the sheet's URL between <strong>/d/</strong> and <strong>/edit</strong>.</div>
-      <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Save & Connect"}</button><button className="btn sec" onClick={onClose}>Cancel</button>
-    </div></div>);
+    );
   }
 
   if(loading)return<Loading text="Loading manager data…"/>;
