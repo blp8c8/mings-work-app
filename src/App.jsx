@@ -18,30 +18,33 @@ const db = createClient(
 async function pushSheet(webAppUrl, spreadsheetId, tabName, rows) {
   if (!webAppUrl || !spreadsheetId) return { ok: false, err: "Google Sheets not configured — tap ⚙️ Sheets" };
   const payload = JSON.stringify({ spreadsheetId, tab: tabName, rows });
+  // Apps Script Web Apps handle form-encoded POST natively without CORS redirects.
+  // Sending as application/x-www-form-urlencoded in a simple request avoids the
+  // OPTIONS preflight that breaks Apps Script, and avoids the redirect issue that
+  // breaks text/plain POSTs on some browsers.
+  const body = "payload=" + encodeURIComponent(payload);
   try {
     const res = await fetch(webAppUrl, {
       method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids CORS preflight, which Apps Script doesn't handle
-      body: payload
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body
     });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) return { ok: false, err: data?.error || `Sheets sync failed (HTTP ${res.status})` };
     return { ok: true };
   } catch (e) {
-    // Some browsers/networks block reading the response from an Apps Script
-    // redirect even when everything is configured correctly. Fall back to a
-    // "fire and forget" no-cors request — Google still receives and runs it,
-    // we just can't read the confirmation back this way.
+    // Last resort: fire-and-forget no-cors. Data still reaches Google,
+    // but we can't read the confirmation back.
     try {
       await fetch(webAppUrl, {
         method: "POST",
         mode: "no-cors",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: payload
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body
       });
       return { ok: true, unconfirmed: true };
     } catch (e2) {
-      return { ok: false, err: "Could not reach the Sheets bridge at all. Check in ⚙️ Sheets: the Web App URL is correct (ends in /exec), access is set to \"Anyone\" (not \"Anyone with Google account\"), and you redeployed after any script changes." };
+      return { ok: false, err: `Network error sending data (GET test passed, so the URL is correct). Error: ${e.message}. Try the 📋 Copy button instead and paste into the sheet manually.` };
     }
   }
 }
@@ -999,7 +1002,7 @@ function ManagerApp({onLogout}){
     }
     async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(urlTrimmed);setTestResult(r);setTesting(false);}
 
-    const scriptCode=`function doGet(e) {\n  return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doPost(e) {\n  try {\n    var body = JSON.parse(e.postData.contents);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    sheet.clearContents();\n    var rows = body.rows || [];\n    if (rows.length > 0) {\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(1, 1, rows.length, maxCols).setValues(rows);\n    }\n    return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message})).setMimeType(ContentService.MimeType.JSON);\n  }\n}`;
+    const scriptCode=`function doGet(e) {\n  return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doPost(e) {\n  try {\n    // Support both form-encoded (e.parameter.payload) and raw JSON (e.postData.contents)\n    var raw = (e.parameter && e.parameter.payload) ? e.parameter.payload : e.postData.contents;\n    var body = JSON.parse(raw);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    sheet.clearContents();\n    var rows = body.rows || [];\n    if (rows.length > 0) {\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(1, 1, rows.length, maxCols).setValues(rows);\n    }\n    return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message})).setMimeType(ContentService.MimeType.JSON);\n  }\n}`;
 
     return(
       <div className="overlay" onClick={onClose}>
