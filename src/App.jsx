@@ -48,15 +48,25 @@ async function pushSheet(webAppUrl, spreadsheetId, tabName, rows) {
 // Simple connectivity check used by the "Test Connection" button in Settings.
 async function testWebApp(webAppUrl) {
   if (!webAppUrl) return { ok: false, err: "Enter a Web App URL first" };
+  // Strip any whitespace/newlines that may have crept in during copy-paste
+  const url = webAppUrl.trim();
+  // Basic format sanity check before even trying to fetch
+  if (!url.startsWith("https://")) return { ok: false, err: `URL must start with https:// — yours starts with: "${url.slice(0,20)}"` };
+  if (!url.includes("script.google.com")) return { ok: false, err: `URL must contain script.google.com — yours contains: "${url.slice(0,60)}"` };
+  if (url.endsWith("/dev")) return { ok: false, err: "URL ends in /dev — this URL requires a Google login and will never work from the app. Go back to Apps Script → Deploy → Manage deployments, and copy the Web app URL (ends in /exec)." };
+  if (!url.endsWith("/exec")) return { ok: false, err: `URL must end in /exec — yours ends in: "…${url.slice(-20)}"` };
   try {
-    const res = await fetch(webAppUrl, { method: "GET" });
-    const text = await res.text();
+    const res = await fetch(url, { method: "GET" });
+    const text = await res.text().catch(() => "");
     let data; try { data = JSON.parse(text); } catch { data = null; }
     if (data && data.ok) return { ok: true };
-    if (text.includes("accounts.google.com") || text.includes("ServiceLogin")) return { ok: false, err: "Google is asking to sign in — deployment access must be set to \"Anyone\", not \"Anyone with Google account\"." };
-    return { ok: false, err: `Unexpected response (HTTP ${res.status}) — check the URL ends in /exec and the script was deployed as a Web App.` };
+    if (text.includes("accounts.google.com") || text.includes("ServiceLogin")) return { ok: false, err: "Google is asking to sign in — go to Apps Script → Deploy → Manage deployments → edit → set \"Who has access\" to \"Anyone\" (not \"Anyone with Google account\") → create New version → Deploy." };
+    if (text.includes("Script function not found") || text.includes("doGet")) return { ok: false, err: "Script reached but doGet is missing — paste the latest script code from the setup steps and create a New deployment version." };
+    return { ok: false, err: `Reached the URL but got unexpected response (HTTP ${res.status}). Response starts with: "${text.slice(0,80)}"` };
   } catch (e) {
-    return { ok: false, err: "Could not reach that URL at all. Double check it was copied correctly from the Deploy dialog." };
+    // A fetch exception here means the browser couldn't connect at all.
+    // Most likely causes: URL has invisible characters, wrong domain, or network blocks script.google.com.
+    return { ok: false, err: `Network error: ${e.message}. The URL stored is: "${url.slice(0,80)}". Try opening the URL in a new browser tab using the link above — if that works, the issue is a browser security policy blocking the app's fetch.` };
   }
 }
 function copyTSV(rows, toast) {
@@ -1026,7 +1036,8 @@ function ManagerApp({onLogout}){
           />
           {urlHasDev&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:8}}>⚠️ URL ends in /dev — this will never work. Copy the Web app URL (ends in /exec) from your deployment.</div>}
           {urlTrimmed&&!urlLooksValid&&!urlHasDev&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:8}}>⚠️ URL must start with https://script.google.com/macros/s/ and end with /exec</div>}
-          {urlLooksValid&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:8}}>✓ URL format looks correct</div>}
+          {urlLooksValid&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:8}}>✓ URL format looks correct ({urlTrimmed.length} characters)</div>}
+          {urlTrimmed&&webAppUrl!==urlTrimmed&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:8}}>⚠️ Invisible spaces detected and will be stripped on save</div>}
           {urlTrimmed&&<div style={{marginBottom:12}}>
             <a href={urlTrimmed} target="_blank" rel="noreferrer" style={{fontSize:12,color:"#1E40AF",fontWeight:700}}>🌐 Open URL in browser tab →</a>
             <div style={{fontSize:11,color:"#888",marginTop:3}}>Should show: <code style={{background:"#F0F0F0",padding:"1px 4px",borderRadius:3}}>{"{"}"ok":true,"msg":"Sheets bridge is live"{"}"}</code>. If it asks you to log in, "Who has access" is set wrong.</div>
