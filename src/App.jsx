@@ -17,22 +17,35 @@ const db = createClient(
 // in the app for the exact script to paste in and how to deploy it.
 async function pushSheet(webAppUrl, spreadsheetId, tabName, rows) {
   if (!webAppUrl || !spreadsheetId) return { ok: false, err: "Google Sheets not configured — tap ⚙️ Sheets" };
-  // We use GET with the payload as a URL parameter.
-  // Apps Script GET requests do NOT redirect and have no CORS issues —
-  // proven by the Test Connection button already working.
-  // POST always fails because Apps Script redirects POST to script.googleusercontent.com
-  // and browsers block reading the response across that redirect (CORS policy).
-  const payload = encodeURIComponent(JSON.stringify({ spreadsheetId, tab: tabName, rows }));
-  const url = `${webAppUrl}?payload=${payload}`;
-  try {
-    const res = await fetch(url, { method: "GET" });
-    const data = await res.json().catch(() => null);
-    if (data && data.ok === false) return { ok: false, err: data.error || "Script returned an error" };
-    if (data && data.ok) return { ok: true };
-    return { ok: false, err: `Unexpected response (HTTP ${res.status})` };
-  } catch (e) {
-    return { ok: false, err: `Could not send data: ${e.message}` };
+  const CHUNK = 5;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    const isFirst = i === 0;
+    // Add cache-buster so browser never serves a cached response
+    const ts = Date.now();
+    const payload = encodeURIComponent(JSON.stringify({
+      spreadsheetId,
+      tab: tabName,
+      rows: chunk,
+      startRow: i + 1,
+      clear: isFirst,
+      ts
+    }));
+    const url = `${webAppUrl}?payload=${payload}`;
+    try {
+      const res = await fetch(url, { method: "GET", cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (!data) return { ok: false, err: `Chunk ${i/CHUNK+1}: no response from script` };
+      if (data.ok === false) return { ok: false, err: `Script error: ${data.error} (tab="${data.tab}", sheet="${data.spreadsheetId}")` };
+      // data.written tells us how many rows the script actually wrote
+      if (typeof data.written !== "undefined" && data.written === 0 && chunk.length > 0) {
+        return { ok: false, err: `Script reached but wrote 0 rows. Sheets in that spreadsheet: [${(data.sheets||[]).join(", ")}]` };
+      }
+    } catch (e) {
+      return { ok: false, err: `Network error on chunk ${i/CHUNK+1}: ${e.message}` };
+    }
   }
+  return { ok: true };
 }
 // Simple connectivity check used by the "Test Connection" button in Settings.
 async function testWebApp(webAppUrl) {
@@ -1021,7 +1034,7 @@ function ManagerApp({onLogout}){
     }
     async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(urlTrimmed);setTestResult(r);setTesting(false);}
 
-    const scriptCode=`function doGet(e) {\n  // Handle both connectivity test (no payload) and data push (with payload)\n  if (!e.parameter || !e.parameter.payload) {\n    return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n  }\n  try {\n    var body = JSON.parse(e.parameter.payload);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    sheet.clearContents();\n    var rows = body.rows || [];\n    if (rows.length > 0) {\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(1, 1, rows.length, maxCols).setValues(rows);\n    }\n    return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message})).setMimeType(ContentService.MimeType.JSON);\n  }\n}\n\nfunction doPost(e) {\n  return doGet(e);\n}`;
+    const scriptCode=`function doGet(e) {\n  if (!e.parameter || !e.parameter.payload) {\n    return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n  }\n  try {\n    var body = JSON.parse(e.parameter.payload);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    if (body.clear) sheet.clearContents();\n    var rows = body.rows || [];\n    var written = 0;\n    if (rows.length > 0) {\n      var startRow = body.startRow || 1;\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(startRow, 1, rows.length, maxCols).setValues(rows);\n      written = rows.length;\n    }\n    SpreadsheetApp.flush();\n    var sheets = ss.getSheets().map(function(s){return s.getName();});\n    return ContentService.createTextOutput(JSON.stringify({ok:true,written:written,tab:body.tab,sheets:sheets,startRow:body.startRow||1})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message,spreadsheetId:body?body.spreadsheetId:"unknown",tab:body?body.tab:"unknown"})).setMimeType(ContentService.MimeType.JSON);\n  }\n}\n\nfunction doPost(e) { return doGet(e); }`;
 
     return(
       <div className="overlay" onClick={onClose}>
