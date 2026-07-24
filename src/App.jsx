@@ -17,35 +17,21 @@ const db = createClient(
 // in the app for the exact script to paste in and how to deploy it.
 async function pushSheet(webAppUrl, spreadsheetId, tabName, rows) {
   if (!webAppUrl || !spreadsheetId) return { ok: false, err: "Google Sheets not configured — tap ⚙️ Sheets" };
-  const payload = JSON.stringify({ spreadsheetId, tab: tabName, rows });
-  // Apps Script Web Apps handle form-encoded POST natively without CORS redirects.
-  // Sending as application/x-www-form-urlencoded in a simple request avoids the
-  // OPTIONS preflight that breaks Apps Script, and avoids the redirect issue that
-  // breaks text/plain POSTs on some browsers.
-  const body = "payload=" + encodeURIComponent(payload);
+  // We use GET with the payload as a URL parameter.
+  // Apps Script GET requests do NOT redirect and have no CORS issues —
+  // proven by the Test Connection button already working.
+  // POST always fails because Apps Script redirects POST to script.googleusercontent.com
+  // and browsers block reading the response across that redirect (CORS policy).
+  const payload = encodeURIComponent(JSON.stringify({ spreadsheetId, tab: tabName, rows }));
+  const url = `${webAppUrl}?payload=${payload}`;
   try {
-    const res = await fetch(webAppUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body
-    });
+    const res = await fetch(url, { method: "GET" });
     const data = await res.json().catch(() => null);
-    if (!res.ok || !data || data.ok === false) return { ok: false, err: data?.error || `Sheets sync failed (HTTP ${res.status})` };
-    return { ok: true };
+    if (data && data.ok === false) return { ok: false, err: data.error || "Script returned an error" };
+    if (data && data.ok) return { ok: true };
+    return { ok: false, err: `Unexpected response (HTTP ${res.status})` };
   } catch (e) {
-    // Last resort: fire-and-forget no-cors. Data still reaches Google,
-    // but we can't read the confirmation back.
-    try {
-      await fetch(webAppUrl, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body
-      });
-      return { ok: true, unconfirmed: true };
-    } catch (e2) {
-      return { ok: false, err: `Network error sending data (GET test passed, so the URL is correct). Error: ${e.message}. Try the 📋 Copy button instead and paste into the sheet manually.` };
-    }
+    return { ok: false, err: `Could not send data: ${e.message}` };
   }
 }
 // Simple connectivity check used by the "Test Connection" button in Settings.
@@ -420,7 +406,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
       {tab==="home"&&<div className="body">{assigned&&!submitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-t">📊 You're today's Takings Person!</div><div className="notif-s">Tap to record today's takings →</div></div>}<div className="clkcard"><div className="clktime">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div><div className="clkdate">{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div><div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:"● Not clocked in"}</div><div className="clkbtns"><button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button><button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button></div>{logs.slice(0,3).length>0&&<div className="clkhist">{logs.slice(0,3).map(l=><div key={l.id} className="clkrow"><span>{dispDate(l.date,true)}</span><span>{l.time_in}→{l.time_out||"active"}</span><span style={{fontWeight:700}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(1)+"h":""}</span></div>)}</div>}</div><div className="sec">This Week</div><RotaList/></div>}
       {tab==="rota"&&<div className="body"><div className="sec">My Rota</div><div className="wnav"><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button><div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button></div><RotaList/></div>}
       {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A2744",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={todayISO()} onChange={e=>setAbsDate(e.target.value)}/>{absNoticeShort&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 5 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This absence is too soon to report through the app. Please contact the manager directly as soon as possible to let them know.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod||absNoticeShort}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#F7F4EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</>}</div>}
-      {tab==="takings"&&<div className="body"><div className="sec">📊 Daily Takings</div>{submitted?<div className="empty"><div className="emptyicon">✅</div><div className="emptytxt">Already submitted today!</div></div>:!assigned?<div className="empty"><div className="emptyicon">🔒</div><div className="emptytxt">Not assigned today</div></div>:<>{<div style={{fontSize:12,color:"#888",marginBottom:14}}>For {dispDate(todayISO(),true)}. <strong>Enter all amounts as positive numbers.</strong></div>}{TKFIELDS.map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(tCC[f.key]||"cash")===c?" on":""}`} onClick={()=>setTCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:4}} type="number" min="0" placeholder="0.00" value={tVals[f.key]||""} onChange={e=>setTVals(p=>({...p,[f.key]:e.target.value}))}/></div>)}<label className="lbl" style={{marginTop:10}}>Note (optional)</label><textarea className="lognote" rows={3} style={{marginBottom:12}} placeholder="Any notes…" value={tNote} onChange={e=>setTNote(e.target.value)}/><button className="btn green" onClick={submitTakings}>Submit to Manager ✓</button></>}</div>}
+      {tab==="takings"&&<div className="body"><div className="sec">📊 Daily Takings</div>{submitted?<div className="empty"><div className="emptyicon">✅</div><div className="emptytxt">Already submitted today!</div></div>:!assigned?<div className="empty"><div className="emptyicon">🔒</div><div className="emptytxt">Not assigned today</div></div>:<>{<div style={{fontSize:12,color:"#888",marginBottom:14}}>For {dispDate(todayISO(),true)}. <strong>Enter all amounts as positive numbers.</strong></div>}{TKFIELDS.map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(tCC[f.key]||"cash")===c?" on":""}`} onClick={()=>setTCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:4}} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" onKeyDown={e=>{if(["e","E","+","-"].includes(e.key))e.preventDefault();}} value={tVals[f.key]||""} onChange={e=>setTVals(p=>({...p,[f.key]:e.target.value}))}/></div>)}<label className="lbl" style={{marginTop:10}}>Note (optional)</label><textarea className="lognote" rows={3} style={{marginBottom:12}} placeholder="Any notes…" value={tNote} onChange={e=>setTNote(e.target.value)}/><button className="btn green" onClick={submitTakings}>Submit to Manager ✓</button></>}</div>}
       <div className="bnav">{navItems.map(n=><button key={n.id} className={`nbtn${tab===n.id?" on":""}`} onClick={()=>setTab(n.id)}>{n.badge&&<span className="nbadge">!</span>}<span className="ni">{n.icon}</span><span className="nl">{n.label}</span></button>)}</div>
       {rejectModal!==null&&<div className="overlay" onClick={()=>setRejectModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">Can't work {DAYS_MON[rejectModal]}?</div><div className="ssub2">Tell the manager why (optional)</div><textarea className="lognote" rows={3} placeholder="e.g. Doctor appointment…" value={rejectReason} onChange={e=>setRejectReason(e.target.value)}/><button className="btn danger" style={{marginTop:12}} onClick={rejectShift}>Send Rejection</button><button className="btn sec" onClick={()=>setRejectModal(null)}>Cancel</button></div></div>}
     </div>
@@ -1002,7 +988,7 @@ function ManagerApp({onLogout}){
     }
     async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(urlTrimmed);setTestResult(r);setTesting(false);}
 
-    const scriptCode=`function doGet(e) {\n  return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n}\n\nfunction doPost(e) {\n  try {\n    // Support both form-encoded (e.parameter.payload) and raw JSON (e.postData.contents)\n    var raw = (e.parameter && e.parameter.payload) ? e.parameter.payload : e.postData.contents;\n    var body = JSON.parse(raw);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    sheet.clearContents();\n    var rows = body.rows || [];\n    if (rows.length > 0) {\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(1, 1, rows.length, maxCols).setValues(rows);\n    }\n    return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message})).setMimeType(ContentService.MimeType.JSON);\n  }\n}`;
+    const scriptCode=`function doGet(e) {\n  // Handle both connectivity test (no payload) and data push (with payload)\n  if (!e.parameter || !e.parameter.payload) {\n    return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n  }\n  try {\n    var body = JSON.parse(e.parameter.payload);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    sheet.clearContents();\n    var rows = body.rows || [];\n    if (rows.length > 0) {\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(1, 1, rows.length, maxCols).setValues(rows);\n    }\n    return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message})).setMimeType(ContentService.MimeType.JSON);\n  }\n}\n\nfunction doPost(e) {\n  return doGet(e);\n}`;
 
     return(
       <div className="overlay" onClick={onClose}>
@@ -1505,7 +1491,7 @@ function TakingsEditForm({takings,upsertTakings,toast}){
         <div style={{fontSize:12,color:takings.find(s=>s.date===date&&s.staff_id==="manager")?"#065F46":"#888",fontWeight:700,marginBottom:10}}>
           {takings.find(s=>s.date===date&&s.staff_id==="manager")?"✅ Existing record loaded — editing will overwrite":"📝 No existing manager entry — will create new"}
         </div>
-        {TKFIELDS.map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(cc[f.key]||"cash")===c?" on":""}`} onClick={()=>setCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:3}} type="number" min="0" placeholder="0.00" value={values[f.key]||""} onChange={e=>setValues(p=>({...p,[f.key]:e.target.value}))}/></div>)}
+        {TKFIELDS.map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(cc[f.key]||"cash")===c?" on":""}`} onClick={()=>setCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:3}} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" onKeyDown={e=>{if(["e","E","+","-"].includes(e.key))e.preventDefault();}} value={values[f.key]||""} onChange={e=>setValues(p=>({...p,[f.key]:e.target.value}))}/></div>)}
         <label className="lbl" style={{marginTop:8}}>Note</label>
         <textarea className="lognote" rows={2} style={{marginBottom:10}} placeholder="Any notes…" value={note} onChange={e=>setNote(e.target.value)}/>
         <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Save / Overwrite"}</button>
@@ -1525,7 +1511,7 @@ function TakingsForm({setTakings,toast}){
   return(
     <>
       <label className="lbl">Date</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={date} onChange={e=>setDate(e.target.value)}/>
-      {TKFIELDS.map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(cc[f.key]||"cash")===c?" on":""}`} onClick={()=>setCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:3}} type="number" min="0" placeholder="0.00" value={values[f.key]||""} onChange={e=>setValues(p=>({...p,[f.key]:e.target.value}))}/></div>)}
+      {TKFIELDS.map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(cc[f.key]||"cash")===c?" on":""}`} onClick={()=>setCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:3}} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" onKeyDown={e=>{if(["e","E","+","-"].includes(e.key))e.preventDefault();}} value={values[f.key]||""} onChange={e=>setValues(p=>({...p,[f.key]:e.target.value}))}/></div>)}
       <label className="lbl" style={{marginTop:8}}>Note</label><textarea className="lognote" rows={2} style={{marginBottom:10}} placeholder="Any notes…" value={note} onChange={e=>setNote(e.target.value)}/>
       <button className="btn" onClick={submit} disabled={saving}>{saving?"Saving…":"Save Takings"}</button>
     </>
@@ -1570,7 +1556,7 @@ function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast,gsReady,gsConfig,bu
           <label className="lbl">Date</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:10}} value={date} onChange={e=>setDate(e.target.value)}/>
           <label className="lbl">Description</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:10}} placeholder="e.g. Cleaning supplies" value={desc} onChange={e=>setDesc(e.target.value)}/>
           <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"flex-end"}}>
-            <div style={{flex:1}}><label className="lbl">Amount (£)</label><input className="inp sm" style={{width:"100%"}} type="number" min="0" placeholder="0.00" value={amount} onChange={e=>setAmount(e.target.value)}/></div>
+            <div style={{flex:1}}><label className="lbl">Amount (£)</label><input className="inp sm" style={{width:"100%"}} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" onKeyDown={e=>{if(["e","E","+","-"].includes(e.key))e.preventDefault();}} value={amount} onChange={e=>setAmount(e.target.value)}/></div>
             <div><label className="lbl">Paid by</label><div className="toggle">{["cash","card"].map(c=><button key={c} className={`tgl${payType===c?" on":""}`} onClick={()=>setPayType(c)}>{c==="cash"?"💵":"💳"} {c}</button>)}</div></div>
           </div>
           <button className="btn" onClick={add} disabled={saving}>{saving?"Adding…":"Add Expense"}</button>
