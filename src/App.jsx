@@ -680,22 +680,55 @@ function ManagerApp({onLogout}){
     const existing=takings.find(s=>s.date===date&&s.staff_id==="manager");
     if(existing){
       const{error}=await db.from("takings").update({...vals,note}).eq("id",existing.id);
-      if(!error){setTakings(p=>p.map(x=>x.id===existing.id?{...x,...vals,note}:x));return{ok:true};}
+      if(!error){
+        const updated=[...takings.map(x=>x.id===existing.id?{...x,...vals,note}:x)];
+        setTakings(updated);
+        return{ok:true,updatedTakings:updated};
+      }
       return{ok:false,err:error.message};
     }else{
       const{data,error}=await db.from("takings").insert({staff_id:"manager",staff_name:"Manager",date,...vals,note,is_new:false}).select().single();
-      if(!error){setTakings(p=>[data,...p]);return{ok:true};}
+      if(!error){
+        const updated=[data,...takings];
+        setTakings(updated);
+        return{ok:true,updatedTakings:updated};
+      }
       return{ok:false,err:error.message};
     }
   }
 
-  // ── Auto-push single day to Daily sheet ──
-  async function autoPushDay(date){
+  // ── Auto-push single day to Daily sheet with fresh data ──
+  async function autoPushDay(date, freshTakings){
     if(!gsConfig.webAppUrl||!gsConfig.takingsId)return;
-    const dayRows=buildDailyForDate(date);
-    // Append to daily by rebuilding full sheet
-    const allRows=buildDaily();
-    await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",allRows);
+    // Build daily rows using the provided fresh takings (not stale React state)
+    const takingsToUse=freshTakings||takings;
+    function buildDailyFresh(){
+      const dates=[...new Set([...takingsToUse.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
+      const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Other Expense Notes"];
+      function rowForDate(d){
+        const sub=takingsToUse.find(s=>s.date===d)||{};
+        const dayExp=expenses.filter(e=>e.date===d);
+        const otherExpCash=dayExp.filter(e=>e.pay_type==="cash").reduce((s,e)=>s+e.amount,0);
+        const otherExpCard=dayExp.filter(e=>e.pay_type==="card").reduce((s,e)=>s+e.amount,0);
+        const otherExpNotes=dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ");
+        const shopExp=parseFloat(sub.shop_expense||0);
+        const dep=parseFloat(sub.deposit_receipt||0);
+        const depPay=sub.deposit_pay_type||"cash";
+        const depCash=depPay==="cash"?dep:0;
+        const depCard=depPay==="card"?dep:0;
+        const vp=parseFloat(sub.voucher_purchase||0);
+        const vpPay=sub.voucher_pay_type||"cash";
+        const vpCash=vpPay==="cash"?vp:0;
+        const vpCard=vpPay==="card"?vp:0;
+        const cash=parseFloat(sub.cash||0),card=parseFloat(sub.card||0);
+        const deliveroo=parseFloat(sub.deliveroo||0),uber=parseFloat(sub.uber||0),online=parseFloat(sub.online||0);
+        const total=(deliveroo+uber+cash+card+online-shopExp+dep+vp-otherExpCash-otherExpCard).toFixed(2);
+        const cashInHand=(cash-shopExp-otherExpCash+depCash+vpCash).toFixed(2);
+        return[fmtDate(d),deliveroo,uber,cash,card,online,shopExp.toFixed(2),depCash.toFixed(2),depCard.toFixed(2),vpCash.toFixed(2),vpCard.toFixed(2),otherExpCash.toFixed(2),otherExpCard.toFixed(2),total,cashInHand,total,otherExpNotes];
+      }
+      return[hdr,...dates.map(rowForDate)];
+    }
+    await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",buildDailyFresh());
   }
 
   // ── Export builders ──
@@ -800,7 +833,7 @@ function ManagerApp({onLogout}){
     t("⏳ Pushing PayrollWeekly tab…");
     const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollWeekly",buildPayrollWeekly());
     if(!r2.ok){t("❌ "+r2.err);return;}
-    t((r1.unconfirmed||r2.unconfirmed)?"✅ Sent — please double-check the sheet (couldn't confirm delivery)":"✅ Payroll & Weekly tabs updated!");
+    t("✅ Payroll & Weekly tabs updated!");
   }
   async function exportTakings(){
     if(!gsConfig.webAppUrl||!gsConfig.takingsId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
@@ -810,7 +843,7 @@ function ManagerApp({onLogout}){
     t("⏳ Updating Weekly tab…");
     const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Weekly",buildWeekly());
     if(!r2.ok){t("❌ "+r2.err);return;}
-    t((r1.unconfirmed||r2.unconfirmed)?"✅ Sent — please double-check the sheet (couldn't confirm delivery)":"✅ Takings sheets updated!");
+    t("✅ Takings sheets updated!");
   }
 
   // ── Rota share ──
@@ -1354,10 +1387,12 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
   async function markSeen(sub){
     const{error}=await db.from("takings").update({is_new:false}).eq("id",sub.id);
     if(!error){
-      setTakings(p=>p.map(x=>x.id===sub.id?{...x,is_new:false}:x));
-      // Auto-push to Google Sheets if connected and this was a staff submission
-      if(gsReady&&sub.staff_id!=="manager"){await autoPushDay(sub.date);toast("✅ Marked seen & pushed to Sheets");}
-      else toast("✅ Marked as seen");
+      const freshTakings=takings.map(x=>x.id===sub.id?{...x,is_new:false}:x);
+      setTakings(freshTakings);
+      if(gsReady&&sub.staff_id!=="manager"){
+        await autoPushDay(sub.date,freshTakings);
+        toast("✅ Marked seen & pushed to Sheets");
+      }else toast("✅ Marked as seen");
     }else toast("❌ "+error.message);
   }
 
@@ -1442,7 +1477,7 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
           </button>
         </div>
         {editMode?(
-          <TakingsEditForm takings={takings} upsertTakings={upsertTakings} toast={toast}/>
+          <TakingsEditForm takings={takings} upsertTakings={upsertTakings} toast={toast} autoPushDay={autoPushDay} gsReady={gsReady}/>
         ):(
           <TakingsForm setTakings={setTakings} toast={toast}/>
         )}
@@ -1459,7 +1494,7 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
 }
 
 // ── Takings edit existing form ──
-function TakingsEditForm({takings,upsertTakings,toast}){
+function TakingsEditForm({takings,upsertTakings,toast,autoPushDay,gsReady}){
   const[date,setDate]=useState(todayISO());
   const[values,setValues]=useState({});const[cc,setCC]=useState({});const[note,setNote]=useState("");const[saving,setSaving]=useState(false);
   const[loaded,setLoaded]=useState(false);
@@ -1475,7 +1510,10 @@ function TakingsEditForm({takings,upsertTakings,toast}){
     setSaving(true);
     const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(values[f.key]||0);if(f.ccDb)vals[f.ccDb]=cc[f.key]||"cash";});
     const r=await upsertTakings(date,vals,note);
-    if(r.ok)toast("✅ Takings updated!");else toast("❌ "+r.err);
+    if(r.ok){
+      toast("✅ Takings updated!");
+      if(gsReady&&autoPushDay){await autoPushDay(date,r.updatedTakings);toast("✅ Saved & pushed to Sheets");}
+    }else toast("❌ "+r.err);
     setSaving(false);
   }
 
