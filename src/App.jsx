@@ -1027,12 +1027,48 @@ function ManagerApp({onLogout}){
     const urlLooksValid=urlTrimmed.startsWith("https://script.google.com/macros/s/")&&urlTrimmed.endsWith("/exec");
     const urlHasDev=urlTrimmed.endsWith("/dev");
 
+    // Auto-extract spreadsheet ID if user pastes full URL
+    function extractSheetId(val){
+      const v=val.trim();
+      const m=v.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+      if(m)return m[1];
+      // if it looks like just an ID already (no slashes, no spaces)
+      if(/^[a-zA-Z0-9_-]+$/.test(v))return v;
+      return v;
+    }
+    const cleanPayrollId=extractSheetId(payrollId);
+    const cleanTakingsId=extractSheetId(takingsId);
+    const payrollIdValid=/^[a-zA-Z0-9_-]{20,}$/.test(cleanPayrollId);
+    const takingsIdValid=/^[a-zA-Z0-9_-]{20,}$/.test(cleanTakingsId);
+
     async function save(){
       setSaving(true);
-      await saveGsConfig({webAppUrl:urlTrimmed,payrollId:payrollId.trim(),takingsId:takingsId.trim()});
+      await saveGsConfig({webAppUrl:urlTrimmed,payrollId:cleanPayrollId,takingsId:cleanTakingsId});
       setSaving(false);onClose();
     }
     async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(urlTrimmed);setTestResult(r);setTesting(false);}
+    async function testIds(){
+      setTesting(true);setTestResult(null);
+      // Send a real 1-cell test write to the payroll sheet and report back
+      const idToTest=cleanPayrollId||cleanTakingsId;
+      if(!idToTest){setTestResult({ok:false,err:"Enter at least one Spreadsheet ID first"});setTesting(false);return;}
+      const payload=encodeURIComponent(JSON.stringify({
+        spreadsheetId:idToTest, tab:"TestConnection",
+        rows:[["Test","OK",new Date().toLocaleString()]],
+        startRow:1, clear:true, ts:Date.now()
+      }));
+      try{
+        const res=await fetch(`${urlTrimmed}?payload=${payload}`,{method:"GET",cache:"no-store"});
+        const data=await res.json().catch(()=>null);
+        if(!data){setTestResult({ok:false,err:"No response from script"});setTesting(false);return;}
+        if(data.ok){
+          setTestResult({ok:true,msg:`✅ Spreadsheet ID works! Found tabs: [${(data.sheets||[]).join(", ")}]. A "TestConnection" tab was written — you can delete it. Now check the tab names in your sheet match exactly what the app sends: Payroll, PayrollWeekly, Daily, Weekly.`});
+        }else{
+          setTestResult({ok:false,err:`❌ Script error: "${data.error}" — The spreadsheet ID "${idToTest}" is invalid or you don't have access to it. Open your Google Sheet, copy the URL, and paste the whole URL into the field above.`});
+        }
+      }catch(e){setTestResult({ok:false,err:`Network error: ${e.message}`});}
+      setTesting(false);
+    }
 
     const scriptCode=`function doGet(e) {\n  if (!e.parameter || !e.parameter.payload) {\n    return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n  }\n  try {\n    var body = JSON.parse(e.parameter.payload);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    if (body.clear) sheet.clearContents();\n    var rows = body.rows || [];\n    var written = 0;\n    if (rows.length > 0) {\n      var startRow = body.startRow || 1;\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(startRow, 1, rows.length, maxCols).setValues(rows);\n      written = rows.length;\n    }\n    SpreadsheetApp.flush();\n    var sheets = ss.getSheets().map(function(s){return s.getName();});\n    return ContentService.createTextOutput(JSON.stringify({ok:true,written:written,tab:body.tab,sheets:sheets,startRow:body.startRow||1})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message,spreadsheetId:body?body.spreadsheetId:"unknown",tab:body?body.tab:"unknown"})).setMimeType(ContentService.MimeType.JSON);\n  }\n}\n\nfunction doPost(e) { return doGet(e); }`;
 
@@ -1078,19 +1114,36 @@ function ManagerApp({onLogout}){
             <div style={{fontSize:11,color:"#888",marginTop:3}}>Should show: <code style={{background:"#F0F0F0",padding:"1px 4px",borderRadius:3}}>{"{"}"ok":true,"msg":"Sheets bridge is live"{"}"}</code>. If it asks you to log in, "Who has access" is set wrong.</div>
           </div>}
 
-          <button className="btn sec" style={{marginTop:0,marginBottom:14}} onClick={runTest} disabled={testing||!urlTrimmed}>{testing?"Testing…":"🔍 Test Connection"}</button>
+          <button className="btn sec" style={{marginTop:0,marginBottom:8}} onClick={runTest} disabled={testing||!urlTrimmed}>{testing?"Testing…":"🔍 Test Connection"}</button>
           {testResult&&(
-            <div style={{background:testResult.ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${testResult.ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:12,color:testResult.ok?"#065F46":"#7F1D1D",lineHeight:1.6}}>
-              {testResult.ok?"✅ Connected! The script is reachable and working.":`❌ ${testResult.err}`}
+            <div style={{background:testResult.ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${testResult.ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 12px",marginBottom:8,fontSize:12,color:testResult.ok?"#065F46":"#7F1D1D",lineHeight:1.6}}>
+              {testResult.ok?(testResult.msg||"✅ Connected! The script is reachable and working."):`❌ ${testResult.err}`}
             </div>
           )}
 
           <label className="lbl">Payroll Spreadsheet ID</label>
-          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:6}} placeholder="1Wj0EH…" value={payrollId} onChange={e=>setPayrollId(e.target.value)}/>
-          <div style={{fontSize:11,color:"#888",marginBottom:14}}>From the sheet URL: …/spreadsheets/d/<strong>COPY THIS PART</strong>/edit</div>
+          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:4,borderColor:payrollId?(payrollIdValid?"#50DC78":"#E05252"):"#E5E5E5"}} placeholder="Paste the spreadsheet ID or the full URL" value={payrollId} onChange={e=>setPayrollId(e.target.value)}/>
+          {payrollId&&!payrollIdValid&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ Doesn't look like a valid spreadsheet ID. Paste the full spreadsheet URL and we'll extract it automatically.</div>}
+          {payrollId&&payrollIdValid&&cleanPayrollId!==payrollId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ Will save ID: <code style={{background:"#F0F0F0",padding:"1px 4px",borderRadius:3}}>{cleanPayrollId}</code></div>}
+          {payrollId&&payrollIdValid&&cleanPayrollId===payrollId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ ID looks valid</div>}
+          <div style={{fontSize:11,color:"#888",marginBottom:14}}>Paste the full sheet URL or just the ID — we auto-extract it</div>
+
           <label className="lbl">Takings Spreadsheet ID</label>
-          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:6}} placeholder="1K-UMB…" value={takingsId} onChange={e=>setTakingsId(e.target.value)}/>
-          <div style={{fontSize:11,color:"#888",marginBottom:14}}>From the sheet URL: …/spreadsheets/d/<strong>COPY THIS PART</strong>/edit</div>
+          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:4,borderColor:takingsId?(takingsIdValid?"#50DC78":"#E05252"):"#E5E5E5"}} placeholder="Paste the spreadsheet ID or the full URL" value={takingsId} onChange={e=>setTakingsId(e.target.value)}/>
+          {takingsId&&!takingsIdValid&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ Doesn't look like a valid spreadsheet ID. Paste the full spreadsheet URL and we'll extract it automatically.</div>}
+          {takingsId&&takingsIdValid&&cleanTakingsId!==takingsId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ Will save ID: <code style={{background:"#F0F0F0",padding:"1px 4px",borderRadius:3}}>{cleanTakingsId}</code></div>}
+          {takingsId&&takingsIdValid&&cleanTakingsId===takingsId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ ID looks valid</div>}
+          <div style={{fontSize:11,color:"#888",marginBottom:14}}>Paste the full sheet URL or just the ID — we auto-extract it</div>
+
+          {/* Test whether the IDs actually open real spreadsheets */}
+          {urlLooksValid&&(cleanPayrollId||cleanTakingsId)&&(
+            <div style={{marginBottom:14}}>
+              <button className="btn sec" style={{marginTop:0}} onClick={testIds} disabled={testing}>
+                {testing?"Testing…":"🧪 Test Spreadsheet IDs (try a test write)"}
+              </button>
+              <div style={{fontSize:11,color:"#888",marginTop:6}}>This writes one test row to a "TestConnection" tab — confirms your spreadsheet IDs are correct before saving.</div>
+            </div>
+          )}
 
           <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Save & Connect"}</button>
           <button className="btn sec" onClick={onClose}>Cancel</button>
