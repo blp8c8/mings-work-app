@@ -128,7 +128,7 @@ const TKFIELDS = [
   { key:"cash",             label:"Cash 💵",              db:"cash",              sign: 1 },
   { key:"card",             label:"Card 💳",              db:"card",              sign: 1 },
   { key:"online",           label:"Online 🌐",            db:"online",            sign: 1 },
-  { key:"shopExpense",      label:"Shop Expense 🧾",      db:"shop_expense",      sign:-1, hint:"Store/supplies expenses — enter as positive, deducted automatically" },
+  { key:"shopExpense",      label:"Shop Expense 🧾",      db:"shop_expense",      sign:-1, hint:"Store/supplies expenses — enter as positive, deducted automatically", managerOnly:true },
   { key:"depositReceipt",   label:"Deposit Receipt",      db:"deposit_receipt",   sign: 1, cc:true, ccDb:"deposit_pay_type" },
   { key:"voucherPurchase",  label:"Voucher Purchase 🎫",  db:"voucher_purchase",  sign: 1, cc:true, ccDb:"voucher_pay_type" },
 ];
@@ -480,13 +480,18 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
                   <div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Already corrected once</div>
                   <div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>You've already made one correction today. For any further changes, please report to the manager directly.</div>
                 </div>
-              :<button className="btn sec" style={{marginTop:0}} onClick={()=>setShowCorrect(true)}>✏️ Made a mistake? Correct it</button>
+              :<button className="btn sec" style={{marginTop:0}} onClick={async()=>{
+                // Load existing values into the form before showing it
+                const{data}=await db.from("takings").select("*").eq("staff_id",user.id).eq("date",todayISO()).maybeSingle();
+                if(data){const v={};TKFIELDS.filter(f=>!f.managerOnly).forEach(f=>{v[f.key]=String(data[f.db]||"");});setTVals(v);const c={};TKFIELDS.filter(f=>!f.managerOnly&&f.ccDb).forEach(f=>{c[f.key]=data[f.ccDb]||"cash";});setTCC(c);setTNote(data.note||"");}
+                setShowCorrect(true);
+              }}>✏️ Made a mistake? Correct it</button>
             }
           </div>
         ):(
           <>{submitted&&showCorrect&&<div style={{background:"#FFF8EC",border:"1.5px solid #F5A623",borderRadius:11,padding:"10px 13px",marginBottom:12}}><div style={{fontSize:12,fontWeight:800,color:"#92400E"}}>✏️ Correcting today's submission — this is your one chance to fix a mistake.</div></div>}
           <div style={{fontSize:12,color:"#888",marginBottom:14}}>For {dispDate(todayISO(),true)}. <strong>Enter all amounts as positive numbers.</strong></div>
-          {TKFIELDS.map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(tCC[f.key]||"cash")===c?" on":""}`} onClick={()=>setTCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:4}} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" onKeyDown={e=>{if(["e","E","+","-"].includes(e.key))e.preventDefault();}} value={tVals[f.key]||""} onChange={e=>setTVals(p=>({...p,[f.key]:e.target.value}))}/></div>)}
+          {TKFIELDS.filter(f=>!f.managerOnly).map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(tCC[f.key]||"cash")===c?" on":""}`} onClick={()=>setTCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:4}} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" onKeyDown={e=>{if(["e","E","+","-"].includes(e.key))e.preventDefault();}} value={tVals[f.key]||""} onChange={e=>setTVals(p=>({...p,[f.key]:e.target.value}))}/></div>)}
           <label className="lbl" style={{marginTop:10}}>Note (optional)</label><textarea className="lognote" rows={3} style={{marginBottom:12}} placeholder="Any notes…" value={tNote} onChange={e=>setTNote(e.target.value)}/>
           {showCorrect
             ?<><button className="btn" onClick={correctTakings}>Submit Correction ✓</button><button className="btn sec" onClick={()=>setShowCorrect(false)}>Cancel</button></>
@@ -554,6 +559,17 @@ function ManagerApp({onLogout}){
   useEffect(()=>{loadAll();},[]);
   useEffect(()=>{if(staff.length)loadRota();},[rotaMon,staff.length]);
   useEffect(()=>{if(kitchenStaff.length)loadKitchenHours();},[weekRange.start,kitchenStaff.length]);
+  useEffect(()=>{
+    // Reload payroll_extras for the new week so cards auto-fill
+    db.from("payroll_extras").select("*").eq("week_start",weekRange.start).then(({data})=>{
+      if(!data)return;
+      setExtras(p=>{
+        const em={...p};
+        data.forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",id:e.id,ws:e.week_start};});
+        return em;
+      });
+    });
+  },[weekRange.start]);
 
   async function loadAll(){
     setLoading(true);
@@ -929,16 +945,17 @@ function ManagerApp({onLogout}){
 
   async function exportPayroll(){
     if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
-    const rows=buildPayroll(); // rows[0] is header, rest are data
+    const rows=buildPayroll();
     const hdr=rows[0]; const data=rows.slice(1);
     t("⏳ Pushing Payroll tab…");
     const r1=await pushSheetAppend(gsConfig.webAppUrl,gsConfig.payrollId,"Payroll",hdr,data);
     if(!r1.ok){t("❌ "+r1.err);return;}
-    // PayrollWeekly always overwrites (only ever 2 rows: header + current week)
     t("⏳ Pushing PayrollWeekly tab…");
     const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollWeekly",buildPayrollWeekly());
     if(!r2.ok){t("❌ "+r2.err);return;}
-    t("✅ Payroll & Weekly tabs updated!");
+    // Clear all payroll extras from state — fresh slate after export
+    setExtras({});
+    t("✅ Payroll pushed & page cleared!");
   }
   async function exportTakings(){
     if(!gsConfig.webAppUrl||!gsConfig.takingsId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
@@ -1051,14 +1068,12 @@ function ManagerApp({onLogout}){
           <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
             <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>EDIT COUNTS <span style={{fontWeight:400}}>(blank = auto from rota/clock)</span></div>
             <div style={{display:"flex",gap:8}}>
-              {payType==="shift"
-                ?<><div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.full)} value={lFull} onChange={e=>{setLFull(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualFull:e.target.value}))}/></div><div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Night Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.night)} value={lNight} onChange={e=>{setLNight(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualNight:e.target.value}))}/></div></>
-                :<div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder={p.hrs} value={lHrs} onChange={e=>{setLHrs(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>
-              }
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.full)} value={lFull} onChange={e=>{setLFull(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualFull:e.target.value}))}/></div>
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Night Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.night)} value={lNight} onChange={e=>{setLNight(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualNight:e.target.value}))}/></div>
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder={p.hrs} value={lHrs} onChange={e=>{setLHrs(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>
             </div>
           </div>
           {payType==="shift"?(<><div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div><div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div></>):(<div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{p.base}</span></div>)}
-          {isKitchen&&<div style={{marginBottom:8}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>HOURS THIS WEEK</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={kitchenHours[kitchenId]?.hours||""} onChange={e=>updKitchenHours(kitchenId,e.target.value)}/></div>}
           <div className="row"><span>Tips (£)</span><input type="number" className="mini" min="0" placeholder="0.00" value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,tips:e.target.value}))}/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#50DC78",marginBottom:4}}>ADDITIONS</div><AddDeductRow sid={sid} type="add"/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#E05252",marginBottom:4}}>DEDUCTIONS</div><AddDeductRow sid={sid} type="ded"/></div>
@@ -1495,7 +1510,7 @@ function ManagerApp({onLogout}){
             <div className="sec">Payroll</div>
             <div className="ssub">Private — staff never see salaries</div>
             <div style={{display:"flex",gap:6,marginBottom:12,alignItems:"center"}}>
-              <input type="date" className="inp sm" style={{flex:1}} value={weekRange.start} onChange={e=>setWeekRange(p=>({...p,start:e.target.value}))}/>
+              <input type="date" className="inp sm" style={{flex:1}} value={weekRange.start} onChange={e=>{const s=e.target.value;setWeekRange({start:s,end:addDays(s,6)});}}/>
               <span style={{fontSize:12,color:"#aaa"}}>→</span>
               <input type="date" className="inp sm" style={{flex:1}} value={weekRange.end} onChange={e=>setWeekRange(p=>({...p,end:e.target.value}))}/>
             </div>
@@ -1517,6 +1532,10 @@ function ManagerApp({onLogout}){
             <div className="expsec">
               <div className="exptitle">📤 Export Payroll</div>
               {!gsReady&&<div className="gs-banner">⚠️ <strong>Google Sheets not connected.</strong> Tap ⚙️ Sheets in header.</div>}
+              <div style={{fontSize:12,color:"#888",marginBottom:10,lineHeight:1.6}}>
+                Edit the counts and amounts in the cards above, then push. After a successful push the page clears for the next week.<br/>
+                To reload saved data for a week: change the start date — the cards will auto-fill from what's stored.
+              </div>
               <button className="expbtn p" onClick={exportPayroll}>🔗 Push to Payroll Sheet (Staff + Weekly tabs)</button>
               <button className="expbtn s" onClick={()=>copyTSV(buildPayroll(),t)}>📋 Copy Staff Data</button>
               <button className="expbtn s" onClick={()=>copyTSV(buildPayrollWeekly(),t)}>📋 Copy Weekly Summary</button>
