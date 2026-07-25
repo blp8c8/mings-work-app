@@ -43,6 +43,48 @@ async function pushSheet(webAppUrl, spreadsheetId, tabName, rows) {
   }
   return { ok: true, written: totalWritten, sheets: lastSheets };
 }
+// Header-once push: writes header to row 1 only if the sheet is currently empty,
+// then appends data rows after whatever is already there.
+// Used for Payroll, Daily, and Weekly tabs so headers are never overwritten.
+async function pushSheetAppend(webAppUrl, spreadsheetId, tabName, headerRow, dataRows) {
+  if (!webAppUrl || !spreadsheetId) return { ok: false, err: "Google Sheets not configured — tap ⚙️ Sheets" };
+  // Step 1: ask the script how many rows the sheet currently has
+  const infoPayload = encodeURIComponent(JSON.stringify({
+    spreadsheetId, tab: tabName, getInfo: true, ts: Date.now()
+  }));
+  let existingRows = 0;
+  try {
+    const res = await fetch(`${webAppUrl}?payload=${infoPayload}`, { method: "GET", cache: "no-store" });
+    const data = await res.json().catch(() => null);
+    if (data && data.ok) existingRows = data.rowCount || 0;
+  } catch (_) {}
+  // Step 2: if sheet is empty, write header first
+  const rowsToWrite = existingRows === 0 ? [headerRow, ...dataRows] : dataRows;
+  const startRow = existingRows === 0 ? 1 : existingRows + 1;
+  if (rowsToWrite.length === 0) return { ok: true, written: 0, sheets: [] };
+  const CHUNK = 5;
+  let totalWritten = 0;
+  let lastSheets = [];
+  for (let i = 0; i < rowsToWrite.length; i += CHUNK) {
+    const chunk = rowsToWrite.slice(i, i + CHUNK);
+    const payload = encodeURIComponent(JSON.stringify({
+      spreadsheetId, tab: tabName,
+      rows: chunk, startRow: startRow + i,
+      clear: false, ts: Date.now()
+    }));
+    try {
+      const res = await fetch(`${webAppUrl}?payload=${payload}`, { method: "GET", cache: "no-store" });
+      const data = await res.json().catch(() => null);
+      if (!data) return { ok: false, err: `No response on chunk ${i/CHUNK+1}` };
+      if (data.ok === false) return { ok: false, err: `Script error: ${data.error}` };
+      totalWritten += (data.written || 0);
+      if (data.sheets) lastSheets = data.sheets;
+    } catch (e) {
+      return { ok: false, err: `Network error chunk ${i/CHUNK+1}: ${e.message}` };
+    }
+  }
+  return { ok: true, written: totalWritten, sheets: lastSheets };
+}
 // Simple connectivity check used by the "Test Connection" button in Settings.
 async function testWebApp(webAppUrl) {
   if (!webAppUrl) return { ok: false, err: "Enter a Web App URL first" };
@@ -95,6 +137,7 @@ const TKFIELDS = [
 const todayISO  = () => new Date().toISOString().split("T")[0];
 const nowTime   = () => new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
 const fmtDate   = iso => { if(!iso)return""; const[y,m,d]=iso.split("-"); return`${d}/${m}/${y}`; };
+const r2 = v => Math.round((parseFloat(v)||0)*100)/100; // proper 2dp rounding, avoids 2.9999... artifacts
 const addDays   = (iso,n) => { const d=new Date(iso+"T12:00:00"); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
 const dispDate  = (iso,wd=false) => { if(!iso)return""; const d=new Date(iso+"T12:00:00"); return wd?d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}):d.toLocaleDateString("en-GB",{day:"numeric",month:"short"}); };
 const fmtRange  = (s,e) => `${fmtDate(s)} – ${fmtDate(e)}`;
@@ -731,9 +774,9 @@ function ManagerApp({onLogout}){
         const vpCard=vpPay==="card"?vp:0;
         const cash=parseFloat(sub.cash||0),card=parseFloat(sub.card||0);
         const deliveroo=parseFloat(sub.deliveroo||0),uber=parseFloat(sub.uber||0),online=parseFloat(sub.online||0);
-        const total=(deliveroo+uber+cash+card+online-shopExp+dep+vp-otherExpCash-otherExpCard).toFixed(2);
-        const cashInHand=(cash-shopExp-otherExpCash+depCash+vpCash).toFixed(2);
-        return[fmtDate(d),deliveroo,uber,cash,card,online,shopExp.toFixed(2),depCash.toFixed(2),depCard.toFixed(2),vpCash.toFixed(2),vpCard.toFixed(2),otherExpCash.toFixed(2),otherExpCard.toFixed(2),total,cashInHand,total,otherExpNotes];
+        const total=r2(deliveroo+uber+cash+card+online-shopExp+dep+vp-otherExpCash-otherExpCard);
+        const cashInHand=r2(cash-shopExp-otherExpCash+depCash+vpCash);
+        return[fmtDate(d),r2(deliveroo),r2(uber),r2(cash),r2(card),r2(online),r2(shopExp),r2(depCash),r2(depCard),r2(vpCash),r2(vpCard),r2(otherExpCash),r2(otherExpCard),total,cashInHand,total,otherExpNotes];
       }
       return[hdr,...dates.map(rowForDate)];
     }
@@ -774,16 +817,15 @@ function ManagerApp({onLogout}){
     const card=parseFloat(sub.card||0);
     const online=parseFloat(sub.online||0);
     // total = deliveroo+uber+cash+card+online - shopExp + depositReceipt + voucherPurchase - otherExpCash - otherExpCard
-    const total=(deliveroo+uber+cash+card+online-shopExp+dep+vp-otherExpCash-otherExpCard).toFixed(2);
-    // cashInHand = cash - shopExp - otherExpCash + depositReceipt_if_cash + voucherPurchase_if_cash
-    const cashInHand=(cash-shopExp-otherExpCash+depCash+vpCash).toFixed(2);
+    const total=r2(deliveroo+uber+cash+card+online-shopExp+dep+vp-otherExpCash-otherExpCard);
+    const cashInHand=r2(cash-shopExp-otherExpCash+depCash+vpCash);
     return[[
       fmtDate(date),
-      deliveroo, uber, cash, card, online,
-      shopExp.toFixed(2),
-      depCash.toFixed(2), depCard.toFixed(2),
-      vpCash.toFixed(2),  vpCard.toFixed(2),
-      otherExpCash.toFixed(2), otherExpCard.toFixed(2),
+      r2(deliveroo), r2(uber), r2(cash), r2(card), r2(online),
+      r2(shopExp),
+      r2(depCash), r2(depCard),
+      r2(vpCash),  r2(vpCard),
+      r2(otherExpCash), r2(otherExpCard),
       total, cashInHand, total,
       otherExpNotes
     ]];
@@ -836,9 +878,12 @@ function ManagerApp({onLogout}){
 
   async function exportPayroll(){
     if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
+    const rows=buildPayroll(); // rows[0] is header, rest are data
+    const hdr=rows[0]; const data=rows.slice(1);
     t("⏳ Pushing Payroll tab…");
-    const r1=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"Payroll",buildPayroll());
+    const r1=await pushSheetAppend(gsConfig.webAppUrl,gsConfig.payrollId,"Payroll",hdr,data);
     if(!r1.ok){t("❌ "+r1.err);return;}
+    // PayrollWeekly always overwrites (only ever 2 rows: header + current week)
     t("⏳ Pushing PayrollWeekly tab…");
     const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollWeekly",buildPayrollWeekly());
     if(!r2.ok){t("❌ "+r2.err);return;}
@@ -856,6 +901,39 @@ function ManagerApp({onLogout}){
     if(!r2.ok){t("❌ "+r2.err);return;}
     const tabs=(r2.sheets||[]).join(", ")||"unknown";
     t(`✅ Done — ${daily.length-1} daily rows, ${weekly.length-1} weekly rows. Tabs in sheet: [${tabs}]`);
+  }
+  // Export expenses only — merges into Daily sheet without touching takings columns
+  // Columns: 12=Other Exp Cash (0-indexed: 11), 13=Other Exp Card (12), 17=Notes (16)
+  async function exportExpensesOnly(){
+    if(!gsConfig.webAppUrl||!gsConfig.takingsId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
+    // Get all expense dates
+    const expDates=[...new Set(expenses.map(e=>e.date))].filter(Boolean).sort();
+    if(expDates.length===0)return t("No expenses to export");
+    // For each expense date, build a row: either update existing taking row or create new
+    const takingsDates=takings.map(s=>s.date);
+    const rows=expDates.map(date=>{
+      const dayExp=expenses.filter(e=>e.date===date);
+      const expCash=dayExp.filter(e=>e.pay_type==="cash").reduce((s,e)=>s+e.amount,0);
+      const expCard=dayExp.filter(e=>e.pay_type==="card").reduce((s,e)=>s+e.amount,0);
+      const notes=dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ");
+      const hasTaking=takingsDates.includes(date);
+      if(hasTaking){
+        // Return the full row so it overwrites correctly in the full Daily sheet
+        return buildDailyForDate(date)[0];
+      }else{
+        // New row: date + blanks for takings columns + expense columns
+        const blank="";
+        return[fmtDate(date),blank,blank,blank,blank,blank,blank,blank,blank,blank,blank,r2(expCash),r2(expCard),blank,blank,blank,notes];
+      }
+    });
+    // Rebuild full daily with merged expenses and push
+    const allDates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
+    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Other Expense Notes"];
+    const allRows=[hdr,...allDates.map(d=>buildDailyForDate(d)[0])];
+    t(`⏳ Merging expenses into Daily tab…`);
+    const r=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",allRows);
+    if(!r.ok){t("❌ "+r.err);return;}
+    t("✅ Expenses merged into Daily sheet!");
   }
 
   // ── Rota share ──
@@ -901,6 +979,14 @@ function ManagerApp({onLogout}){
     const p=calcFn();const ex=getExtras(sid);
     const[showOverride,setShowOverride]=useState(!!(ex.manualTotal&&ex.manualTotal!==""));
     const[localCardFixed,setLocalCardFixed]=useState(cardFixed||"0");
+    // Local input state — avoids re-rendering whole list on every keystroke (fix for scroll-jump bug)
+    const[lFull,setLFull]=useState(ex.manualFull||"");
+    const[lNight,setLNight]=useState(ex.manualNight||"");
+    const[lHrs,setLHrs]=useState(ex.manualHrs||"");
+    const[lTips,setLTips]=useState(ex.tips||"");
+    const[lCash,setLCash]=useState(ex.manualCash||"");
+    const[lCard,setLCard]=useState(ex.manualCard||"");
+    const[lTotal,setLTotal]=useState(ex.manualTotal||"");
     useEffect(()=>{setLocalCardFixed(cardFixed||"0");},[cardFixed]);
     return(
       <div className="paycard">
@@ -913,13 +999,13 @@ function ManagerApp({onLogout}){
           <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
             <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>EDIT COUNTS <span style={{fontWeight:400}}>(blank = auto from rota/clock)</span></div>
             <div style={{display:"flex",gap:8}}>
-              {(payType==="shift")&&<><div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.full)} value={ex.manualFull||""} onChange={e=>updateExtras(sid,ex=>({...ex,manualFull:e.target.value}))}/></div><div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Night Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.night)} value={ex.manualNight||""} onChange={e=>updateExtras(sid,ex=>({...ex,manualNight:e.target.value}))}/></div></>}
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder={p.hrs} value={ex.manualHrs||""} onChange={e=>updateExtras(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>
+              {(payType==="shift")&&<><div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.full)} value={lFull} onChange={e=>setLFull(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualFull:e.target.value}))}/></div><div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Night Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.night)} value={lNight} onChange={e=>setLNight(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualNight:e.target.value}))}/></div></>}
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder={p.hrs} value={lHrs} onChange={e=>setLHrs(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>
             </div>
           </div>
           {payType==="shift"?(<><div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div><div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div></>):(<div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{p.base}</span></div>)}
           {isKitchen&&<div style={{marginBottom:8}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>HOURS THIS WEEK</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={kitchenHours[kitchenId]?.hours||""} onChange={e=>updKitchenHours(kitchenId,e.target.value)}/></div>}
-          <div className="row"><span>Tips (£)</span><input type="number" className="mini" min="0" placeholder="0.00" value={ex.tips||""} onChange={e=>updateExtras(sid,ex=>({...ex,tips:e.target.value}))}/></div>
+          <div className="row"><span>Tips (£)</span><input type="number" className="mini" min="0" placeholder="0.00" value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,tips:e.target.value}))}/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#50DC78",marginBottom:4}}>ADDITIONS</div><AddDeductRow sid={sid} type="add"/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#E05252",marginBottom:4}}>DEDUCTIONS</div><AddDeductRow sid={sid} type="ded"/></div>
           {/* Notes */}
@@ -969,9 +1055,9 @@ function ManagerApp({onLogout}){
           {showOverride&&<div className="override-box">
             <div style={{fontSize:11,color:"#78350F",marginBottom:8,fontWeight:700}}>Enter correct final numbers — overrides all calculations above</div>
             <div style={{display:"flex",gap:8}}>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CASH £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={ex.manualCash||""} onChange={e=>updateExtras(sid,ex=>({...ex,manualCash:e.target.value}))}/></div>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CARD £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={ex.manualCard||""} onChange={e=>updateExtras(sid,ex=>({...ex,manualCard:e.target.value}))}/></div>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>TOTAL £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={ex.manualTotal||""} onChange={e=>updateExtras(sid,ex=>({...ex,manualTotal:e.target.value}))}/></div>
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CASH £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCash} onChange={e=>setLCash(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualCash:e.target.value}))}/></div>
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CARD £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCard} onChange={e=>setLCard(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualCard:e.target.value}))}/></div>
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>TOTAL £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lTotal} onChange={e=>setLTotal(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualTotal:e.target.value}))}/></div>
             </div>
             <button className="btn danger" style={{marginTop:8,padding:"8px"}} onClick={()=>updateExtras(sid,ex=>({...ex,manualCash:"",manualCard:"",manualTotal:""}))}>Clear Override</button>
           </div>}
@@ -1070,7 +1156,7 @@ function ManagerApp({onLogout}){
       setTesting(false);
     }
 
-    const scriptCode=`function doGet(e) {\n  if (!e.parameter || !e.parameter.payload) {\n    return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n  }\n  try {\n    var body = JSON.parse(e.parameter.payload);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    if (body.clear) sheet.clearContents();\n    var rows = body.rows || [];\n    var written = 0;\n    if (rows.length > 0) {\n      var startRow = body.startRow || 1;\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(startRow, 1, rows.length, maxCols).setValues(rows);\n      written = rows.length;\n    }\n    SpreadsheetApp.flush();\n    var sheets = ss.getSheets().map(function(s){return s.getName();});\n    return ContentService.createTextOutput(JSON.stringify({ok:true,written:written,tab:body.tab,sheets:sheets,startRow:body.startRow||1})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message,spreadsheetId:body?body.spreadsheetId:"unknown",tab:body?body.tab:"unknown"})).setMimeType(ContentService.MimeType.JSON);\n  }\n}\n\nfunction doPost(e) { return doGet(e); }`;
+    const scriptCode=`function doGet(e) {\n  if (!e.parameter || !e.parameter.payload) {\n    return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n  }\n  try {\n    var body = JSON.parse(e.parameter.payload);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    // getInfo mode: return current row count without writing\n    if (body.getInfo) {\n      var sheets = ss.getSheets().map(function(s){return s.getName();});\n      return ContentService.createTextOutput(JSON.stringify({ok:true,rowCount:sheet.getLastRow(),sheets:sheets})).setMimeType(ContentService.MimeType.JSON);\n    }\n    if (body.clear) sheet.clearContents();\n    var rows = body.rows || [];\n    var written = 0;\n    if (rows.length > 0) {\n      var startRow = body.startRow || 1;\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(startRow, 1, rows.length, maxCols).setValues(rows);\n      written = rows.length;\n    }\n    SpreadsheetApp.flush();\n    var sheets = ss.getSheets().map(function(s){return s.getName();});\n    return ContentService.createTextOutput(JSON.stringify({ok:true,written:written,tab:body.tab,sheets:sheets,startRow:body.startRow||1})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message,spreadsheetId:body?body.spreadsheetId:"unknown",tab:body?body.tab:"unknown"})).setMimeType(ContentService.MimeType.JSON);\n  }\n}\n\nfunction doPost(e) { return doGet(e); }`;
 
     return(
       <div className="overlay" onClick={onClose}>
@@ -1399,7 +1485,7 @@ function ManagerApp({onLogout}){
         )}
 
         {/* ══ EXPENSES ══ */}
-        {tab==="expenses"&&<ExpensesTab expenses={expenses} onAdd={addExpense} onDelete={delExpense} onUpdate={updateExpense} toast={t} gsReady={gsReady} gsConfig={gsConfig} buildDaily={buildDaily} buildWeekly={buildWeekly} exportTakings={exportTakings}/>}
+        {tab==="expenses"&&<ExpensesTab expenses={expenses} onAdd={addExpense} onDelete={delExpense} onUpdate={updateExpense} toast={t} gsReady={gsReady} gsConfig={gsConfig} buildDaily={buildDaily} buildWeekly={buildWeekly} exportTakings={exportTakings} exportExpensesOnly={exportExpensesOnly}/>}
 
         {/* ══ ABSENCES ══ */}
         {tab==="absence"&&(
@@ -1625,7 +1711,7 @@ function TakingsForm({setTakings,toast}){
 // ═══════════════════════════════════════════════════════════════════
 // EXPENSES TAB
 // ═══════════════════════════════════════════════════════════════════
-function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast,gsReady,gsConfig,buildDaily,buildWeekly,exportTakings}){
+function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast,gsReady,gsConfig,buildDaily,buildWeekly,exportTakings,exportExpensesOnly}){
   const[desc,setDesc]=useState("");const[amount,setAmount]=useState("");const[payType,setPayType]=useState("cash");const[date,setDate]=useState(todayISO());const[saving,setSaving]=useState(false);
   const[editMode,setEditMode]=useState(false);
   const[filterDate,setFilterDate]=useState(todayISO());
@@ -1711,7 +1797,7 @@ function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast,gsReady,gsConfig,bu
         <div className="exptitle">📤 Export to Takings Spreadsheet</div>
         <div style={{fontSize:12,color:"#888",marginBottom:10}}>Expenses (Other Expenses Cash, Other Expenses Card, Note) are included automatically in the Takings Daily and Weekly sheets whenever you export from the Takings page. Use the button below to push now with the latest expense data.</div>
         {!gsReady&&<div className="gs-banner">⚠️ <strong>Google Sheets not connected.</strong> Tap ⚙️ Sheets in the header.</div>}
-        <button className="expbtn p" onClick={exportTakings}>🔗 Push to Takings Sheet (includes expenses)</button>
+        <button className="expbtn p" onClick={exportExpensesOnly}>🔗 Push Expenses to Takings Sheet</button>
       </div>
     </>
   );
