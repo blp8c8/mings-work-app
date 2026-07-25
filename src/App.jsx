@@ -404,7 +404,10 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[absDate,setAbsDate]=useState("");const[absPeriod,setAbsPeriod]=useState("");
   const[rejectModal,setRejectModal]=useState(null);const[rejectReason,setRejectReason]=useState("");
   const[tVals,setTVals]=useState({});const[tCC,setTCC]=useState({});const[tNote,setTNote]=useState("");
-  const[submitted,setSubmitted]=useState(false);const[loading,setLoading]=useState(true);
+  const[submitted,setSubmitted]=useState(false);
+  const[corrected,setCorrected]=useState(false); // true if already corrected once
+  const[showCorrect,setShowCorrect]=useState(false);
+  const[loading,setLoading]=useState(true);
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const assigned=effectiveTakingsPerson===user.id;
   const now=new Date();
@@ -419,10 +422,12 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
       db.from("absences").select("*").eq("staff_id",user.id).order("date",{ascending:false}),
       db.from("rejections").select("*").eq("staff_id",user.id),
       db.from("confirmations").select("*").eq("staff_id",user.id),
-      db.from("takings").select("id").eq("staff_id",user.id).eq("date",todayISO()),
+      db.from("takings").select("id,is_corrected").eq("staff_id",user.id).eq("date",todayISO()),
     ]);
     setLogs(logR.data||[]);setAbsences(absR.data||[]);setRejections(rejR.data||[]);setConfirmations(confR.data||[]);
-    setSubmitted((subR.data||[]).length>0);
+    const todaySub=(subR.data||[])[0]||null;
+    setSubmitted(!!todaySub);
+    setCorrected(!!(todaySub?.is_corrected));
     const active=(logR.data||[]).find(l=>l.date===todayISO()&&l.time_in&&!l.time_out);
     if(active){setClockedIn(true);setClockInTime(active.time_in);}
     await loadRota();setLoading(false);
@@ -444,7 +449,14 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const absNoticeShort=absDate&&Math.floor((new Date(absDate+"T12:00:00")-new Date(todayISO()+"T12:00:00"))/(1000*60*60*24))<5;
   async function confirmShift(idx){const{data,error}=await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:DAYS_MON[idx]}).select().single();if(!error){setConfirmations(p=>[...p,data]);t("✅ Confirmed!");}else t("❌ "+error.message);}
   async function rejectShift(){const{data,error}=await db.from("rejections").insert({staff_id:user.id,staff_name:user.name,day:DAYS_MON[rejectModal],reason:rejectReason}).select().single();if(!error){setRejections(p=>[...p,data]);setRejectModal(null);t("Rejection sent");}else t("❌ "+error.message);}
-  async function submitTakings(){const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(tVals[f.key]||0);if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});const{error}=await db.from("takings").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),...vals,note:tNote,is_new:true});if(!error){setTVals({});setTCC({});setTNote("");setSubmitted(true);t("📊 Submitted!");setTab("home");}else t("❌ "+error.message);}
+  async function submitTakings(){const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(tVals[f.key]||0);if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});const{error}=await db.from("takings").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),...vals,note:tNote,is_new:true,is_corrected:false});if(!error){setTVals({});setTCC({});setTNote("");setSubmitted(true);t("📊 Submitted!");setTab("home");}else t("❌ "+error.message);}
+  async function correctTakings(){
+    const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(tVals[f.key]||0);if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});
+    const{data:existing}=await db.from("takings").select("id").eq("staff_id",user.id).eq("date",todayISO()).maybeSingle();
+    if(!existing)return t("❌ No submission found for today");
+    const{error}=await db.from("takings").update({...vals,note:tNote,is_new:true,is_corrected:true}).eq("id",existing.id);
+    if(!error){setTVals({});setTCC({});setTNote("");setCorrected(true);setShowCorrect(false);t("✅ Correction submitted!");setTab("home");}else t("❌ "+error.message);
+  }
   function shiftLabel(sh){if(!sh||sh.type==="Off")return"Day off";if(sh.type==="Full Day (11am–close)")return"Full Day 11am–close";if(sh.type==="Night (5:30pm–close)")return"Night 5:30pm–close";if(sh.type==="Custom")return`${sh.customIn||"?"}–${sh.customOut||"?"}`;return sh.type;}
   if(loading)return<Loading text="Loading your data…"/>;
 
@@ -458,7 +470,30 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
       {tab==="home"&&<div className="body">{assigned&&!submitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-t">📊 You're today's Takings Person!</div><div className="notif-s">Tap to record today's takings →</div></div>}<div className="clkcard"><div className="clktime">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div><div className="clkdate">{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div><div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:"● Not clocked in"}</div><div className="clkbtns"><button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button><button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button></div>{logs.slice(0,3).length>0&&<div className="clkhist">{logs.slice(0,3).map(l=><div key={l.id} className="clkrow"><span>{dispDate(l.date,true)}</span><span>{l.time_in}→{l.time_out||"active"}</span><span style={{fontWeight:700}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(1)+"h":""}</span></div>)}</div>}</div><div className="sec">This Week</div><RotaList/></div>}
       {tab==="rota"&&<div className="body"><div className="sec">My Rota</div><div className="wnav"><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button><div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button></div><RotaList/></div>}
       {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A2744",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={todayISO()} onChange={e=>setAbsDate(e.target.value)}/>{absNoticeShort&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 5 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This absence is too soon to report through the app. Please contact the manager directly as soon as possible to let them know.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod||absNoticeShort}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#F7F4EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</>}</div>}
-      {tab==="takings"&&<div className="body"><div className="sec">📊 Daily Takings</div>{submitted?<div className="empty"><div className="emptyicon">✅</div><div className="emptytxt">Already submitted today!</div></div>:!assigned?<div className="empty"><div className="emptyicon">🔒</div><div className="emptytxt">Not assigned today</div></div>:<>{<div style={{fontSize:12,color:"#888",marginBottom:14}}>For {dispDate(todayISO(),true)}. <strong>Enter all amounts as positive numbers.</strong></div>}{TKFIELDS.map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(tCC[f.key]||"cash")===c?" on":""}`} onClick={()=>setTCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:4}} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" onKeyDown={e=>{if(["e","E","+","-"].includes(e.key))e.preventDefault();}} value={tVals[f.key]||""} onChange={e=>setTVals(p=>({...p,[f.key]:e.target.value}))}/></div>)}<label className="lbl" style={{marginTop:10}}>Note (optional)</label><textarea className="lognote" rows={3} style={{marginBottom:12}} placeholder="Any notes…" value={tNote} onChange={e=>setTNote(e.target.value)}/><button className="btn green" onClick={submitTakings}>Submit to Manager ✓</button></>}</div>}
+      {tab==="takings"&&<div className="body"><div className="sec">📊 Daily Takings</div>
+        {!assigned?<div className="empty"><div className="emptyicon">🔒</div><div className="emptytxt">Not assigned today</div></div>
+        :submitted&&!showCorrect?(
+          <div>
+            <div className="empty"><div className="emptyicon">✅</div><div className="emptytxt">Submitted for today</div></div>
+            {corrected
+              ?<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:13,padding:"13px 15px",margin:"0 0 14px"}}>
+                  <div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Already corrected once</div>
+                  <div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>You've already made one correction today. For any further changes, please report to the manager directly.</div>
+                </div>
+              :<button className="btn sec" style={{marginTop:0}} onClick={()=>setShowCorrect(true)}>✏️ Made a mistake? Correct it</button>
+            }
+          </div>
+        ):(
+          <>{submitted&&showCorrect&&<div style={{background:"#FFF8EC",border:"1.5px solid #F5A623",borderRadius:11,padding:"10px 13px",marginBottom:12}}><div style={{fontSize:12,fontWeight:800,color:"#92400E"}}>✏️ Correcting today's submission — this is your one chance to fix a mistake.</div></div>}
+          <div style={{fontSize:12,color:"#888",marginBottom:14}}>For {dispDate(todayISO(),true)}. <strong>Enter all amounts as positive numbers.</strong></div>
+          {TKFIELDS.map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(tCC[f.key]||"cash")===c?" on":""}`} onClick={()=>setTCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:4}} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" onKeyDown={e=>{if(["e","E","+","-"].includes(e.key))e.preventDefault();}} value={tVals[f.key]||""} onChange={e=>setTVals(p=>({...p,[f.key]:e.target.value}))}/></div>)}
+          <label className="lbl" style={{marginTop:10}}>Note (optional)</label><textarea className="lognote" rows={3} style={{marginBottom:12}} placeholder="Any notes…" value={tNote} onChange={e=>setTNote(e.target.value)}/>
+          {showCorrect
+            ?<><button className="btn" onClick={correctTakings}>Submit Correction ✓</button><button className="btn sec" onClick={()=>setShowCorrect(false)}>Cancel</button></>
+            :<button className="btn green" onClick={submitTakings}>Submit to Manager ✓</button>}
+          </>
+        )}
+      </div>}
       <div className="bnav">{navItems.map(n=><button key={n.id} className={`nbtn${tab===n.id?" on":""}`} onClick={()=>setTab(n.id)}>{n.badge&&<span className="nbadge">!</span>}<span className="ni">{n.icon}</span><span className="nl">{n.label}</span></button>)}</div>
       {rejectModal!==null&&<div className="overlay" onClick={()=>setRejectModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">Can't work {DAYS_MON[rejectModal]}?</div><div className="ssub2">Tell the manager why (optional)</div><textarea className="lognote" rows={3} placeholder="e.g. Doctor appointment…" value={rejectReason} onChange={e=>setRejectReason(e.target.value)}/><button className="btn danger" style={{marginTop:12}} onClick={rejectShift}>Send Rejection</button><button className="btn sec" onClick={()=>setRejectModal(null)}>Cancel</button></div></div>}
     </div>
@@ -729,11 +764,11 @@ function ManagerApp({onLogout}){
 
   // ── Takings overwrite ──
   async function upsertTakings(date,vals,note){
-    const existing=takings.find(s=>s.date===date&&s.staff_id==="manager");
+    const existing=takings.find(s=>s.date===date);
     if(existing){
-      const{error}=await db.from("takings").update({...vals,note}).eq("id",existing.id);
+      const{error}=await db.from("takings").update({...vals,note,is_new:false}).eq("id",existing.id);
       if(!error){
-        const updated=[...takings.map(x=>x.id===existing.id?{...x,...vals,note}:x)];
+        const updated=[...takings.map(x=>x.id===existing.id?{...x,...vals,note,is_new:false}:x)];
         setTakings(updated);
         return{ok:true,updatedTakings:updated};
       }
@@ -787,8 +822,24 @@ function ManagerApp({onLogout}){
   function buildPayroll(){
     const hdr=["Date Range","Name","Type","Full Shifts","Night Shifts","Hours","Rate/Hour (£)","Rate/Full Shift (£)","Rate/Night Shift (£)","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes","Override?"];
     const rows=[hdr];
-    staff.forEach(s=>{const p=calcPay(s);const ex=getExtras(s.id);rows.push([fmtRangeExport(weekRange.start,weekRange.end),s.name,"FOH",p.full,p.night,p.hrs,s.rate||"0",s.shiftRate||"0",s.nightRate||"0",p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,(ex.notes||[]).join("; "),p.isOverride?"MANUAL":""]);});
-    kitchenStaff.forEach(k=>{const p=calcKitchenPay(k);const ex=getExtras(kId(k.id));rows.push([fmtRangeExport(weekRange.start,weekRange.end),k.name,"Kitchen",p.full||"",p.night||"",p.hrs,k.rate||"0",k.shiftRate||"0",k.nightRate||"0",p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,(ex.notes||[]).join("; "),p.isOverride?"MANUAL":""]);});
+    staff.forEach(s=>{
+      const p=calcPay(s);const ex=getExtras(s.id);
+      const isShift=s.payType==="shift";
+      rows.push([fmtRangeExport(weekRange.start,weekRange.end),s.name,"FOH",
+        isShift?p.full:"",isShift?p.night:"",isShift?"":p.hrs,
+        s.rate||"0",s.shiftRate||"0",s.nightRate||"0",
+        p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,
+        (ex.notes||[]).join("; "),p.isOverride?"MANUAL":""]);
+    });
+    kitchenStaff.forEach(k=>{
+      const p=calcKitchenPay(k);const ex=getExtras(kId(k.id));
+      const isShift=(k.payType||"hourly")==="shift";
+      rows.push([fmtRangeExport(weekRange.start,weekRange.end),k.name,"Kitchen",
+        isShift?p.full:"",isShift?p.night:"",isShift?"":p.hrs,
+        k.rate||"0",k.shiftRate||"0",k.nightRate||"0",
+        p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,
+        (ex.notes||[]).join("; "),p.isOverride?"MANUAL":""]);
+    });
     return rows;
   }
   function buildPayrollWeekly(){
@@ -995,14 +1046,6 @@ function ManagerApp({onLogout}){
           <div className="ptotal">£{p.total}</div>
         </div>
         <div className="pbody">
-          {/* Edit counts */}
-          <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
-            <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>EDIT COUNTS <span style={{fontWeight:400}}>(blank = auto from rota/clock)</span></div>
-            <div style={{display:"flex",gap:8}}>
-              {(payType==="shift")&&<><div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.full)} value={lFull} onChange={e=>setLFull(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualFull:e.target.value}))}/></div><div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Night Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.night)} value={lNight} onChange={e=>setLNight(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualNight:e.target.value}))}/></div></>}
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder={p.hrs} value={lHrs} onChange={e=>setLHrs(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>
-            </div>
-          </div>
           {payType==="shift"?(<><div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div><div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div></>):(<div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{p.base}</span></div>)}
           {isKitchen&&<div style={{marginBottom:8}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>HOURS THIS WEEK</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={kitchenHours[kitchenId]?.hours||""} onChange={e=>updKitchenHours(kitchenId,e.target.value)}/></div>}
           <div className="row"><span>Tips (£)</span><input type="number" className="mini" min="0" placeholder="0.00" value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,tips:e.target.value}))}/></div>
@@ -1013,7 +1056,7 @@ function ManagerApp({onLogout}){
             <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>NOTES</div>
             {(ex.notes||[]).map((n,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0"}}><span style={{fontSize:12,color:"#555"}}>📌 {n}</span><button onClick={()=>updateExtras(sid,ex=>({...ex,notes:ex.notes.filter((_,j)=>j!==i)}))} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"#ccc"}}>✕</button></div>)}
             <div className="addrow" style={{marginTop:5}}>
-              <select className="addinp" style={{fontSize:11,padding:"5px 7px"}} id={`ns-${sid}`}>{["Bank Holiday","Red Day","Custom"].map(l=><option key={l}>{l}</option>)}</select>
+              <select className="addinp" style={{fontSize:11,padding:"5px 7px"}} id={`ns-${sid}`}>{["Bank Holiday","Red Day","No extra pay — day off","Custom"].map(l=><option key={l}>{l}</option>)}</select>
               <button className="addbtn" onClick={()=>{const sel=document.getElementById(`ns-${sid}`);if(sel.value==="Custom"){const cn=window.prompt("Enter custom note:");if(cn)updateExtras(sid,ex=>({...ex,notes:[...(ex.notes||[]),cn]}));}else updateExtras(sid,ex=>({...ex,notes:[...(ex.notes||[]),sel.value]}));}}>+ Note</button>
             </div>
           </div>
@@ -1048,18 +1091,20 @@ function ManagerApp({onLogout}){
           <div className="row"><span>💵 Cash</span><span className="rowb">£{p.cashAmt}</span></div>
           <div className="row"><span>💳 Card</span><span className="rowb">£{p.cardAmt}</span></div>
           <div className="row"><span style={{fontWeight:800}}>Total</span><span style={{fontWeight:900,color:"#F5A623",fontSize:15}}>£{p.total}</span></div>
-          {/* Manual override toggle */}
+          {/* Manual override — overrides ALL exported values including shifts/hours */}
           <button style={{marginTop:8,background:showOverride?"#FEF3C7":"#F0F0F0",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",width:"100%",color:showOverride?"#78350F":"#555"}} onClick={()=>setShowOverride(v=>!v)}>
-            {showOverride?"▲ Hide Manual Override":"✏️ Manual Override (fix mistakes)"}
+            {showOverride?"▲ Hide Override":"✏️ Override Exported Values (shifts, hours, cash, card, total)"}
           </button>
           {showOverride&&<div className="override-box">
-            <div style={{fontSize:11,color:"#78350F",marginBottom:8,fontWeight:700}}>Enter correct final numbers — overrides all calculations above</div>
-            <div style={{display:"flex",gap:8}}>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CASH £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCash} onChange={e=>setLCash(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualCash:e.target.value}))}/></div>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CARD £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCard} onChange={e=>setLCard(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualCard:e.target.value}))}/></div>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>TOTAL £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lTotal} onChange={e=>setLTotal(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualTotal:e.target.value}))}/></div>
+            <div style={{fontSize:11,color:"#78350F",marginBottom:8,fontWeight:700}}>These values replace everything in the spreadsheet export. Leave blank to use calculated values.</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {payType==="shift"&&<><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>FULL SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.full)} value={lFull} onChange={e=>setLFull(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualFull:e.target.value}))}/></div><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>NIGHT SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.night)} value={lNight} onChange={e=>setLNight(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualNight:e.target.value}))}/></div></>}
+              {payType==="hourly"&&<div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>HOURS</div><input type="number" min="0" step="0.25" className="inp sm" style={{width:"100%"}} placeholder={p.hrs} value={lHrs} onChange={e=>setLHrs(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>}
+              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CASH £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCash} onChange={e=>setLCash(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualCash:e.target.value}))}/></div>
+              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CARD £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCard} onChange={e=>setLCard(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualCard:e.target.value}))}/></div>
+              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>TOTAL £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lTotal} onChange={e=>setLTotal(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualTotal:e.target.value}))}/></div>
             </div>
-            <button className="btn danger" style={{marginTop:8,padding:"8px"}} onClick={()=>updateExtras(sid,ex=>({...ex,manualCash:"",manualCard:"",manualTotal:""}))}>Clear Override</button>
+            <button className="btn danger" style={{marginTop:8,padding:"8px"}} onClick={()=>{updateExtras(sid,ex=>({...ex,manualCash:"",manualCard:"",manualTotal:"",manualFull:"",manualNight:"",manualHrs:""}));setLCash("");setLCard("");setLTotal("");setLFull("");setLNight("");setLHrs("");}}>Clear All Overrides</button>
           </div>}
         </div>
       </div>
@@ -1610,10 +1655,10 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
       </div>
 
       {/* All seen submissions */}
-      {takings.filter(s=>!s.is_new&&s.staff_id!=="manager").length>0&&(
+      {takings.filter(s=>!s.is_new).length>0&&(
         <>
-          <div style={{fontSize:13,fontWeight:800,color:"#1A2744",marginBottom:8}}>✅ Reviewed Submissions</div>
-          {[...takings].filter(s=>!s.is_new&&s.staff_id!=="manager").sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10).map(sub=>{
+          <div style={{fontSize:13,fontWeight:800,color:"#1A2744",marginBottom:8}}>📋 Recent Takings (last 7)</div>
+          {[...takings].filter(s=>!s.is_new).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,7).map(sub=>{
             const total=TKFIELDS.reduce((s,f)=>s+parseFloat(sub[f.db]||0)*f.sign,0);
             return(<div key={sub.id} className="tmsg"><div className="tmsg-h">✓ {sub.staff_name} · {dispDate(sub.date,true)}<span style={{float:"right",fontSize:14,fontWeight:900}}>£{total.toFixed(2)}</span></div><div className="tmsg-d">{TKFIELDS.filter(f=>parseFloat(sub[f.db]||0)>0).map(f=>`${f.label.replace(/[🛵💵💳🌐🎟️🎫]/g,"").trim()}: £${sub[f.db]}`).join(" · ")}</div></div>);
           })}
@@ -1652,7 +1697,8 @@ function TakingsEditForm({takings,upsertTakings,toast,autoPushDay,gsReady}){
   const[loaded,setLoaded]=useState(false);
 
   function loadForDate(d){
-    const existing=takings.find(s=>s.date===d&&s.staff_id==="manager");
+    // Load any taking for this date (staff or manager logged) — manager can edit either
+    const existing=takings.find(s=>s.date===d);
     if(existing){const v={};TKFIELDS.forEach(f=>{v[f.key]=String(existing[f.db]||"");});const c={};TKFIELDS.filter(f=>f.ccDb).forEach(f=>{c[f.key]=existing[f.ccDb]||"cash";});setValues(v);setCC(c);setNote(existing.note||"");}
     else{setValues({});setCC({});setNote("");}
     setLoaded(true);
@@ -1669,6 +1715,8 @@ function TakingsEditForm({takings,upsertTakings,toast,autoPushDay,gsReady}){
     setSaving(false);
   }
 
+  const existingRecord=takings.find(s=>s.date===date);
+
   return(
     <>
       <div style={{fontSize:12,color:"#888",marginBottom:10}}>Select a date to edit or overwrite existing takings for that day.</div>
@@ -1678,8 +1726,8 @@ function TakingsEditForm({takings,upsertTakings,toast,autoPushDay,gsReady}){
         <button className="btn sm navy" onClick={()=>loadForDate(date)}>Load</button>
       </div>
       {loaded&&<>
-        <div style={{fontSize:12,color:takings.find(s=>s.date===date&&s.staff_id==="manager")?"#065F46":"#888",fontWeight:700,marginBottom:10}}>
-          {takings.find(s=>s.date===date&&s.staff_id==="manager")?"✅ Existing record loaded — editing will overwrite":"📝 No existing manager entry — will create new"}
+        <div style={{fontSize:12,color:existingRecord?"#065F46":"#888",fontWeight:700,marginBottom:10}}>
+          {existingRecord?`✅ ${existingRecord.staff_name}'s record loaded — editing will overwrite`:"📝 No entry for this date — will create new"}
         </div>
         {TKFIELDS.map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(cc[f.key]||"cash")===c?" on":""}`} onClick={()=>setCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:3}} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" onKeyDown={e=>{if(["e","E","+","-"].includes(e.key))e.preventDefault();}} value={values[f.key]||""} onChange={e=>setValues(p=>({...p,[f.key]:e.target.value}))}/></div>)}
         <label className="lbl" style={{marginTop:8}}>Note</label>
@@ -1783,8 +1831,8 @@ function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast,gsReady,gsConfig,bu
 
       {expenses.length===0?<div className="empty"><div className="emptyicon">🧾</div><div className="emptytxt">No expenses yet</div></div>:(
         <>
-          <div className="sec">All Expenses</div>
-          {[...expenses].sort((a,b)=>b.date.localeCompare(a.date)).map(e=>(
+          <div className="sec">Recent Expenses {expenses.length>10&&<span style={{fontSize:11,color:"#aaa",fontWeight:400}}>(showing 10 of {expenses.length})</span>}</div>
+          {[...expenses].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10).map(e=>(
             <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #F0F0F0"}}>
               <div><div style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{e.description}</div><div style={{fontSize:11,color:"#aaa"}}>{dispDate(e.date,true)} · {e.pay_type==="cash"?"💵 Cash":"💳 Card"}</div></div>
               <div style={{display:"flex",gap:8,alignItems:"center"}}><div style={{fontSize:13,fontWeight:800,color:"#E05252"}}>-£{e.amount.toFixed(2)}</div><button onClick={()=>onDelete(e.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#ccc"}}>🗑️</button></div>
