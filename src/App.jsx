@@ -695,7 +695,9 @@ function ManagerApp({onLogout}){
     const tips=parseFloat(ex.tips||0);
     const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    const base=s.payType==="hourly"?hrs*parseFloat(s.rate||0):full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
+    // Sum all three: hours × rate + full shifts × shiftRate + night shifts × nightRate
+    // Pay type toggle removed — all rates contribute if non-zero
+    const base=hrs*parseFloat(s.rate||0)+full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
     const calcTotal=Math.max(0,base+tips+addT-dedT);
     const cardMode=s.cardMode||"fixed";
     const{cardAmt:calcCard,cashAmt:calcCash,exceeds}=splitCard(cardMode,s.cardFixed,calcTotal);
@@ -716,7 +718,7 @@ function ManagerApp({onLogout}){
     const tips=parseFloat(ex.tips||0);
     const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    const base=(k.payType||"hourly")==="hourly"?hrs*parseFloat(k.rate||0):full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0);
+    const base=hrs*parseFloat(k.rate||0)+full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0);
     const calcTotal=Math.max(0,base+tips+addT-dedT);
     const cardMode=k.cardMode||"fixed";
     const{cardAmt:calcCard,cashAmt:calcCash,exceeds}=splitCard(cardMode,k.cardFixed,calcTotal);
@@ -803,8 +805,8 @@ function ManagerApp({onLogout}){
   // ── Auto-push single day to Daily sheet with fresh data ──
   async function autoPushDay(date, freshTakings){
     if(!gsConfig.webAppUrl||!gsConfig.takingsId)return;
-    // Build daily rows using the provided fresh takings (not stale React state)
     const takingsToUse=freshTakings||takings;
+    // Build complete Daily and Weekly from fresh data
     function buildDailyFresh(){
       const dates=[...new Set([...takingsToUse.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
       const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Other Expense Notes"];
@@ -817,12 +819,10 @@ function ManagerApp({onLogout}){
         const shopExp=parseFloat(sub.shop_expense||0);
         const dep=parseFloat(sub.deposit_receipt||0);
         const depPay=sub.deposit_pay_type||"cash";
-        const depCash=depPay==="cash"?dep:0;
-        const depCard=depPay==="card"?dep:0;
+        const depCash=depPay==="cash"?dep:0; const depCard=depPay==="card"?dep:0;
         const vp=parseFloat(sub.voucher_purchase||0);
         const vpPay=sub.voucher_pay_type||"cash";
-        const vpCash=vpPay==="cash"?vp:0;
-        const vpCard=vpPay==="card"?vp:0;
+        const vpCash=vpPay==="cash"?vp:0; const vpCard=vpPay==="card"?vp:0;
         const cash=parseFloat(sub.cash||0),card=parseFloat(sub.card||0);
         const deliveroo=parseFloat(sub.deliveroo||0),uber=parseFloat(sub.uber||0),online=parseFloat(sub.online||0);
         const total=r2(deliveroo+uber+cash+card+online-shopExp+dep+vp-otherExpCash-otherExpCard);
@@ -831,7 +831,34 @@ function ManagerApp({onLogout}){
       }
       return[hdr,...dates.map(rowForDate)];
     }
+    function buildWeeklyFresh(){
+      const dates=[...new Set([...takingsToUse.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
+      const wm={};dates.forEach(d=>{const{start}=payWeekOf(d);if(!wm[start])wm[start]=[];wm[start].push(d);});
+      const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total"];
+      const rows=[hdr];
+      Object.entries(wm).sort().forEach(([ws,dates2])=>{
+        const{end}=payWeekOf(ws);
+        let del=0,uber=0,cash=0,card=0,online=0,shopExp=0,depCash=0,depCard=0,vpCash=0,vpCard=0,otherExpCash=0,otherExpCard=0;
+        dates2.forEach(d=>{
+          const sub=takingsToUse.find(s=>s.date===d)||{};
+          del+=parseFloat(sub.deliveroo||0);uber+=parseFloat(sub.uber||0);cash+=parseFloat(sub.cash||0);card+=parseFloat(sub.card||0);online+=parseFloat(sub.online||0);shopExp+=parseFloat(sub.shop_expense||0);
+          const dep=parseFloat(sub.deposit_receipt||0);const depPay=sub.deposit_pay_type||"cash";
+          if(depPay==="cash")depCash+=dep;else depCard+=dep;
+          const vp=parseFloat(sub.voucher_purchase||0);const vpPay=sub.voucher_pay_type||"cash";
+          if(vpPay==="cash")vpCash+=vp;else vpCard+=vp;
+          const dayExp=expenses.filter(e=>e.date===d);
+          otherExpCash+=dayExp.filter(e=>e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);
+          otherExpCard+=dayExp.filter(e=>e.pay_type==="card").reduce((a,e)=>a+e.amount,0);
+        });
+        const income=del+uber+cash+card+online-shopExp+(depCash+depCard)+(vpCash+vpCard);
+        const total=(income-otherExpCash-otherExpCard).toFixed(2);
+        const cashInHand=(cash-shopExp-otherExpCash+depCash+vpCash).toFixed(2);
+        rows.push([fmtRangeExport(ws,end),del.toFixed(2),uber.toFixed(2),cash.toFixed(2),card.toFixed(2),online.toFixed(2),shopExp.toFixed(2),depCash.toFixed(2),depCard.toFixed(2),vpCash.toFixed(2),vpCard.toFixed(2),otherExpCash.toFixed(2),otherExpCard.toFixed(2),total,cashInHand,total]);
+      });
+      return rows;
+    }
     await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",buildDailyFresh());
+    await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Weekly",buildWeeklyFresh());
   }
 
   // ── Export builders ──
@@ -840,18 +867,16 @@ function ManagerApp({onLogout}){
     const rows=[hdr];
     staff.forEach(s=>{
       const p=calcPay(s);const ex=getExtras(s.id);
-      const isShift=s.payType==="shift";
       rows.push([fmtRangeExport(weekRange.start,weekRange.end),s.name,"FOH",
-        isShift?p.full:"",isShift?p.night:"",isShift?"":p.hrs,
+        p.full,p.night,p.hrs,
         s.rate||"0",s.shiftRate||"0",s.nightRate||"0",
         p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,
         (ex.notes||[]).join("; "),p.isOverride?"MANUAL":""]);
     });
     kitchenStaff.forEach(k=>{
       const p=calcKitchenPay(k);const ex=getExtras(kId(k.id));
-      const isShift=(k.payType||"hourly")==="shift";
       rows.push([fmtRangeExport(weekRange.start,weekRange.end),k.name,"Kitchen",
-        isShift?p.full:"",isShift?p.night:"",isShift?"":p.hrs,
+        p.full,p.night,p.hrs,
         k.rate||"0",k.shiftRate||"0",k.nightRate||"0",
         p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,
         (ex.notes||[]).join("; "),p.isOverride?"MANUAL":""]);
@@ -1073,7 +1098,9 @@ function ManagerApp({onLogout}){
               <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder={p.hrs} value={lHrs} onChange={e=>{setLHrs(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>
             </div>
           </div>
-          {payType==="shift"?(<><div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div><div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div></>):(<div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{p.base}</span></div>)}
+          <div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{(parseFloat(p.hrs||0)*parseFloat(rate||0)).toFixed(2)}</span></div>
+          <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
+          <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Tips (£)</span><input type="number" className="mini" min="0" placeholder="0.00" value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,tips:e.target.value}))}/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#50DC78",marginBottom:4}}>ADDITIONS</div><AddDeductRow sid={sid} type="add"/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#E05252",marginBottom:4}}>DEDUCTIONS</div><AddDeductRow sid={sid} type="ded"/></div>
@@ -1139,19 +1166,18 @@ function ManagerApp({onLogout}){
 
   // ── Modals ──
   function AddStaffModal({onClose}){
-    const[name,setName]=useState("");const[code,setCode]=useState("");const[payType,setPT]=useState("hourly");const[rate,setRate]=useState("");const[shiftRate,setSR]=useState("");const[nightRate,setNR]=useState("");const[cardFixed,setCF]=useState("0");const[err,setErr]=useState("");const[saving,setSaving]=useState(false);
+    const[name,setName]=useState("");const[code,setCode]=useState("");const[rate,setRate]=useState("");const[shiftRate,setSR]=useState("");const[nightRate,setNR]=useState("");const[cardFixed,setCF]=useState("0");const[err,setErr]=useState("");const[saving,setSaving]=useState(false);
     async function save(){
       setErr("");if(!name.trim())return setErr("Enter a name");if(!/^\d{8}$/.test(code))return setErr("Code must be 8 digits");
       setSaving(true);
-      const{error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:payType,rate:rate||"0",shift_rate:shiftRate||"0",night_rate:nightRate||"0",card_fixed:cardFixed||"0",card_mode:"fixed"});
+      const{error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:"hourly",rate:rate||"0",shift_rate:shiftRate||"0",night_rate:nightRate||"0",card_fixed:cardFixed||"0",card_mode:"fixed"});
       if(error){setSaving(false);return setErr(error.code==="23505"?"Code already taken":error.message);}
-      setStaff(p=>[...p,{id:code,name:name.trim(),code,payType,rate:rate||"0",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardFixed:cardFixed||"0",cardMode:"fixed"}].sort((a,b)=>a.name.localeCompare(b.name)));
+      setStaff(p=>[...p,{id:code,name:name.trim(),code,payType:"hourly",rate:rate||"0",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardFixed:cardFixed||"0",cardMode:"fixed"}].sort((a,b)=>a.name.localeCompare(b.name)));
       t("✅ "+name.trim()+" added");onClose();setSaving(false);
     }
     return(<div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">➕ Add Staff Member</div><div className="ssub2">Front of house staff added directly by manager</div>
       <label className="lbl">Full Name</label><input className="inp" placeholder="e.g. Amy Chen" value={name} onChange={e=>setName(e.target.value)}/>
       <label className="lbl">8-Digit Code</label><input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={code} onChange={e=>setCode(e.target.value)}/>
-      <label className="lbl">Pay Method</label><div className="toggle" style={{marginBottom:14}}><button className={`tgl${payType==="hourly"?" on":""}`} onClick={()=>setPT("hourly")}>By Hour</button><button className={`tgl${payType==="shift"?" on":""}`} onClick={()=>setPT("shift")}>By Shift</button></div>
       <div style={{display:"flex",gap:8}}>
         <div style={{flex:1}}><label className="lbl">£/HR</label><input className="inp" type="number" placeholder="0.00" value={rate} onChange={e=>setRate(e.target.value)}/></div>
         <div style={{flex:1}}><label className="lbl">Full Shift £</label><input className="inp" type="number" placeholder="0.00" value={shiftRate} onChange={e=>setSR(e.target.value)}/></div>
@@ -1340,7 +1366,6 @@ function ManagerApp({onLogout}){
 
             {staff.length===0&&<div className="empty"><div className="emptyicon">👥</div><div className="emptytxt">No staff yet — add one above</div></div>}
             {staff.map(s=>{
-              const payLabel=s.payType==="shift"?`Full £${s.shiftRate||"0"} / Night £${s.nightRate||"0"} per shift`:`£${s.rate||"0"} per hour`;
               return(
                 <div key={s.id} className="card w" style={{marginBottom:12}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
@@ -1348,29 +1373,24 @@ function ManagerApp({onLogout}){
                       <div className="avatar" style={{width:38,height:38,fontSize:15}}>{s.name[0]}</div>
                       <div><div style={{fontSize:15,fontWeight:800,color:"#1A2744"}}>{s.name}</div><div style={{fontSize:11,color:"#aaa"}}>Code: {s.code}</div></div>
                     </div>
-                    <span className="chip" style={{background:s.payType==="shift"?"#DBEAFE":"#D1FAE5",color:s.payType==="shift"?"#1E40AF":"#065F46"}}>{s.payType==="shift"?"By Shift":"By Hour"}</span>
                   </div>
                   <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
-                    <div style={{fontSize:12,fontWeight:700,color:"#555",marginBottom:4}}>{payLabel}</div>
-                    <div style={{fontSize:11,color:"#888"}}>{(s.cardMode||"fixed")==="cash"?"💵 Always paid in cash":s.cardMode==="card"?"💳 Always paid by card":`💳 Card fixed: £${s.cardFixed||"0"} · 💵 Rest is cash`}</div>
-                  </div>
-                  <label className="lbl">Pay Method</label>
-                  <div className="toggle" style={{marginBottom:12}}>
-                    <button className={`tgl${s.payType==="hourly"?" on":""}`} onClick={async()=>{setStaff(p=>p.map(x=>x.id===s.id?{...x,payType:"hourly"}:x));await db.from("staff").update({pay_type:"hourly"}).eq("id",s.id);t(`${s.name} → By Hour`);}}>By Hour</button>
-                    <button className={`tgl${s.payType==="shift"?" on":""}`} onClick={async()=>{setStaff(p=>p.map(x=>x.id===s.id?{...x,payType:"shift"}:x));await db.from("staff").update({pay_type:"shift"}).eq("id",s.id);t(`${s.name} → By Shift`);}}>By Shift</button>
+                    <div style={{fontSize:11,color:"#888"}}>
+                      {(s.cardMode||"fixed")==="cash"?"💵 Always paid in cash":s.cardMode==="card"?"💳 Always paid by card":`💳 Card fixed: £${s.cardFixed||"0"} · 💵 Rest is cash`}
+                    </div>
                   </div>
                   <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                     <div style={{flex:1,minWidth:80}}>
-                      <div style={{fontSize:10,fontWeight:700,color:s.payType==="hourly"?"#065F46":"#aaa",marginBottom:3}}>£/HR{s.payType==="hourly"?" ✅":""}</div>
-                      <input type="number" min="0" className="inp sm" style={{width:"100%",borderColor:s.payType==="hourly"?"#50DC78":"#E5E5E5"}} placeholder="0.00" value={s.rate||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,rate:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({rate:e.target.value}).eq("id",s.id);t(`${s.name} rate saved`);}}/>
+                      <div style={{fontSize:10,fontWeight:700,color:"#555",marginBottom:3}}>£/HR</div>
+                      <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={s.rate||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,rate:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({rate:e.target.value}).eq("id",s.id);t(`${s.name} rate saved`);}}/>
                     </div>
                     <div style={{flex:1,minWidth:80}}>
-                      <div style={{fontSize:10,fontWeight:700,color:s.payType==="shift"?"#1E40AF":"#aaa",marginBottom:3}}>FULL £{s.payType==="shift"?" ✅":""}</div>
-                      <input type="number" min="0" className="inp sm" style={{width:"100%",borderColor:s.payType==="shift"?"#BFDBFE":"#E5E5E5"}} placeholder="0.00" value={s.shiftRate||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,shiftRate:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({shift_rate:e.target.value}).eq("id",s.id);t(`${s.name} full shift rate saved`);}}/>
+                      <div style={{fontSize:10,fontWeight:700,color:"#555",marginBottom:3}}>FULL SHIFT £</div>
+                      <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={s.shiftRate||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,shiftRate:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({shift_rate:e.target.value}).eq("id",s.id);t(`${s.name} full shift rate saved`);}}/>
                     </div>
                     <div style={{flex:1,minWidth:80}}>
-                      <div style={{fontSize:10,fontWeight:700,color:s.payType==="shift"?"#1E40AF":"#aaa",marginBottom:3}}>NIGHT £{s.payType==="shift"?" ✅":""}</div>
-                      <input type="number" min="0" className="inp sm" style={{width:"100%",borderColor:s.payType==="shift"?"#BFDBFE":"#E5E5E5"}} placeholder="0.00" value={s.nightRate||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,nightRate:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({night_rate:e.target.value}).eq("id",s.id);t(`${s.name} night rate saved`);}}/>
+                      <div style={{fontSize:10,fontWeight:700,color:"#555",marginBottom:3}}>NIGHT £</div>
+                      <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={s.nightRate||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,nightRate:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({night_rate:e.target.value}).eq("id",s.id);t(`${s.name} night rate saved`);}}/>
                     </div>
                   </div>
 
@@ -1407,15 +1427,10 @@ function ManagerApp({onLogout}){
                   </div>
                   <button onClick={()=>delKitchen(k.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ddd"}}>🗑️</button>
                 </div>
-                <label className="lbl">Pay Method</label>
-                <div className="toggle" style={{marginBottom:12}}>
-                  <button className={`tgl${(k.payType||"hourly")==="hourly"?" on":""}`} onClick={()=>{updKitchenField(k.id,"pay_type","hourly");setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,payType:"hourly"}:x));}}>By Hour</button>
-                  <button className={`tgl${k.payType==="shift"?" on":""}`} onClick={()=>{updKitchenField(k.id,"pay_type","shift");setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,payType:"shift"}:x));}}>By Shift</button>
-                </div>
                 <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
-                  <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>£/HR</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.rate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,rate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"rate",e.target.value)}/></div>
-                  <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>FULL SHIFT £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.shiftRate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,shiftRate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"shift_rate",e.target.value)}/></div>
-                  <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>NIGHT £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.nightRate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,nightRate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"night_rate",e.target.value)}/></div>
+                  <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#555",fontWeight:700,marginBottom:3}}>£/HR</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.rate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,rate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"rate",e.target.value)}/></div>
+                  <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#555",fontWeight:700,marginBottom:3}}>FULL SHIFT £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.shiftRate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,shiftRate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"shift_rate",e.target.value)}/></div>
+                  <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#555",fontWeight:700,marginBottom:3}}>NIGHT £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.nightRate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,nightRate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"night_rate",e.target.value)}/></div>
                 </div>
                 <label className="lbl" style={{marginTop:12}}>Card Payment</label>
                 <div className="toggle" style={{marginBottom:10,width:"100%"}}>
@@ -1450,7 +1465,7 @@ function ManagerApp({onLogout}){
             {staff.map(s=>{const days=rota[s.id]||[];const conflicts=absConflicts(s.id);return(
               <div key={s.id} className="card">
                 <div className="chead">
-                  <div><div className="cname">👤 {s.name}</div><div className="csub">{s.payType==="shift"?`Full £${s.shiftRate}/Night £${s.nightRate}`:`£${s.rate}/hr`}</div></div>
+                  <div><div className="cname">👤 {s.name}</div><div className="csub">£{s.rate||"0"}/hr · Full £{s.shiftRate||"0"} · Night £{s.nightRate||"0"}</div></div>
                   <div style={{display:"flex",gap:6}}>
                     <button onClick={()=>setShareModal(s.id)} style={{background:"#DBEAFE",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",color:"#1E40AF"}}>📤 Share</button>
                   </div>
@@ -1509,11 +1524,25 @@ function ManagerApp({onLogout}){
           <>
             <div className="sec">Payroll</div>
             <div className="ssub">Private — staff never see salaries</div>
-            <div style={{display:"flex",gap:6,marginBottom:12,alignItems:"center"}}>
+            <div style={{display:"flex",gap:6,marginBottom:6,alignItems:"center"}}>
               <input type="date" className="inp sm" style={{flex:1}} value={weekRange.start} onChange={e=>{const s=e.target.value;setWeekRange({start:s,end:addDays(s,6)});}}/>
               <span style={{fontSize:12,color:"#aaa"}}>→</span>
               <input type="date" className="inp sm" style={{flex:1}} value={weekRange.end} onChange={e=>setWeekRange(p=>({...p,end:e.target.value}))}/>
+              <button className="btn sm navy" onClick={async()=>{
+                t("⏳ Loading week data…");
+                const{data}=await db.from("payroll_extras").select("*").eq("week_start",weekRange.start);
+                if(data&&data.length){
+                  const em={};
+                  data.forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",id:e.id,ws:e.week_start};});
+                  setExtras(em);
+                  t("✅ Loaded data for "+data.length+" staff");
+                }else{
+                  setExtras({});
+                  t("No saved data for this week — cards cleared");
+                }
+              }}>Load</button>
             </div>
+            <div style={{fontSize:11,color:"#888",marginBottom:12}}>Pick the week start (Sunday), tap Load to fill cards, make edits, then Push.</div>
             <div style={{fontSize:13,fontWeight:800,color:"#1A2744",marginBottom:8}}>Front of House</div>
             {staff.map(s=><PayrollCard key={s.id} name={s.name} icon="👤" sid={s.id} payType={s.payType} rate={s.rate} shiftRate={s.shiftRate} nightRate={s.nightRate} calcFn={()=>calcPay(s)} isKitchen={false} cardMode={s.cardMode||"fixed"} cardFixed={s.cardFixed} staffId={s.id}/>)}
             <div style={{fontSize:13,fontWeight:800,color:"#1A2744",margin:"14px 0 8px"}}>Kitchen Staff</div>
