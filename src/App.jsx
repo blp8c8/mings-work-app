@@ -18,34 +18,30 @@ const db = createClient(
 async function pushSheet(webAppUrl, spreadsheetId, tabName, rows) {
   if (!webAppUrl || !spreadsheetId) return { ok: false, err: "Google Sheets not configured — tap ⚙️ Sheets" };
   const CHUNK = 5;
+  let totalWritten = 0;
+  let lastSheets = [];
   for (let i = 0; i < rows.length; i += CHUNK) {
     const chunk = rows.slice(i, i + CHUNK);
     const isFirst = i === 0;
-    // Add cache-buster so browser never serves a cached response
     const ts = Date.now();
     const payload = encodeURIComponent(JSON.stringify({
-      spreadsheetId,
-      tab: tabName,
-      rows: chunk,
-      startRow: i + 1,
-      clear: isFirst,
-      ts
+      spreadsheetId, tab: tabName,
+      rows: chunk, startRow: i + 1,
+      clear: isFirst, ts
     }));
     const url = `${webAppUrl}?payload=${payload}`;
     try {
       const res = await fetch(url, { method: "GET", cache: "no-store" });
       const data = await res.json().catch(() => null);
-      if (!data) return { ok: false, err: `Chunk ${i/CHUNK+1}: no response from script` };
-      if (data.ok === false) return { ok: false, err: `Script error: ${data.error} (tab="${data.tab}", sheet="${data.spreadsheetId}")` };
-      // data.written tells us how many rows the script actually wrote
-      if (typeof data.written !== "undefined" && data.written === 0 && chunk.length > 0) {
-        return { ok: false, err: `Script reached but wrote 0 rows. Sheets in that spreadsheet: [${(data.sheets||[]).join(", ")}]` };
-      }
+      if (!data) return { ok: false, err: `No response from script on chunk ${i/CHUNK+1}` };
+      if (data.ok === false) return { ok: false, err: `Script error: ${data.error} (tab="${data.tab}", id="${data.spreadsheetId}")` };
+      totalWritten += (data.written || 0);
+      if (data.sheets) lastSheets = data.sheets;
     } catch (e) {
-      return { ok: false, err: `Network error on chunk ${i/CHUNK+1}: ${e.message}` };
+      return { ok: false, err: `Network error chunk ${i/CHUNK+1}: ${e.message}` };
     }
   }
-  return { ok: true };
+  return { ok: true, written: totalWritten, sheets: lastSheets };
 }
 // Simple connectivity check used by the "Test Connection" button in Settings.
 async function testWebApp(webAppUrl) {
@@ -850,13 +846,16 @@ function ManagerApp({onLogout}){
   }
   async function exportTakings(){
     if(!gsConfig.webAppUrl||!gsConfig.takingsId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
-    t("⏳ Updating Daily tab…");
-    const r1=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",buildDaily());
+    const daily=buildDaily();
+    const weekly=buildWeekly();
+    t(`⏳ Sending Daily tab (${daily.length-1} data rows)…`);
+    const r1=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",daily);
     if(!r1.ok){t("❌ "+r1.err);return;}
-    t("⏳ Updating Weekly tab…");
-    const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Weekly",buildWeekly());
+    t(`⏳ Sending Weekly tab (${weekly.length-1} data rows)…`);
+    const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Weekly",weekly);
     if(!r2.ok){t("❌ "+r2.err);return;}
-    t("✅ Takings sheets updated!");
+    const tabs=(r2.sheets||[]).join(", ")||"unknown";
+    t(`✅ Done — ${daily.length-1} daily rows, ${weekly.length-1} weekly rows. Tabs in sheet: [${tabs}]`);
   }
 
   // ── Rota share ──
@@ -1049,24 +1048,25 @@ function ManagerApp({onLogout}){
     async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(urlTrimmed);setTestResult(r);setTesting(false);}
     async function testIds(){
       setTesting(true);setTestResult(null);
-      // Send a real 1-cell test write to the payroll sheet and report back
-      const idToTest=cleanPayrollId||cleanTakingsId;
-      if(!idToTest){setTestResult({ok:false,err:"Enter at least one Spreadsheet ID first"});setTesting(false);return;}
-      const payload=encodeURIComponent(JSON.stringify({
-        spreadsheetId:idToTest, tab:"TestConnection",
-        rows:[["Test","OK",new Date().toLocaleString()]],
-        startRow:1, clear:true, ts:Date.now()
-      }));
-      try{
-        const res=await fetch(`${urlTrimmed}?payload=${payload}`,{method:"GET",cache:"no-store"});
-        const data=await res.json().catch(()=>null);
-        if(!data){setTestResult({ok:false,err:"No response from script"});setTesting(false);return;}
-        if(data.ok){
-          setTestResult({ok:true,msg:`✅ Spreadsheet ID works! Found tabs: [${(data.sheets||[]).join(", ")}]. A "TestConnection" tab was written — you can delete it. Now check the tab names in your sheet match exactly what the app sends: Payroll, PayrollWeekly, Daily, Weekly.`});
-        }else{
-          setTestResult({ok:false,err:`❌ Script error: "${data.error}" — The spreadsheet ID "${idToTest}" is invalid or you don't have access to it. Open your Google Sheet, copy the URL, and paste the whole URL into the field above.`});
-        }
-      }catch(e){setTestResult({ok:false,err:`Network error: ${e.message}`});}
+      const results=[];
+      for(const[label,id] of [["Payroll",cleanPayrollId],["Takings",cleanTakingsId]]){
+        if(!id){results.push(`${label}: no ID entered`);continue;}
+        const payload=encodeURIComponent(JSON.stringify({
+          spreadsheetId:id,tab:"TestConnection",
+          rows:[["Test",label,new Date().toLocaleString()]],
+          startRow:1,clear:true,ts:Date.now()
+        }));
+        try{
+          const res=await fetch(`${urlTrimmed}?payload=${payload}`,{method:"GET",cache:"no-store"});
+          const data=await res.json().catch(()=>null);
+          if(data&&data.ok){
+            results.push(`✅ ${label} ID works — tabs in that sheet: [${(data.sheets||[]).join(", ")}]`);
+          }else{
+            results.push(`❌ ${label} ID FAILED — "${data?.error||"no response"}" — ID used: "${id}"`);
+          }
+        }catch(e){results.push(`❌ ${label}: network error — ${e.message}`);}
+      }
+      setTestResult({ok:results.every(r=>r.startsWith("✅")),msg:results.join("\n\n")});
       setTesting(false);
     }
 
@@ -1116,8 +1116,8 @@ function ManagerApp({onLogout}){
 
           <button className="btn sec" style={{marginTop:0,marginBottom:8}} onClick={runTest} disabled={testing||!urlTrimmed}>{testing?"Testing…":"🔍 Test Connection"}</button>
           {testResult&&(
-            <div style={{background:testResult.ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${testResult.ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 12px",marginBottom:8,fontSize:12,color:testResult.ok?"#065F46":"#7F1D1D",lineHeight:1.6}}>
-              {testResult.ok?(testResult.msg||"✅ Connected! The script is reachable and working."):`❌ ${testResult.err}`}
+            <div style={{background:testResult.ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${testResult.ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 12px",marginBottom:8,fontSize:12,color:testResult.ok?"#065F46":"#7F1D1D",lineHeight:1.8,whiteSpace:"pre-wrap"}}>
+              {testResult.msg||testResult.err||""}
             </div>
           )}
 
