@@ -1038,6 +1038,7 @@ function ManagerApp({onLogout}){
     const[lCash,setLCash]=useState(ex.manualCash||"");
     const[lCard,setLCard]=useState(ex.manualCard||"");
     const[lTotal,setLTotal]=useState(ex.manualTotal||"");
+    const[countsEdited,setCountsEdited]=useState(false); // only show card warning after counts are edited
     useEffect(()=>{setLocalCardFixed(cardFixed||"0");},[cardFixed]);
     return(
       <div className="paycard">
@@ -1046,6 +1047,16 @@ function ManagerApp({onLogout}){
           <div className="ptotal">£{p.total}</div>
         </div>
         <div className="pbody">
+          {/* Edit Counts — show only what's relevant for this staff member's pay type */}
+          <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>EDIT COUNTS <span style={{fontWeight:400}}>(blank = auto from rota/clock)</span></div>
+            <div style={{display:"flex",gap:8}}>
+              {payType==="shift"
+                ?<><div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.full)} value={lFull} onChange={e=>{setLFull(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualFull:e.target.value}))}/></div><div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Night Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder={String(p.night)} value={lNight} onChange={e=>{setLNight(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualNight:e.target.value}))}/></div></>
+                :<div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder={p.hrs} value={lHrs} onChange={e=>{setLHrs(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>
+              }
+            </div>
+          </div>
           {payType==="shift"?(<><div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div><div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div></>):(<div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{p.base}</span></div>)}
           {isKitchen&&<div style={{marginBottom:8}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>HOURS THIS WEEK</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={kitchenHours[kitchenId]?.hours||""} onChange={e=>updKitchenHours(kitchenId,e.target.value)}/></div>}
           <div className="row"><span>Tips (£)</span><input type="number" className="mini" min="0" placeholder="0.00" value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,tips:e.target.value}))}/></div>
@@ -1062,7 +1073,7 @@ function ManagerApp({onLogout}){
           </div>
           <div className="divider"/>
           {/* Card payment mode — editable directly in payroll, same for FOH and kitchen */}
-          {p.cardExceeds&&(
+          {p.cardExceeds&&countsEdited&&(
             <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
               <div style={{fontSize:12,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Fixed card amount is more than was earned</div>
               <div style={{fontSize:11,color:"#991B1B",marginBottom:8}}>Fixed at £{parseFloat(cardFixed||0).toFixed(2)} but only £{p.grossTotal.toFixed(2)} was earned this week. Please correct the amount below.</div>
@@ -1654,16 +1665,6 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
         <div style={{fontSize:12,color:"#888"}}>Today ({DAYS_SUN[todayDow]}): <strong>{staff.find(s=>s.id===effectiveTodayPerson)?.name||"Manager"}</strong></div>
       </div>
 
-      {/* All seen submissions */}
-      {takings.filter(s=>!s.is_new).length>0&&(
-        <>
-          <div style={{fontSize:13,fontWeight:800,color:"#1A2744",marginBottom:8}}>📋 Recent Takings (last 7)</div>
-          {[...takings].filter(s=>!s.is_new).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,7).map(sub=>{
-            const total=TKFIELDS.reduce((s,f)=>s+parseFloat(sub[f.db]||0)*f.sign,0);
-            return(<div key={sub.id} className="tmsg"><div className="tmsg-h">✓ {sub.staff_name} · {dispDate(sub.date,true)}<span style={{float:"right",fontSize:14,fontWeight:900}}>£{total.toFixed(2)}</span></div><div className="tmsg-d">{TKFIELDS.filter(f=>parseFloat(sub[f.db]||0)>0).map(f=>`${f.label.replace(/[🛵💵💳🌐🎟️🎫]/g,"").trim()}: £${sub[f.db]}`).join(" · ")}</div></div>);
-          })}
-        </>
-      )}
 
       {/* Manager entry / overwrite */}
       <div className="card" style={{marginTop:10}}>
@@ -1684,8 +1685,19 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
         <div className="exptitle">📤 Export Takings</div>
         {!gsReady&&<div className="gs-banner">⚠️ <strong>Google Sheets not connected.</strong> Tap ⚙️ Sheets in header.</div>}
         <button className="expbtn p" onClick={exportTakings}>🔗 Push to Takings Sheet (Daily + Weekly)</button>
-        <button className="expbtn s" onClick={()=>copyTSV([...buildDaily(),[""],[""]], toast)}>📋 Copy Daily Data</button>
+        <button className="expbtn s" onClick={()=>copyTSV([...buildDaily(),[],[]], toast)}>📋 Copy Daily Data</button>
       </div>
+
+      {/* Recent Takings — at bottom */}
+      {takings.filter(s=>!s.is_new).length>0&&(
+        <div style={{marginTop:10}}>
+          <div style={{fontSize:13,fontWeight:800,color:"#1A2744",marginBottom:8}}>📋 Recent Takings (last 7)</div>
+          {[...takings].filter(s=>!s.is_new).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,7).map(sub=>{
+            const total=TKFIELDS.reduce((s,f)=>s+parseFloat(sub[f.db]||0)*f.sign,0);
+            return(<div key={sub.id} className="tmsg"><div className="tmsg-h">{sub.staff_id==="manager"?"📝":"✓"} {sub.staff_name} · {dispDate(sub.date,true)}<span style={{float:"right",fontSize:14,fontWeight:900}}>£{total.toFixed(2)}</span></div><div className="tmsg-d">{TKFIELDS.filter(f=>parseFloat(sub[f.db]||0)>0).map(f=>`${f.label.replace(/[🛵💵💳🌐🎟️🎫🧾]/g,"").trim()}: £${sub[f.db]}`).join(" · ")}</div></div>);
+          })}
+        </div>
+      )}
     </>
   );
 }
