@@ -540,6 +540,7 @@ function ManagerApp({onLogout}){
   const[settingsModal,setSettingsModal]=useState(false);
   const[absModal,setAbsModal]=useState(false);
   const[shareModal,setShareModal]=useState(null);
+  const[rotaRecipient,setRotaRecipient]=useState("");
   const[newKName,setNewKName]=useState("");
   const[absStaff,setAbsStaff]=useState("");const[absDate,setAbsDate]=useState("");const[absPeriod,setAbsPeriod]=useState("");
   const[gsConfig,setGsConfig]=useState({webAppUrl:"",payrollId:"",takingsId:""});
@@ -1036,6 +1037,35 @@ function ManagerApp({onLogout}){
     const lines=days.map(d=>{const dayName=DAYS_MON[jsToMon(d.jsDay)];const shift=d.type==="Off"?"Off":d.type==="Custom"?`${d.customIn||"?"}–${d.customOut||"?"}`:d.type;return`${dayName} ${fmtDate(d.date)}: ${s.name} — ${shift}`;});
     return`Rota for ${s.name}\n${fmtDate(rotaMon)} – ${fmtDate(addDays(rotaMon,6))}\n\n${lines.join("\n")}`;
   }
+  function buildFullRotaText(recipientId){
+    const recipientName=staff.find(s=>s.id===recipientId)?.name||"Team";
+    const weekStart=rotaMon;
+    const weekEnd=addDays(rotaMon,6);
+    const header=`Rota — Week of ${fmtDate(weekStart)} to ${fmtDate(weekEnd)}\nPrepared for: ${recipientName}\n`;
+    // Build one line per day Mon–Sun, listing only staff who are working (not Off)
+    const days=weekDates(rotaMon); // 7 ISO dates Mon–Sun
+    function shiftLabel(sh){
+      if(!sh||sh.type==="Off")return null;
+      if(sh.type==="Full Day (11am–close)")return"full day 11-close";
+      if(sh.type==="Night (5:30pm–close)")return"night 5:30-close";
+      if(sh.type==="Custom")return`${sh.customIn||"?"}–${sh.customOut||"?"}`;
+      return sh.type;
+    }
+    const lines=days.map((dateISO,idx)=>{
+      const dayName=DAYS_MON[idx]; // Mon,Tue,...Sun
+      const dateStr=fmtDate(dateISO); // dd/mm/yyyy
+      const jsDay=new Date(dateISO+"T12:00:00").getDay();
+      // Collect all working staff for this day
+      const working=staff.map(s=>{
+        const dayRota=(rota[s.id]||[]).find(d=>d.jsDay===jsDay);
+        const label=shiftLabel(dayRota);
+        return label?`${s.name.split(" ")[0]} (${label})`:null;
+      }).filter(Boolean);
+      if(working.length===0)return null; // skip days with no one working
+      return`${dayName} ${dateStr.slice(0,5)}: ${working.join(", ")}`;
+    }).filter(Boolean);
+    return`${header}\n${lines.join("\n")}`;
+  }
 
   // ── Absence conflicts ──
   function absConflicts(staffId){
@@ -1481,6 +1511,26 @@ function ManagerApp({onLogout}){
                 <button className="btn green" style={{marginTop:8,padding:"11px"}} onClick={()=>t(`✅ Rota saved for ${s.name}!`)}>📤 Send Rota to {s.name.split(" ")[0]}</button>
               </div>
             );})}
+
+            {/* ── Push Full Rota ── */}
+            {staff.length>0&&(
+              <div className="card" style={{marginTop:10,background:"#1A2744",borderRadius:16}}>
+                <div style={{fontSize:14,fontWeight:800,color:"#fff",marginBottom:4}}>📋 Push Full Week Rota</div>
+                <div style={{fontSize:12,color:"rgba(255,255,255,.55)",marginBottom:12}}>Select the lead staff member who receives the full rota, then copy to clipboard to send via WhatsApp or message.</div>
+                <select className="inp sm" style={{display:"block",width:"100%",marginBottom:10,background:"rgba(255,255,255,.1)",border:"1.5px solid rgba(255,255,255,.2)",color:"#fff"}} value={rotaRecipient} onChange={e=>setRotaRecipient(e.target.value)}>
+                  <option value="" style={{color:"#000"}}>— Select recipient —</option>
+                  {staff.map(s=><option key={s.id} value={s.id} style={{color:"#000"}}>{s.name}</option>)}
+                </select>
+                <button className="btn" style={{background:"#F5A623",color:"#1A2744",marginTop:0}} disabled={!rotaRecipient} onClick={()=>{
+                  const text=buildFullRotaText(rotaRecipient);
+                  navigator.clipboard.writeText(text)
+                    .then(()=>t(`📋 Full rota copied for ${staff.find(s=>s.id===rotaRecipient)?.name?.split(" ")[0]}! Paste into WhatsApp or message.`))
+                    .catch(()=>t("❌ Copy failed"));
+                }}>
+                  📋 Copy Full Rota{rotaRecipient?` for ${staff.find(s=>s.id===rotaRecipient)?.name?.split(" ")[0]}!`:""}
+                </button>
+              </div>
+            )}
           </>
         )}
 
