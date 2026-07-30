@@ -131,6 +131,8 @@ const TKFIELDS = [
   { key:"shopExpense",      label:"Shop Expense 🧾",      db:"shop_expense",      sign:-1, hint:"Store/supplies expenses — enter as positive, deducted automatically", managerOnly:true },
   { key:"depositReceipt",   label:"Deposit Receipt",      db:"deposit_receipt",   sign: 1, cc:true, ccDb:"deposit_pay_type" },
   { key:"voucherPurchase",  label:"Voucher Purchase 🎫",  db:"voucher_purchase",  sign: 1, cc:true, ccDb:"voucher_pay_type" },
+  { key:"tipsCash",         label:"Tips Cash 💵",          db:"tips_cash",         sign: 0, infoOnly:true, hint:"Cash tips received — informational only, does not affect totals" },
+  { key:"tipsCard",         label:"Tips Card 💳",          db:"tips_card",         sign: 0, infoOnly:true, hint:"Card tips received — informational only, does not affect totals" },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -534,6 +536,7 @@ function ManagerApp({onLogout}){
   const[takingDefaults,setTakingDefaults]=useState({});
   const[todayOverride,setTodayOverride]=useState(null);
   const[weekRange,setWeekRange]=useState(()=>payWeekOf(todayISO()));
+  const[payrollMonth,setPayrollMonth]=useState(()=>todayISO().slice(0,7)); // YYYY-MM
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const[cashPopup,setCashPopup]=useState(false);
   const[pinModal,setPinModal]=useState(false);
@@ -587,7 +590,7 @@ function ManagerApp({onLogout}){
       db.from("payroll_extras").select("*"),
       db.from("app_settings").select("key,value").in("key",["gs_webapp_url","gs_payroll_id","gs_takings_id","manager_pin"]),
     ]);
-    setStaff((staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardMode:s.card_mode||"fixed"})));
+    setStaff((staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardMode:s.card_mode||"fixed",tipsPct:s.tips_pct||"0"})));
     setAbsences(absR.data||[]);setClockLogs(logR.data||[]);setRejections(rejR.data||[]);
     setTakings(takR.data||[]);setExpenses(expR.data||[]);
     setKitchenStaff((kitR.data||[]).map(k=>({...k,payType:k.pay_type||"hourly",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0",cardMode:k.card_mode||"fixed",cardFixed:k.card_fixed||"0"})));
@@ -685,29 +688,27 @@ function ManagerApp({onLogout}){
     const ex=getExtras(s.id);
     let full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):myRota.filter(sh=>sh?.type==="Full Day (11am–close)").length;
     let night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):myRota.filter(sh=>sh?.type==="Night (5:30pm–close)").length;
-    // Sum raw hours per calendar day first (a staff may clock in/out more than
-    // once in a day), THEN round each day's total up to the nearest 15 minutes,
-    // then add up those rounded daily totals for the week. Rounding each
-    // individual clock-in/out session separately would unfairly inflate hours
-    // for anyone with a split shift or a break.
     const dailyRaw={};
     logsInRange.forEach(l=>{dailyRaw[l.date]=(dailyRaw[l.date]||0)+parseHrs(l.time_in,l.time_out);});
     let hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):Object.values(dailyRaw).reduce((a,dayHrs)=>a+roundHrsUp(dayHrs),0);
-    const tips=parseFloat(ex.tips||0);
+    // Auto-calculate tips from takings total tips * staff tipsPct — only if ex.tips is blank
+    const weekTakings=takings.filter(tk=>tk.date>=weekRange.start&&tk.date<=weekRange.end);
+    const weekTipsCash=weekTakings.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0),0);
+    const weekTipsCard=weekTakings.reduce((a,tk)=>a+parseFloat(tk.tips_card||0),0);
+    const weekTipsTotal=weekTipsCash+weekTipsCard;
+    const autoTips=r2(weekTipsTotal*parseFloat(s.tipsPct||0)/100);
+    const tips=ex.tips!==""&&ex.tips!=null?parseFloat(ex.tips||0):autoTips;
     const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    // Sum all three: hours × rate + full shifts × shiftRate + night shifts × nightRate
-    // Pay type toggle removed — all rates contribute if non-zero
     const base=hrs*parseFloat(s.rate||0)+full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
     const calcTotal=Math.max(0,base+tips+addT-dedT);
     const cardMode=s.cardMode||"fixed";
     const{cardAmt:calcCard,cashAmt:calcCash,exceeds}=splitCard(cardMode,s.cardFixed,calcTotal);
-    // Manual overwrite takes priority over everything above (and clears the warning)
     const isOverride=!!(ex.manualTotal&&ex.manualTotal!=="");
     const total=isOverride?parseFloat(ex.manualTotal):calcTotal;
     const cardAmt=ex.manualCard&&ex.manualCard!==""?parseFloat(ex.manualCard):calcCard;
     const cashAmt=ex.manualCash&&ex.manualCash!==""?parseFloat(ex.manualCash):calcCash;
-    return{full,night,hrs:typeof hrs==="number"?hrs.toFixed(2):hrs,base:base.toFixed(2),tips:tips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:total.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride,grossTotal:calcTotal,cardExceeds:!isOverride&&cardMode==="fixed"&&exceeds};
+    return{full,night,hrs:typeof hrs==="number"?hrs.toFixed(2):hrs,base:base.toFixed(2),tips:tips.toFixed(2),autoTips:autoTips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:total.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride,grossTotal:calcTotal,cardExceeds:!isOverride&&cardMode==="fixed"&&exceeds};
   }
 
   function calcKitchenPay(k){
@@ -731,12 +732,12 @@ function ManagerApp({onLogout}){
   }
 
   function payTotals(){
-    let fhCash=0,fhCard=0,kcCash=0,kcCard=0;
-    staff.forEach(s=>{const p=calcPay(s);fhCash+=parseFloat(p.cashAmt);fhCard+=parseFloat(p.cardAmt);});
+    let fhCash=0,fhCard=0,fhTips=0,kcCash=0,kcCard=0;
+    staff.forEach(s=>{const p=calcPay(s);fhCash+=parseFloat(p.cashAmt);fhCard+=parseFloat(p.cardAmt);fhTips+=parseFloat(p.tips);});
     kitchenStaff.forEach(k=>{const p=calcKitchenPay(k);kcCash+=parseFloat(p.cashAmt);kcCard+=parseFloat(p.cardAmt);});
     const totCash=fhCash+kcCash,totCard=fhCard+kcCard;
     return{
-      fhCash:fhCash.toFixed(2),fhCard:fhCard.toFixed(2),
+      fhCash:fhCash.toFixed(2),fhCard:fhCard.toFixed(2),fhTips:fhTips.toFixed(2),
       kcCash:kcCash.toFixed(2),kcCard:kcCard.toFixed(2),
       cash:totCash.toFixed(2),card:totCard.toFixed(2),
       gross:(totCash+totCard).toFixed(2)
@@ -835,14 +836,15 @@ function ManagerApp({onLogout}){
     function buildWeeklyFresh(){
       const dates=[...new Set([...takingsToUse.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
       const wm={};dates.forEach(d=>{const{start}=payWeekOf(d);if(!wm[start])wm[start]=[];wm[start].push(d);});
-      const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total"];
+      const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)"];
       const rows=[hdr];
       Object.entries(wm).sort().forEach(([ws,dates2])=>{
         const{end}=payWeekOf(ws);
-        let del=0,uber=0,cash=0,card=0,online=0,shopExp=0,depCash=0,depCard=0,vpCash=0,vpCard=0,otherExpCash=0,otherExpCard=0;
+        let del=0,uber=0,cash=0,card=0,online=0,shopExp=0,depCash=0,depCard=0,vpCash=0,vpCard=0,otherExpCash=0,otherExpCard=0,tipsCash=0,tipsCard=0;
         dates2.forEach(d=>{
           const sub=takingsToUse.find(s=>s.date===d)||{};
           del+=parseFloat(sub.deliveroo||0);uber+=parseFloat(sub.uber||0);cash+=parseFloat(sub.cash||0);card+=parseFloat(sub.card||0);online+=parseFloat(sub.online||0);shopExp+=parseFloat(sub.shop_expense||0);
+          tipsCash+=parseFloat(sub.tips_cash||0);tipsCard+=parseFloat(sub.tips_card||0);
           const dep=parseFloat(sub.deposit_receipt||0);const depPay=sub.deposit_pay_type||"cash";
           if(depPay==="cash")depCash+=dep;else depCard+=dep;
           const vp=parseFloat(sub.voucher_purchase||0);const vpPay=sub.voucher_pay_type||"cash";
@@ -854,7 +856,7 @@ function ManagerApp({onLogout}){
         const income=del+uber+cash+card+online-shopExp+(depCash+depCard)+(vpCash+vpCard);
         const total=(income-otherExpCash-otherExpCard).toFixed(2);
         const cashInHand=(cash-shopExp-otherExpCash+depCash+vpCash).toFixed(2);
-        rows.push([fmtRangeExport(ws,end),del.toFixed(2),uber.toFixed(2),cash.toFixed(2),card.toFixed(2),online.toFixed(2),shopExp.toFixed(2),depCash.toFixed(2),depCard.toFixed(2),vpCash.toFixed(2),vpCard.toFixed(2),otherExpCash.toFixed(2),otherExpCard.toFixed(2),total,cashInHand,total]);
+        rows.push([fmtRangeExport(ws,end),del.toFixed(2),uber.toFixed(2),cash.toFixed(2),card.toFixed(2),online.toFixed(2),shopExp.toFixed(2),depCash.toFixed(2),depCard.toFixed(2),vpCash.toFixed(2),vpCard.toFixed(2),otherExpCash.toFixed(2),otherExpCard.toFixed(2),total,cashInHand,total,tipsCash.toFixed(2),tipsCard.toFixed(2)]);
       });
       return rows;
     }
@@ -885,9 +887,60 @@ function ManagerApp({onLogout}){
     return rows;
   }
   function buildPayrollWeekly(){
-    const hdr=["Date Range","FH Cash (£)","FH Card (£)","Kitchen Cash (£)","Kitchen Card (£)","Total Cash (£)","Total Card (£)","Total (£)"];
-    const{fhCash,fhCard,kcCash,kcCard,cash,card,gross}=payTotals();
-    return[hdr,[fmtRangeExport(weekRange.start,weekRange.end),fhCash,fhCard,kcCash,kcCard,cash,card,gross]];
+    const hdr=["Date Range","FH Cash (£)","FH Card (£)","FH Tips (£)","Kitchen Cash (£)","Kitchen Card (£)","Total Cash (£)","Total Card (£)","Total (£)"];
+    const{fhCash,fhCard,fhTips,kcCash,kcCard,cash,card,gross}=payTotals();
+    return[hdr,[fmtRangeExport(weekRange.start,weekRange.end),fhCash,fhCard,fhTips,kcCash,kcCard,cash,card,gross]];
+  }
+  function buildPayrollMonthly(yearMonth){
+    // A week belongs to the month whose LAST day (Saturday) falls in.
+    // E.g. week 28/07–03/08 → Saturday is 03/08 → August.
+    const hdr=["Date Range","Staff Name","Type","Cash (£)","Card (£)","Tips (£)","Total Bank Transfer (£)"];
+    const rows=[hdr];
+    const[yr,mo]=yearMonth.split("-").map(Number);
+    const monthStart=new Date(yr,mo-1,1);
+    const monthEnd=new Date(yr,mo,0); // last day of month
+    const monthStartISO=monthStart.toISOString().split("T")[0];
+    const monthEndISO=monthEnd.toISOString().split("T")[0];
+    // Format: e.g. "01/07/2026-31/07/2026"
+    const rangeStr=`${fmtDate(monthStartISO)}-${fmtDate(monthEndISO)}`;
+    // Collect all weekly payroll_extras where week end (Saturday = start+6) falls in this month
+    // We need to look through all extras and match by week_start
+    // For each staff member, sum up weeks whose Saturday falls in this month
+    const allPeople=[
+      ...staff.map(s=>({...s,type:"FOH",sid:s.id})),
+      ...kitchenStaff.map(k=>({...k,type:"Kitchen",sid:kId(k.id)}))
+    ];
+    allPeople.forEach(person=>{
+      // Find all payroll_extras entries for this person
+      const allExtras=Object.entries(extras)
+        .filter(([sid])=>sid===person.sid)
+        .map(([,ex])=>ex);
+      // Also find any extras in DB not in current state — use what we have in state
+      // Group by week_start
+      const weekStarts=new Set(allExtras.map(ex=>ex.ws).filter(Boolean));
+      let totalCash=0,totalCard=0,totalTips=0;
+      weekStarts.forEach(ws=>{
+        if(!ws)return;
+        // The week end (Saturday) is ws + 6 days
+        const wEnd=addDays(ws,6);
+        // Only include if Saturday falls within this month
+        if(wEnd<monthStartISO||wEnd>monthEndISO)return;
+        // Reconstruct pay for this week using stored extras
+        const ex=extras[person.sid]||{};
+        if(ex.ws!==ws)return; // only current week in state
+        // Use the current calcPay/calcKitchenPay result if this week matches current weekRange
+        if(ws===weekRange.start){
+          const p=person.type==="FOH"?calcPay(person):calcKitchenPay(person);
+          totalCash+=parseFloat(p.cashAmt);
+          totalCard+=parseFloat(p.cardAmt);
+          totalTips+=parseFloat(p.tips);
+        }
+      });
+      if(totalCash+totalCard+totalTips===0)return; // skip if nothing
+      const bankTransfer=r2(totalCard+totalTips);
+      rows.push([rangeStr,person.name,person.type,r2(totalCash).toFixed(2),r2(totalCard).toFixed(2),r2(totalTips).toFixed(2),bankTransfer.toFixed(2)]);
+    });
+    return rows;
   }
   function buildDailyForDate(date){
     const sub=takings.find(s=>s.date===date)||{};
@@ -912,6 +965,8 @@ function ManagerApp({onLogout}){
     // total = deliveroo+uber+cash+card+online - shopExp + depositReceipt + voucherPurchase - otherExpCash - otherExpCard
     const total=r2(deliveroo+uber+cash+card+online-shopExp+dep+vp-otherExpCash-otherExpCard);
     const cashInHand=r2(cash-shopExp-otherExpCash+depCash+vpCash);
+    const tCash=r2(parseFloat(sub.tips_cash||0));
+    const tCard=r2(parseFloat(sub.tips_card||0));
     return[[
       fmtDate(date),
       r2(deliveroo), r2(uber), r2(cash), r2(card), r2(online),
@@ -920,29 +975,32 @@ function ManagerApp({onLogout}){
       r2(vpCash),  r2(vpCard),
       r2(otherExpCash), r2(otherExpCard),
       total, cashInHand, total,
+      tCash, tCard,
       otherExpNotes
     ]];
   }
   function buildDaily(){
     const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
-    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Other Expense Notes"];
+    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)","Other Expense Notes"];
     return[hdr,...dates.map(date=>buildDailyForDate(date)[0])];
   }
   function buildWeekly(){
     const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
     const wm={};dates.forEach(d=>{const{start}=payWeekOf(d);if(!wm[start])wm[start]=[];wm[start].push(d);});
-    const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total"];
+    const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)"];
     const rows=[hdr];
     Object.entries(wm).sort().forEach(([ws,dates2])=>{
       const{end}=payWeekOf(ws);
       let del=0,uber=0,cash=0,card=0,online=0,shopExp=0;
       let depCash=0,depCard=0,vpCash=0,vpCard=0;
-      let otherExpCash=0,otherExpCard=0;
+      let otherExpCash=0,otherExpCard=0,tipsCash=0,tipsCard=0;
       dates2.forEach(d=>{
         const sub=takings.find(s=>s.date===d)||{};
         del+=parseFloat(sub.deliveroo||0);uber+=parseFloat(sub.uber||0);
         cash+=parseFloat(sub.cash||0);card+=parseFloat(sub.card||0);online+=parseFloat(sub.online||0);
         shopExp+=parseFloat(sub.shop_expense||0);
+        tipsCash+=parseFloat(sub.tips_cash||0);
+        tipsCard+=parseFloat(sub.tips_card||0);
         const dep=parseFloat(sub.deposit_receipt||0);
         const depPay=sub.deposit_pay_type||"cash";
         if(depPay==="cash")depCash+=dep;else depCard+=dep;
@@ -963,7 +1021,8 @@ function ManagerApp({onLogout}){
         depCash.toFixed(2),depCard.toFixed(2),
         vpCash.toFixed(2),vpCard.toFixed(2),
         otherExpCash.toFixed(2),otherExpCard.toFixed(2),
-        total,cashInHand,total
+        total,cashInHand,total,
+        tipsCash.toFixed(2),tipsCard.toFixed(2)
       ]);
     });
     return rows;
@@ -982,6 +1041,16 @@ function ManagerApp({onLogout}){
     // Clear all payroll extras from state — fresh slate after export
     setExtras({});
     t("✅ Payroll pushed & page cleared!");
+  }
+  async function exportPayrollMonthly(){
+    if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
+    const rows=buildPayrollMonthly(payrollMonth);
+    if(rows.length<=1)return t("⚠️ No payroll data found for this month");
+    const hdr=rows[0]; const data=rows.slice(1);
+    t(`⏳ Pushing PayrollMonthly tab (${data.length} staff)…`);
+    const r=await pushSheetAppend(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",hdr,data);
+    if(!r.ok){t("❌ "+r.err);return;}
+    t("✅ PayrollMonthly updated!");
   }
   async function exportTakings(){
     if(!gsConfig.webAppUrl||!gsConfig.takingsId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
@@ -1131,7 +1200,7 @@ function ManagerApp({onLogout}){
           <div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{(parseFloat(p.hrs||0)*parseFloat(rate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
-          <div className="row"><span>Tips (£)</span><input type="number" className="mini" min="0" placeholder="0.00" value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,tips:e.target.value}))}/></div>
+          <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,tips:e.target.value}))}/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#50DC78",marginBottom:4}}>ADDITIONS</div><AddDeductRow sid={sid} type="add"/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#E05252",marginBottom:4}}>DEDUCTIONS</div><AddDeductRow sid={sid} type="ded"/></div>
           {/* Notes */}
@@ -1436,6 +1505,13 @@ function ManagerApp({onLogout}){
                       <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={s.cardFixed||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,cardFixed:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({card_fixed:e.target.value}).eq("id",s.id);t(`${s.name} card amount saved`);}} id={`cf-s-${s.id}`}/>
                     </div>
                   )}
+                  <div style={{marginTop:10,paddingTop:10,borderTop:"1px dashed #E5E5E5"}}>
+                    <div style={{fontSize:10,fontWeight:700,color:"#555",marginBottom:3}}>TIPS % <span style={{fontWeight:400}}>— share of weekly takings tips allocated to this staff</span></div>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <input type="number" min="0" max="100" className="inp sm" style={{width:80}} placeholder="0" value={s.tipsPct||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,tipsPct:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({tips_pct:e.target.value}).eq("id",s.id);t(`${s.name} tips % saved`);}}/>
+                      <span style={{fontSize:12,color:"#888"}}>%</span>
+                    </div>
+                  </div>
 
                   <button className="btn danger" style={{marginTop:10,padding:"10px"}} onClick={()=>removeStaff(s)}>🗑️ Remove {s.name.split(" ")[0]}</button>
                 </div>
@@ -1476,6 +1552,19 @@ function ManagerApp({onLogout}){
                 )}
               </div>
             ))}
+            {/* Tips % validator */}
+            {staff.length>0&&(()=>{
+              const total=staff.reduce((a,s)=>a+parseFloat(s.tipsPct||0),0);
+              const ok=Math.abs(total-100)<0.01;
+              return(<div style={{background:ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 14px",marginBottom:10,marginTop:10}}>
+                <div style={{fontSize:13,fontWeight:800,color:ok?"#065F46":"#7F1D1D"}}>
+                  {ok?"✅ Tips % total: 100% — all accounted for":`⚠️ Tips % total: ${total.toFixed(0)}% — must add up to 100%`}
+                </div>
+                <div style={{fontSize:11,color:ok?"#047857":"#991B1B",marginTop:3}}>
+                  {staff.map(s=>`${s.name.split(" ")[0]}: ${s.tipsPct||0}%`).join(" · ")}
+                </div>
+              </div>);
+            })()}
             <div style={{background:"#F7F4EF",borderRadius:12,padding:"12px 14px",fontSize:12,color:"#888",lineHeight:1.6,marginTop:8}}>
               <strong style={{color:"#1A2744"}}>Self-registration:</strong> Staff can also register themselves via the Staff login screen.
             </div>
@@ -1619,6 +1708,14 @@ function ManagerApp({onLogout}){
               <button className="expbtn s" onClick={()=>copyTSV(buildPayroll(),t)}>📋 Copy Staff Data</button>
               <button className="expbtn s" onClick={()=>copyTSV(buildPayrollWeekly(),t)}>📋 Copy Weekly Summary</button>
               <button className="expbtn s" onClick={()=>setCashPopup(true)}>💵 View Cash Payments</button>
+              <div style={{borderTop:"1px dashed #E5E5E5",marginTop:10,paddingTop:10}}>
+                <div style={{fontSize:12,fontWeight:700,color:"#1A2744",marginBottom:6}}>📅 Monthly Payroll</div>
+                <div style={{fontSize:11,color:"#888",marginBottom:8}}>Selects all weeks whose Saturday (pay-end date) falls within this month.</div>
+                <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+                  <input type="month" className="inp sm" style={{flex:1}} value={payrollMonth} onChange={e=>setPayrollMonth(e.target.value)}/>
+                </div>
+                <button className="expbtn p" style={{background:"#2C3E6B"}} onClick={exportPayrollMonthly}>🔗 Push to PayrollMonthly Tab</button>
+              </div>
             </div>
           </>
         )}
