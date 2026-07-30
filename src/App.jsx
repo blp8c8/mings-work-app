@@ -917,8 +917,8 @@ function ManagerApp({onLogout}){
     if(qualifyingWeeks.size===0)return rows;
 
     const allPeople=[
-      ...staff.map(s=>({id:s.id,name:s.name,type:"FOH",rate:s.rate,shiftRate:s.shiftRate,nightRate:s.nightRate,cardMode:s.cardMode,cardFixed:s.cardFixed,sid:s.id})),
-      ...kitchenStaff.map(k=>({id:k.id,name:k.name,type:"Kitchen",rate:k.rate,shiftRate:k.shiftRate,nightRate:k.nightRate,cardMode:k.cardMode,cardFixed:k.cardFixed,sid:kId(k.id)}))
+      ...staff.map(s=>({id:s.id,name:s.name,type:"FOH",rate:s.rate,shiftRate:s.shiftRate,nightRate:s.nightRate,cardMode:s.cardMode,cardFixed:s.cardFixed,tipsPct:s.tipsPct||"0",sid:s.id})),
+      ...kitchenStaff.map(k=>({id:k.id,name:k.name,type:"Kitchen",rate:k.rate,shiftRate:k.shiftRate,nightRate:k.nightRate,cardMode:k.cardMode,cardFixed:k.cardFixed,tipsPct:"0",sid:kId(k.id)}))
     ];
 
     allPeople.forEach(person=>{
@@ -934,9 +934,14 @@ function ManagerApp({onLogout}){
         const base=hrs*parseFloat(person.rate||0)+full*parseFloat(person.shiftRate||0)+night*parseFloat(person.nightRate||0);
         const sal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
         const{cardAmt,cashAmt}=splitCard(person.cardMode||"fixed",person.cardFixed,sal);
+        const storedTips=parseFloat(ex.tips||0);
+        const weekTakingsForWs=takings.filter(tk=>tk.date>=ws&&tk.date<=addDays(ws,6));
+        const weekTipsTotal=weekTakingsForWs.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0)+parseFloat(tk.tips_card||0),0);
+        const autoTips=person.type==="FOH"?r2(weekTipsTotal*parseFloat(person.tipsPct||0)/100):0;
+        const tips=storedTips>0?storedTips:autoTips;
         totalCash+=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
         totalCard+=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
-        totalTips+=parseFloat(ex.tips||0);
+        totalTips+=tips;
       });
       if(totalCash+totalCard+totalTips===0)return;
       const bankTransfer=r2(totalCard+totalTips);
@@ -1033,7 +1038,18 @@ function ManagerApp({onLogout}){
   async function exportPayroll(){
     if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
 
-    // Fetch ALL payroll_extras from DB to build complete historical records
+    // Flush any in-flight blur-writes: explicitly upsert current extras state to DB
+    // so the allEx fetch below sees the latest data (not stale from last blur).
+    t("⏳ Saving current week data…");
+    const ws=weekRange.start;
+    const flushOps=Object.entries(extras).map(([sid,ex])=>{
+      const payload={staff_id:sid,week_start:ws,tips:ex.tips||"0",additions:ex.additions||[],deductions:ex.deductions||[],notes:ex.notes||[],manual_full:ex.manualFull||null,manual_night:ex.manualNight||null,manual_hrs:ex.manualHrs||null,manual_cash:ex.manualCash||null,manual_card:ex.manualCard||null,manual_total:ex.manualTotal||null};
+      if(ex.id&&ex.ws===ws)return db.from("payroll_extras").update(payload).eq("id",ex.id);
+      return db.from("payroll_extras").upsert(payload,{onConflict:"staff_id,week_start"});
+    });
+    await Promise.all(flushOps);
+
+    // Now fetch ALL payroll_extras from DB — guaranteed to include current week
     const{data:allEx}=await db.from("payroll_extras").select("*");
     if(!allEx){t("❌ Could not load payroll data from DB");return;}
 
@@ -1052,7 +1068,6 @@ function ManagerApp({onLogout}){
         const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
         const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
         const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
-        const tips=parseFloat(ex.tips||0);
         const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
         const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
         const base=hrs*parseFloat(s.rate||0)+full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
@@ -1060,6 +1075,12 @@ function ManagerApp({onLogout}){
         const{cardAmt,cashAmt}=splitCard(s.cardMode||"fixed",s.cardFixed,salaryTotal);
         const cash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
         const card=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
+        // Auto-calculate tips from takings if not manually set
+        const storedTips=parseFloat(ex.tips||0);
+        const weekTakingsForWs=takings.filter(tk=>tk.date>=ws&&tk.date<=wEnd);
+        const weekTipsTotal=weekTakingsForWs.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0)+parseFloat(tk.tips_card||0),0);
+        const autoTips=r2(weekTipsTotal*parseFloat(s.tipsPct||0)/100);
+        const tips=storedTips>0?storedTips:autoTips;
         payrollRows.push([wRange,s.name,"FOH",full,night,hrs.toFixed(2),s.rate||"0",s.shiftRate||"0",s.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),tips.toFixed(2),addT.toFixed(2),dedT.toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),ex.manual_total?"MANUAL":""]);
       });
       // Kitchen staff
@@ -1101,7 +1122,12 @@ function ManagerApp({onLogout}){
         const{cardAmt,cashAmt}=splitCard(s.cardMode||"fixed",s.cardFixed,sal);
         fhCash+=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
         fhCard+=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
-        fhTips+=parseFloat(ex.tips||0);
+        // Auto-tips from takings if not manually set
+        const storedTips=parseFloat(ex.tips||0);
+        const weekTakingsForWs=takings.filter(tk=>tk.date>=ws&&tk.date<=wEnd);
+        const weekTipsTotal=weekTakingsForWs.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0)+parseFloat(tk.tips_card||0),0);
+        const autoTips=r2(weekTipsTotal*parseFloat(s.tipsPct||0)/100);
+        fhTips+=storedTips>0?storedTips:autoTips;
       });
       kitchenStaff.forEach(k=>{
         const sid=kId(k.id);
@@ -1628,6 +1654,20 @@ function ManagerApp({onLogout}){
               );
             })}
 
+            {/* Tips % validator — shown right after FOH staff, before Kitchen section */}
+            {staff.length>0&&(()=>{
+              const total=staff.reduce((a,s)=>a+parseFloat(s.tipsPct||0),0);
+              const ok=Math.abs(total-100)<0.01;
+              return(<div style={{background:ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 14px",marginBottom:14,marginTop:4}}>
+                <div style={{fontSize:13,fontWeight:800,color:ok?"#065F46":"#7F1D1D"}}>
+                  {ok?"✅ Tips % total: 100% — all accounted for":`⚠️ Tips % total: ${total.toFixed(0)}% — does not add up to 100%`}
+                </div>
+                <div style={{fontSize:11,color:ok?"#047857":"#991B1B",marginTop:3}}>
+                  {staff.map(s=>`${s.name.split(" ")[0]}: ${s.tipsPct||0}%`).join(" · ")}
+                </div>
+              </div>);
+            })()}
+
             <div className="sec" style={{marginTop:20}}>Kitchen Staff</div>
             <div style={{display:"flex",gap:6,marginBottom:10}}>
               <input className="inp sm" style={{flex:1}} placeholder="Kitchen staff name…" value={newKName} onChange={e=>setNewKName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addKitchen()}/>
@@ -1662,19 +1702,6 @@ function ManagerApp({onLogout}){
                 )}
               </div>
             ))}
-            {/* Tips % validator */}
-            {staff.length>0&&(()=>{
-              const total=staff.reduce((a,s)=>a+parseFloat(s.tipsPct||0),0);
-              const ok=Math.abs(total-100)<0.01;
-              return(<div style={{background:ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 14px",marginBottom:10,marginTop:10}}>
-                <div style={{fontSize:13,fontWeight:800,color:ok?"#065F46":"#7F1D1D"}}>
-                  {ok?"✅ Tips % total: 100% — all accounted for":`⚠️ Tips % total: ${total.toFixed(0)}% — must add up to 100%`}
-                </div>
-                <div style={{fontSize:11,color:ok?"#047857":"#991B1B",marginTop:3}}>
-                  {staff.map(s=>`${s.name.split(" ")[0]}: ${s.tipsPct||0}%`).join(" · ")}
-                </div>
-              </div>);
-            })()}
             <div style={{background:"#F7F4EF",borderRadius:12,padding:"12px 14px",fontSize:12,color:"#888",lineHeight:1.6,marginTop:8}}>
               <strong style={{color:"#1A2744"}}>Self-registration:</strong> Staff can also register themselves via the Staff login screen.
             </div>
