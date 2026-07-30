@@ -701,14 +701,15 @@ function ManagerApp({onLogout}){
     const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const base=hrs*parseFloat(s.rate||0)+full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
-    const calcTotal=Math.max(0,base+tips+addT-dedT);
+    // Tips are SEPARATE — not included in salary total or in the cash/card split
+    const salaryTotal=Math.max(0,base+addT-dedT);
     const cardMode=s.cardMode||"fixed";
-    const{cardAmt:calcCard,cashAmt:calcCash,exceeds}=splitCard(cardMode,s.cardFixed,calcTotal);
+    const{cardAmt:calcCard,cashAmt:calcCash,exceeds}=splitCard(cardMode,s.cardFixed,salaryTotal);
     const isOverride=!!(ex.manualTotal&&ex.manualTotal!=="");
-    const total=isOverride?parseFloat(ex.manualTotal):calcTotal;
+    const salaryFinal=isOverride?parseFloat(ex.manualTotal):salaryTotal;
     const cardAmt=ex.manualCard&&ex.manualCard!==""?parseFloat(ex.manualCard):calcCard;
     const cashAmt=ex.manualCash&&ex.manualCash!==""?parseFloat(ex.manualCash):calcCash;
-    return{full,night,hrs:typeof hrs==="number"?hrs.toFixed(2):hrs,base:base.toFixed(2),tips:tips.toFixed(2),autoTips:autoTips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:total.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride,grossTotal:calcTotal,cardExceeds:!isOverride&&cardMode==="fixed"&&exceeds};
+    return{full,night,hrs:typeof hrs==="number"?hrs.toFixed(2):hrs,base:base.toFixed(2),tips:tips.toFixed(2),autoTips:autoTips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:salaryFinal.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride,grossTotal:salaryTotal,cardExceeds:!isOverride&&cardMode==="fixed"&&exceeds};
   }
 
   function calcKitchenPay(k){
@@ -891,9 +892,9 @@ function ManagerApp({onLogout}){
     const{fhCash,fhCard,fhTips,kcCash,kcCard,cash,card,gross}=payTotals();
     return[hdr,[fmtRangeExport(weekRange.start,weekRange.end),fhCash,fhCard,fhTips,kcCash,kcCard,cash,card,gross]];
   }
-  function buildPayrollMonthly(yearMonth){
-    // A week belongs to the month whose LAST day (Saturday) falls in.
-    // E.g. week 28/07–03/08 → Saturday is 03/08 → August.
+  async function buildPayrollMonthly(yearMonth){
+    // A week belongs to the month whose LAST day (Saturday=start+6) falls in.
+    // E.g. week 26/07–01/08 → Saturday is 01/08 → August.
     const hdr=["Date Range","Staff Name","Type","Cash (£)","Card (£)","Tips (£)","Total Bank Transfer (£)"];
     const rows=[hdr];
     const[yr,mo]=yearMonth.split("-").map(Number);
@@ -901,42 +902,55 @@ function ManagerApp({onLogout}){
     const monthEnd=new Date(yr,mo,0); // last day of month
     const monthStartISO=monthStart.toISOString().split("T")[0];
     const monthEndISO=monthEnd.toISOString().split("T")[0];
-    // Format: e.g. "01/07/2026-31/07/2026"
     const rangeStr=`${fmtDate(monthStartISO)}-${fmtDate(monthEndISO)}`;
-    // Collect all weekly payroll_extras where week end (Saturday = start+6) falls in this month
-    // We need to look through all extras and match by week_start
-    // For each staff member, sum up weeks whose Saturday falls in this month
+
+    // Fetch ALL payroll_extras from DB (not just current week in state)
+    const{data:allExtrasDb}=await db.from("payroll_extras").select("*");
+    if(!allExtrasDb||allExtrasDb.length===0)return rows;
+
+    // Find all unique week_starts where Saturday falls in this month
+    const qualifyingWeeks=new Set();
+    allExtrasDb.forEach(ex=>{
+      if(!ex.week_start)return;
+      const wEnd=addDays(ex.week_start,6); // Saturday
+      if(wEnd>=monthStartISO&&wEnd<=monthEndISO)qualifyingWeeks.add(ex.week_start);
+    });
+    if(qualifyingWeeks.size===0)return rows;
+
+    // For each staff member, sum up all qualifying weeks
     const allPeople=[
-      ...staff.map(s=>({...s,type:"FOH",sid:s.id})),
-      ...kitchenStaff.map(k=>({...k,type:"Kitchen",sid:kId(k.id)}))
+      ...staff.map(s=>({id:s.id,name:s.name,type:"FOH",rate:s.rate,shiftRate:s.shiftRate,nightRate:s.nightRate,cardMode:s.cardMode,cardFixed:s.cardFixed,tipsPct:s.tipsPct,sid:s.id})),
+      ...kitchenStaff.map(k=>({id:k.id,name:k.name,type:"Kitchen",rate:k.rate,shiftRate:k.shiftRate,nightRate:k.nightRate,cardMode:k.cardMode,cardFixed:k.cardFixed,tipsPct:"0",sid:kId(k.id)}))
     ];
+
     allPeople.forEach(person=>{
-      // Find all payroll_extras entries for this person
-      const allExtras=Object.entries(extras)
-        .filter(([sid])=>sid===person.sid)
-        .map(([,ex])=>ex);
-      // Also find any extras in DB not in current state — use what we have in state
-      // Group by week_start
-      const weekStarts=new Set(allExtras.map(ex=>ex.ws).filter(Boolean));
       let totalCash=0,totalCard=0,totalTips=0;
-      weekStarts.forEach(ws=>{
-        if(!ws)return;
-        // The week end (Saturday) is ws + 6 days
-        const wEnd=addDays(ws,6);
-        // Only include if Saturday falls within this month
-        if(wEnd<monthStartISO||wEnd>monthEndISO)return;
-        // Reconstruct pay for this week using stored extras
-        const ex=extras[person.sid]||{};
-        if(ex.ws!==ws)return; // only current week in state
-        // Use the current calcPay/calcKitchenPay result if this week matches current weekRange
-        if(ws===weekRange.start){
-          const p=person.type==="FOH"?calcPay(person):calcKitchenPay(person);
-          totalCash+=parseFloat(p.cashAmt);
-          totalCard+=parseFloat(p.cardAmt);
-          totalTips+=parseFloat(p.tips);
-        }
+      qualifyingWeeks.forEach(ws=>{
+        const ex=allExtrasDb.find(e=>e.staff_id===person.sid&&e.week_start===ws);
+        if(!ex)return;
+        // Reconstruct base pay from stored manual values
+        const manualHrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):null;
+        const manualFull=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):null;
+        const manualNight=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):null;
+        // For this historical week we don't have rota/clock data loaded,
+        // so use manual overrides; if none, use 0 (manager should have set overrides before pushing)
+        const hrs=manualHrs!=null?manualHrs:0;
+        const full=manualFull!=null?manualFull:0;
+        const night=manualNight!=null?manualNight:0;
+        const base=hrs*parseFloat(person.rate||0)+full*parseFloat(person.shiftRate||0)+night*parseFloat(person.nightRate||0);
+        const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+        const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+        const tips=parseFloat(ex.tips||0);
+        // Use manual total if set, otherwise compute
+        const salaryTotal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
+        const{cardAmt,cashAmt}=splitCard(person.cardMode||"fixed",person.cardFixed,salaryTotal);
+        const wCash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
+        const wCard=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
+        totalCash+=wCash;
+        totalCard+=wCard;
+        totalTips+=tips;
       });
-      if(totalCash+totalCard+totalTips===0)return; // skip if nothing
+      if(totalCash+totalCard+totalTips===0)return;
       const bankTransfer=r2(totalCard+totalTips);
       rows.push([rangeStr,person.name,person.type,r2(totalCash).toFixed(2),r2(totalCard).toFixed(2),r2(totalTips).toFixed(2),bankTransfer.toFixed(2)]);
     });
@@ -1038,14 +1052,21 @@ function ManagerApp({onLogout}){
     t("⏳ Pushing PayrollWeekly tab…");
     const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollWeekly",buildPayrollWeekly());
     if(!r2.ok){t("❌ "+r2.err);return;}
-    // Clear all payroll extras from state — fresh slate after export
+    // Auto-push monthly for the currently selected month
+    t("⏳ Pushing PayrollMonthly tab…");
+    const monthlyRows=await buildPayrollMonthly(payrollMonth);
+    if(monthlyRows.length>1){
+      const mHdr=monthlyRows[0];const mData=monthlyRows.slice(1);
+      const r3=await pushSheetAppend(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",mHdr,mData);
+      if(!r3.ok){t("❌ Monthly: "+r3.err);return;}
+    }
     setExtras({});
-    t("✅ Payroll pushed & page cleared!");
+    t("✅ Payroll, Weekly & Monthly pushed — page cleared!");
   }
   async function exportPayrollMonthly(){
     if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
-    const rows=buildPayrollMonthly(payrollMonth);
-    if(rows.length<=1)return t("⚠️ No payroll data found for this month");
+    const rows=await buildPayrollMonthly(payrollMonth);
+    if(rows.length<=1)return t("⚠️ No payroll data found for this month — make sure weekly payrolls have been pushed first");
     const hdr=rows[0]; const data=rows.slice(1);
     t(`⏳ Pushing PayrollMonthly tab (${data.length} staff)…`);
     const r=await pushSheetAppend(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",hdr,data);
@@ -1242,7 +1263,8 @@ function ManagerApp({onLogout}){
           </div>
           <div className="row"><span>💵 Cash</span><span className="rowb">£{p.cashAmt}</span></div>
           <div className="row"><span>💳 Card</span><span className="rowb">£{p.cardAmt}</span></div>
-          <div className="row"><span style={{fontWeight:800}}>Total</span><span style={{fontWeight:900,color:"#F5A623",fontSize:15}}>£{p.total}</span></div>
+          <div className="row"><span style={{fontWeight:800}}>Salary Total</span><span style={{fontWeight:900,color:"#F5A623",fontSize:15}}>£{p.total}</span></div>
+          {!isKitchen&&<div className="row" style={{borderTop:"1px dashed #E5E5E5",marginTop:4,paddingTop:4}}><span>💳 Tips (card) {p.autoTips!=="0.00"&&!ex.tips&&<span style={{fontSize:10,color:"#aaa"}}>(auto from takings)</span>}</span><span className="rowb" style={{color:"#50DC78"}}>£{p.tips}</span></div>}
           {/* Manual override — overrides ALL exported values including shifts/hours */}
           <button style={{marginTop:8,background:showOverride?"#FEF3C7":"#F0F0F0",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",width:"100%",color:showOverride?"#78350F":"#555"}} onClick={()=>setShowOverride(v=>!v)}>
             {showOverride?"▲ Hide Override":"✏️ Override Exported Values (shifts, hours, cash, card, total)"}
@@ -1695,7 +1717,8 @@ function ManagerApp({onLogout}){
               <div className="psumtitle">Week Summary — {fmtRange(weekRange.start,weekRange.end)}</div>
               <div className="psumrow"><span>💵 Total Cash</span><span className="psumamt">£{totCash}</span></div>
               <div className="psumrow"><span>💳 Total Card</span><span className="psumamt">£{totCard}</span></div>
-              <div className="psumrow"><span>Grand Total</span><span className="psumamt">£{totGross}</span></div>
+              <div className="psumrow"><span>💳 FH Tips (card)</span><span className="psumamt">£{payTotals().fhTips}</span></div>
+              <div className="psumrow"><span>Grand Total (salary)</span><span className="psumamt">£{totGross}</span></div>
             </div>
             <div className="expsec">
               <div className="exptitle">📤 Export Payroll</div>
