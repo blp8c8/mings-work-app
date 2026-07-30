@@ -892,63 +892,51 @@ function ManagerApp({onLogout}){
     const{fhCash,fhCard,fhTips,kcCash,kcCard,cash,card,gross}=payTotals();
     return[hdr,[fmtRangeExport(weekRange.start,weekRange.end),fhCash,fhCard,fhTips,kcCash,kcCard,cash,card,gross]];
   }
-  async function buildPayrollMonthly(yearMonth){
+  async function buildPayrollMonthly(yearMonth, allExtrasDb){
     // A week belongs to the month whose LAST day (Saturday=start+6) falls in.
-    // E.g. week 26/07–01/08 → Saturday is 01/08 → August.
     const hdr=["Date Range","Staff Name","Type","Cash (£)","Card (£)","Tips (£)","Total Bank Transfer (£)"];
     const rows=[hdr];
     const[yr,mo]=yearMonth.split("-").map(Number);
     const monthStart=new Date(yr,mo-1,1);
-    const monthEnd=new Date(yr,mo,0); // last day of month
+    const monthEnd=new Date(yr,mo,0);
     const monthStartISO=monthStart.toISOString().split("T")[0];
     const monthEndISO=monthEnd.toISOString().split("T")[0];
     const rangeStr=`${fmtDate(monthStartISO)}-${fmtDate(monthEndISO)}`;
 
-    // Fetch ALL payroll_extras from DB (not just current week in state)
-    const{data:allExtrasDb}=await db.from("payroll_extras").select("*");
-    if(!allExtrasDb||allExtrasDb.length===0)return rows;
+    // If allExtrasDb not passed, fetch from DB
+    const allEx=allExtrasDb||(await db.from("payroll_extras").select("*")).data||[];
+    if(allEx.length===0)return rows;
 
-    // Find all unique week_starts where Saturday falls in this month
+    // Find all week_starts whose Saturday falls in this month
     const qualifyingWeeks=new Set();
-    allExtrasDb.forEach(ex=>{
+    allEx.forEach(ex=>{
       if(!ex.week_start)return;
-      const wEnd=addDays(ex.week_start,6); // Saturday
+      const wEnd=addDays(ex.week_start,6);
       if(wEnd>=monthStartISO&&wEnd<=monthEndISO)qualifyingWeeks.add(ex.week_start);
     });
     if(qualifyingWeeks.size===0)return rows;
 
-    // For each staff member, sum up all qualifying weeks
     const allPeople=[
-      ...staff.map(s=>({id:s.id,name:s.name,type:"FOH",rate:s.rate,shiftRate:s.shiftRate,nightRate:s.nightRate,cardMode:s.cardMode,cardFixed:s.cardFixed,tipsPct:s.tipsPct,sid:s.id})),
-      ...kitchenStaff.map(k=>({id:k.id,name:k.name,type:"Kitchen",rate:k.rate,shiftRate:k.shiftRate,nightRate:k.nightRate,cardMode:k.cardMode,cardFixed:k.cardFixed,tipsPct:"0",sid:kId(k.id)}))
+      ...staff.map(s=>({id:s.id,name:s.name,type:"FOH",rate:s.rate,shiftRate:s.shiftRate,nightRate:s.nightRate,cardMode:s.cardMode,cardFixed:s.cardFixed,sid:s.id})),
+      ...kitchenStaff.map(k=>({id:k.id,name:k.name,type:"Kitchen",rate:k.rate,shiftRate:k.shiftRate,nightRate:k.nightRate,cardMode:k.cardMode,cardFixed:k.cardFixed,sid:kId(k.id)}))
     ];
 
     allPeople.forEach(person=>{
       let totalCash=0,totalCard=0,totalTips=0;
       qualifyingWeeks.forEach(ws=>{
-        const ex=allExtrasDb.find(e=>e.staff_id===person.sid&&e.week_start===ws);
+        const ex=allEx.find(e=>e.staff_id===person.sid&&e.week_start===ws);
         if(!ex)return;
-        // Reconstruct base pay from stored manual values
-        const manualHrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):null;
-        const manualFull=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):null;
-        const manualNight=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):null;
-        // For this historical week we don't have rota/clock data loaded,
-        // so use manual overrides; if none, use 0 (manager should have set overrides before pushing)
-        const hrs=manualHrs!=null?manualHrs:0;
-        const full=manualFull!=null?manualFull:0;
-        const night=manualNight!=null?manualNight:0;
-        const base=hrs*parseFloat(person.rate||0)+full*parseFloat(person.shiftRate||0)+night*parseFloat(person.nightRate||0);
+        const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
+        const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
+        const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
         const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
         const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const tips=parseFloat(ex.tips||0);
-        // Use manual total if set, otherwise compute
-        const salaryTotal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
-        const{cardAmt,cashAmt}=splitCard(person.cardMode||"fixed",person.cardFixed,salaryTotal);
-        const wCash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
-        const wCard=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
-        totalCash+=wCash;
-        totalCard+=wCard;
-        totalTips+=tips;
+        const base=hrs*parseFloat(person.rate||0)+full*parseFloat(person.shiftRate||0)+night*parseFloat(person.nightRate||0);
+        const sal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
+        const{cardAmt,cashAmt}=splitCard(person.cardMode||"fixed",person.cardFixed,sal);
+        totalCash+=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
+        totalCard+=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
+        totalTips+=parseFloat(ex.tips||0);
       });
       if(totalCash+totalCard+totalTips===0)return;
       const bankTransfer=r2(totalCard+totalTips);
@@ -1044,32 +1032,122 @@ function ManagerApp({onLogout}){
 
   async function exportPayroll(){
     if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
-    const rows=buildPayroll();
-    const hdr=rows[0]; const data=rows.slice(1);
+
+    // Fetch ALL payroll_extras from DB to build complete historical records
+    const{data:allEx}=await db.from("payroll_extras").select("*");
+    if(!allEx){t("❌ Could not load payroll data from DB");return;}
+
+    // ── Build Payroll tab: one row per staff per week, ALL weeks ──
+    const payrollHdr=["Date Range","Name","Type","Full Shifts","Night Shifts","Hours","Rate/Hour (£)","Rate/Full Shift (£)","Rate/Night Shift (£)","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes","Override?"];
+    const payrollRows=[payrollHdr];
+    // Group extras by week_start
+    const weekStarts=[...new Set(allEx.map(e=>e.week_start).filter(Boolean))].sort();
+    weekStarts.forEach(ws=>{
+      const wEnd=addDays(ws,6);
+      const wRange=fmtRangeExport(ws,wEnd);
+      // FOH staff
+      staff.forEach(s=>{
+        const ex=allEx.find(e=>e.staff_id===s.id&&e.week_start===ws);
+        if(!ex)return;
+        const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
+        const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
+        const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
+        const tips=parseFloat(ex.tips||0);
+        const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+        const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+        const base=hrs*parseFloat(s.rate||0)+full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
+        const salaryTotal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
+        const{cardAmt,cashAmt}=splitCard(s.cardMode||"fixed",s.cardFixed,salaryTotal);
+        const cash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
+        const card=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
+        payrollRows.push([wRange,s.name,"FOH",full,night,hrs.toFixed(2),s.rate||"0",s.shiftRate||"0",s.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),tips.toFixed(2),addT.toFixed(2),dedT.toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),ex.manual_total?"MANUAL":""]);
+      });
+      // Kitchen staff
+      kitchenStaff.forEach(k=>{
+        const sid=kId(k.id);
+        const ex=allEx.find(e=>e.staff_id===sid&&e.week_start===ws);
+        if(!ex)return;
+        const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
+        const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
+        const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
+        const tips=parseFloat(ex.tips||0);
+        const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+        const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+        const base=hrs*parseFloat(k.rate||0)+full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0);
+        const salaryTotal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
+        const{cardAmt,cashAmt}=splitCard(k.cardMode||"fixed",k.cardFixed,salaryTotal);
+        const cash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
+        const card=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
+        payrollRows.push([wRange,k.name,"Kitchen",full,night,hrs.toFixed(2),k.rate||"0",k.shiftRate||"0",k.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),tips.toFixed(2),addT.toFixed(2),dedT.toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),ex.manual_total?"MANUAL":""]);
+      });
+    });
+
+    // ── Build PayrollWeekly: one row per week aggregated ──
+    const wklyHdr=["Date Range","FH Cash (£)","FH Card (£)","FH Tips (£)","Kitchen Cash (£)","Kitchen Card (£)","Total Cash (£)","Total Card (£)","Total (£)"];
+    const wklyRows=[wklyHdr];
+    weekStarts.forEach(ws=>{
+      const wEnd=addDays(ws,6);
+      let fhCash=0,fhCard=0,fhTips=0,kcCash=0,kcCard=0;
+      staff.forEach(s=>{
+        const ex=allEx.find(e=>e.staff_id===s.id&&e.week_start===ws);
+        if(!ex)return;
+        const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
+        const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
+        const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
+        const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+        const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+        const base=hrs*parseFloat(s.rate||0)+full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
+        const sal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
+        const{cardAmt,cashAmt}=splitCard(s.cardMode||"fixed",s.cardFixed,sal);
+        fhCash+=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
+        fhCard+=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
+        fhTips+=parseFloat(ex.tips||0);
+      });
+      kitchenStaff.forEach(k=>{
+        const sid=kId(k.id);
+        const ex=allEx.find(e=>e.staff_id===sid&&e.week_start===ws);
+        if(!ex)return;
+        const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
+        const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
+        const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
+        const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+        const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+        const base=hrs*parseFloat(k.rate||0)+full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0);
+        const sal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
+        const{cardAmt,cashAmt}=splitCard(k.cardMode||"fixed",k.cardFixed,sal);
+        kcCash+=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
+        kcCard+=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
+      });
+      if(fhCash+fhCard+fhTips+kcCash+kcCard===0)return;
+      const totCash=r2(fhCash+kcCash),totCard=r2(fhCard+kcCard),totAll=r2(fhCash+kcCash+fhCard+kcCard);
+      wklyRows.push([fmtRangeExport(ws,wEnd),r2(fhCash).toFixed(2),r2(fhCard).toFixed(2),r2(fhTips).toFixed(2),r2(kcCash).toFixed(2),r2(kcCard).toFixed(2),totCash.toFixed(2),totCard.toFixed(2),totAll.toFixed(2)]);
+    });
+
+    // ── Build PayrollMonthly: group by month, one row per staff ──
+    const monthlyRows=await buildPayrollMonthly(payrollMonth,allEx);
+
+    // ── Push all three tabs ──
     t("⏳ Pushing Payroll tab…");
-    const r1=await pushSheetAppend(gsConfig.webAppUrl,gsConfig.payrollId,"Payroll",hdr,data);
-    if(!r1.ok){t("❌ "+r1.err);return;}
+    const r1=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"Payroll",payrollRows);
+    if(!r1.ok){t("❌ Payroll: "+r1.err);return;}
     t("⏳ Pushing PayrollWeekly tab…");
-    const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollWeekly",buildPayrollWeekly());
-    if(!r2.ok){t("❌ "+r2.err);return;}
-    // Auto-push monthly for the currently selected month
-    t("⏳ Pushing PayrollMonthly tab…");
-    const monthlyRows=await buildPayrollMonthly(payrollMonth);
+    const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollWeekly",wklyRows);
+    if(!r2.ok){t("❌ Weekly: "+r2.err);return;}
     if(monthlyRows.length>1){
-      const mHdr=monthlyRows[0];const mData=monthlyRows.slice(1);
-      const r3=await pushSheetAppend(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",mHdr,mData);
+      t("⏳ Pushing PayrollMonthly tab…");
+      const r3=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",monthlyRows);
       if(!r3.ok){t("❌ Monthly: "+r3.err);return;}
     }
     setExtras({});
-    t("✅ Payroll, Weekly & Monthly pushed — page cleared!");
+    t(`✅ All pushed — ${payrollRows.length-1} staff-weeks, ${wklyRows.length-1} weekly rows, ${monthlyRows.length-1} monthly rows — page cleared!`);
   }
   async function exportPayrollMonthly(){
     if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
-    const rows=await buildPayrollMonthly(payrollMonth);
+    const{data:allEx}=await db.from("payroll_extras").select("*");
+    const rows=await buildPayrollMonthly(payrollMonth,allEx||[]);
     if(rows.length<=1)return t("⚠️ No payroll data found for this month — make sure weekly payrolls have been pushed first");
-    const hdr=rows[0]; const data=rows.slice(1);
-    t(`⏳ Pushing PayrollMonthly tab (${data.length} staff)…`);
-    const r=await pushSheetAppend(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",hdr,data);
+    t(`⏳ Pushing PayrollMonthly tab (${rows.length-1} staff)…`);
+    const r=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",rows);
     if(!r.ok){t("❌ "+r.err);return;}
     t("✅ PayrollMonthly updated!");
   }
@@ -1202,6 +1280,16 @@ function ManagerApp({onLogout}){
     const[lTotal,setLTotal]=useState(ex.manualTotal||"");
     const[countsEdited,setCountsEdited]=useState(false); // only show card warning after counts are edited
     useEffect(()=>{setLocalCardFixed(cardFixed||"0");},[cardFixed]);
+    // Sync all local inputs when extras changes (e.g. after manager taps Load week)
+    useEffect(()=>{
+      setLFull(ex.manualFull||"");
+      setLNight(ex.manualNight||"");
+      setLHrs(ex.manualHrs||"");
+      setLTips(ex.tips||"");
+      setLCash(ex.manualCash||"");
+      setLCard(ex.manualCard||"");
+      setLTotal(ex.manualTotal||"");
+    },[ex.manualFull,ex.manualNight,ex.manualHrs,ex.tips,ex.manualCash,ex.manualCard,ex.manualTotal]);
     return(
       <div className="paycard">
         <div className="phead">
