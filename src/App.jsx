@@ -551,7 +551,8 @@ function ManagerApp({onLogout}){
   const[takingDefaults,setTakingDefaults]=useState({});
   const[todayOverride,setTodayOverride]=useState(null);
   const[weekRange,setWeekRange]=useState(()=>payWeekOf(todayISO()));
-  const[payrollMonth,setPayrollMonth]=useState(()=>todayISO().slice(0,7)); // YYYY-MM
+  const[payrollMonth,setPayrollMonth]=useState(()=>todayISO().slice(0,7));
+  const[clearKey,setClearKey]=useState(0); // incremented after each payroll push to force PayrollCard reset // YYYY-MM
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const[cashPopup,setCashPopup]=useState(false);
   const[pinModal,setPinModal]=useState(false);
@@ -836,7 +837,7 @@ function ManagerApp({onLogout}){
     // Build complete Daily and Weekly from fresh data
     function buildDailyFresh(){
       const dates=[...new Set([...takingsToUse.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
-      const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Other Expense Notes"];
+      const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)","Other Expenses Cash (£)","Other Expenses Card (£)","Other Expense Notes"];
       function rowForDate(d){
         const sub=takingsToUse.find(s=>s.date===d)||{};
         const dayExp=expenses.filter(e=>e.date===d);
@@ -852,16 +853,18 @@ function ManagerApp({onLogout}){
         const vpCash=vpPay==="cash"?vp:0; const vpCard=vpPay==="card"?vp:0;
         const cash=parseFloat(sub.cash||0),card=parseFloat(sub.card||0);
         const deliveroo=parseFloat(sub.deliveroo||0),uber=parseFloat(sub.uber||0),online=parseFloat(sub.online||0);
-        const total=r2(deliveroo+uber+cash+card+online-shopExp+dep+vp-otherExpCash-otherExpCard);
-        const cashInHand=r2(cash-shopExp-otherExpCash+depCash+vpCash);
-        return[fmtDate(d),r2(deliveroo),r2(uber),r2(cash),r2(card),r2(online),r2(shopExp),r2(depCash),r2(depCard),r2(vpCash),r2(vpCard),r2(otherExpCash),r2(otherExpCard),total,cashInHand,total,otherExpNotes];
+        const total=r2(deliveroo+uber+cash+card+online-shopExp+dep+vp);
+        const cashInHand=r2(cash-shopExp+depCash+vpCash);
+        const tCash=r2(parseFloat(sub.tips_cash||0));
+        const tCard=r2(parseFloat(sub.tips_card||0));
+        return[fmtDate(d),r2(deliveroo),r2(uber),r2(cash),r2(card),r2(online),r2(shopExp),r2(depCash),r2(depCard),r2(vpCash),r2(vpCard),total,cashInHand,total,tCash,tCard,r2(otherExpCash),r2(otherExpCard),otherExpNotes];
       }
       return[hdr,...dates.map(rowForDate)];
     }
     function buildWeeklyFresh(){
       const dates=[...new Set([...takingsToUse.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
       const wm={};dates.forEach(d=>{const{start}=payWeekOf(d);if(!wm[start])wm[start]=[];wm[start].push(d);});
-      const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)"];
+      const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)","Other Expenses Cash (£)","Other Expenses Card (£)"];
       const rows=[hdr];
       Object.entries(wm).sort().forEach(([ws,dates2])=>{
         const{end}=payWeekOf(ws);
@@ -878,10 +881,9 @@ function ManagerApp({onLogout}){
           otherExpCash+=dayExp.filter(e=>e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);
           otherExpCard+=dayExp.filter(e=>e.pay_type==="card").reduce((a,e)=>a+e.amount,0);
         });
-        const income=del+uber+cash+card+online-shopExp+(depCash+depCard)+(vpCash+vpCard);
-        const total=(income-otherExpCash-otherExpCard).toFixed(2);
-        const cashInHand=(cash-shopExp-otherExpCash+depCash+vpCash).toFixed(2);
-        rows.push([fmtRangeExport(ws,end),del.toFixed(2),uber.toFixed(2),cash.toFixed(2),card.toFixed(2),online.toFixed(2),shopExp.toFixed(2),depCash.toFixed(2),depCard.toFixed(2),vpCash.toFixed(2),vpCard.toFixed(2),otherExpCash.toFixed(2),otherExpCard.toFixed(2),total,cashInHand,total,tipsCash.toFixed(2),tipsCard.toFixed(2)]);
+        const total=r2(del+uber+cash+card+online-shopExp+(depCash+depCard)+(vpCash+vpCard));
+        const cashInHand=r2(cash-shopExp+depCash+vpCash);
+        rows.push([fmtRangeExport(ws,end),del.toFixed(2),uber.toFixed(2),cash.toFixed(2),card.toFixed(2),online.toFixed(2),shopExp.toFixed(2),depCash.toFixed(2),depCard.toFixed(2),vpCash.toFixed(2),vpCard.toFixed(2),total,cashInHand,total,tipsCash.toFixed(2),tipsCard.toFixed(2),otherExpCash.toFixed(2),otherExpCard.toFixed(2)]);
       });
       return rows;
     }
@@ -979,7 +981,7 @@ function ManagerApp({onLogout}){
     const otherExpCash=dayExp.filter(e=>e.pay_type==="cash").reduce((s,e)=>s+e.amount,0);
     const otherExpCard=dayExp.filter(e=>e.pay_type==="card").reduce((s,e)=>s+e.amount,0);
     const otherExpNotes=dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ");
-    const shopExp=parseFloat(sub.shop_expense||0); // from takings form
+    const shopExp=parseFloat(sub.shop_expense||0);
     const dep=parseFloat(sub.deposit_receipt||0);
     const depPay=sub.deposit_pay_type||"cash";
     const depCash=depPay==="cash"?dep:0;
@@ -993,32 +995,33 @@ function ManagerApp({onLogout}){
     const cash=parseFloat(sub.cash||0);
     const card=parseFloat(sub.card||0);
     const online=parseFloat(sub.online||0);
-    // total = deliveroo+uber+cash+card+online - shopExp + depositReceipt + voucherPurchase - otherExpCash - otherExpCard
-    const total=r2(deliveroo+uber+cash+card+online-shopExp+dep+vp-otherExpCash-otherExpCard);
-    const cashInHand=r2(cash-shopExp-otherExpCash+depCash+vpCash);
+    // Total and CashInHand do NOT include other expenses (informational only)
+    const total=r2(deliveroo+uber+cash+card+online-shopExp+dep+vp);
+    const cashInHand=r2(cash-shopExp+depCash+vpCash);
     const tCash=r2(parseFloat(sub.tips_cash||0));
     const tCard=r2(parseFloat(sub.tips_card||0));
+    // Column order: ...VPCard, Total, CashInHand, NetTotal, TipsCash, TipsCard, OtherExpCash, OtherExpCard, Notes
     return[[
       fmtDate(date),
       r2(deliveroo), r2(uber), r2(cash), r2(card), r2(online),
       r2(shopExp),
       r2(depCash), r2(depCard),
-      r2(vpCash),  r2(vpCard),
-      r2(otherExpCash), r2(otherExpCard),
+      r2(vpCash), r2(vpCard),
       total, cashInHand, total,
       tCash, tCard,
+      r2(otherExpCash), r2(otherExpCard),
       otherExpNotes
     ]];
   }
   function buildDaily(){
     const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
-    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)","Other Expense Notes"];
+    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)","Other Expenses Cash (£)","Other Expenses Card (£)","Other Expense Notes"];
     return[hdr,...dates.map(date=>buildDailyForDate(date)[0])];
   }
   function buildWeekly(){
     const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
     const wm={};dates.forEach(d=>{const{start}=payWeekOf(d);if(!wm[start])wm[start]=[];wm[start].push(d);});
-    const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)"];
+    const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)","Other Expenses Cash (£)","Other Expenses Card (£)"];
     const rows=[hdr];
     Object.entries(wm).sort().forEach(([ws,dates2])=>{
       const{end}=payWeekOf(ws);
@@ -1042,18 +1045,18 @@ function ManagerApp({onLogout}){
         otherExpCash+=dayExp.filter(e=>e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);
         otherExpCard+=dayExp.filter(e=>e.pay_type==="card").reduce((a,e)=>a+e.amount,0);
       });
-      const income=del+uber+cash+card+online-shopExp+(depCash+depCard)+(vpCash+vpCard);
-      const total=(income-otherExpCash-otherExpCard).toFixed(2);
-      const cashInHand=(cash-shopExp-otherExpCash+depCash+vpCash).toFixed(2);
+      // Total and cashInHand do NOT include other expenses (informational only)
+      const total=r2(del+uber+cash+card+online-shopExp+(depCash+depCard)+(vpCash+vpCard));
+      const cashInHand=r2(cash-shopExp+depCash+vpCash);
       rows.push([
         fmtRangeExport(ws,end),
         r2(del),r2(uber),r2(cash),r2(card),r2(online),
         r2(shopExp),
         r2(depCash),r2(depCard),
         r2(vpCash),r2(vpCard),
-        r2(otherExpCash),r2(otherExpCard),
-        r2(income-otherExpCash-otherExpCard),r2(cash-shopExp-otherExpCash+depCash+vpCash),r2(income-otherExpCash-otherExpCard),
-        r2(tipsCash),r2(tipsCard)
+        total,cashInHand,total,
+        r2(tipsCash),r2(tipsCard),
+        r2(otherExpCash),r2(otherExpCard)
       ]);
     });
     return rows;
@@ -1174,8 +1177,14 @@ function ManagerApp({onLogout}){
       });
       if(fhCash+fhCard+fhTips+kcCash+kcCard===0)return;
       const totCash=r2(fhCash+kcCash),totCard=r2(fhCard+kcCard),totAll=r2(fhCash+kcCash+fhCard+kcCard);
-      wklyRows.push([fmtRangeExport(ws,wEnd),r2(fhCash).toFixed(2),r2(fhCard).toFixed(2),r2(fhTips).toFixed(2),r2(kcCash).toFixed(2),r2(kcCard).toFixed(2),totCash.toFixed(2),totCard.toFixed(2),totAll.toFixed(2)]);
+      wklyRows.push([fmtRangeExport(ws,wEnd),r2(fhCash),r2(fhCard),r2(fhTips),r2(kcCash),r2(kcCard),totCash,totCard,totAll]);
     });
+
+    // Guard: if no data built, surface a clear error instead of pushing empty sheets
+    if(payrollRows.length<=1){
+      t("❌ No payroll data found in DB. Enter hours/shifts for staff — values save automatically when you leave each field.");
+      return;
+    }
 
     // ── Build PayrollMonthly: group by month, one row per staff ──
     const monthlyRows=await buildPayrollMonthly(payrollMonth,allEx);
@@ -1193,6 +1202,7 @@ function ManagerApp({onLogout}){
       if(!r3.ok){t("❌ Monthly: "+r3.err);return;}
     }
     setExtras({});
+    setClearKey(k=>k+1);
     t(`✅ All pushed — ${payrollRows.length-1} staff-weeks, ${wklyRows.length-1} weekly rows, ${monthlyRows.length-1} monthly rows — page cleared!`);
   }
   async function exportPayrollMonthly(){
@@ -1767,7 +1777,22 @@ function ManagerApp({onLogout}){
               <div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div>
               <button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button>
             </div>
-            {rejections.length>0&&<div style={{marginBottom:10}}><div style={{fontSize:12,fontWeight:700,color:"#E05252",marginBottom:6}}>⚠️ Rejections</div>{rejections.map(r=><div key={r.id} className="rejbanner"><span><strong>{r.staff_name}</strong> can't do <strong>{r.day}</strong>{r.reason?` — "${r.reason}"`:""}</span><button onClick={async()=>{await db.from("rejections").delete().eq("id",r.id);setRejections(p=>p.filter(x=>x.id!==r.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:16}}>✓</button></div>)}</div>}
+            {rejections.length>0&&<div style={{marginBottom:10}}><div style={{fontSize:12,fontWeight:700,color:"#E05252",marginBottom:6}}>⚠️ Rejections</div>{rejections.map(r=><div key={r.id} className="rejbanner"><span><strong>{r.staff_name}</strong> can't do <strong>{r.day}</strong>{r.reason?` — "${r.reason}"`:""}</span><button onClick={async()=>{
+              // Delete the rejection record
+              await db.from("rejections").delete().eq("id",r.id);
+              setRejections(p=>p.filter(x=>x.id!==r.id));
+              // Set that shift to Off in the rota
+              const dayIdx=DAYS_MON.indexOf(r.day);
+              if(dayIdx>=0){
+                const jsDay=dayIdx===6?0:dayIdx+1;
+                const rotaEntry=(rota[r.staff_id]||[]).find(d=>d.jsDay===jsDay);
+                if(rotaEntry){
+                  await db.from("rota").update({type:"Off"}).eq("id",rotaEntry.id);
+                  setRota(p=>({...p,[r.staff_id]:(p[r.staff_id]||[]).map(d=>d.jsDay===jsDay?{...d,type:"Off"}:d)}));
+                }
+              }
+              t(`✓ Acknowledged — ${r.staff_name}'s ${r.day} shift set to Off`);
+            }} style={{background:"none",border:"none",cursor:"pointer",fontSize:16}}>✓</button></div>)}</div>}
             {staff.map(s=>{const days=rota[s.id]||[];const conflicts=absConflicts(s.id);return(
               <div key={s.id} className="card">
                 <div className="chead">
@@ -1870,14 +1895,14 @@ function ManagerApp({onLogout}){
             </div>
             <div style={{fontSize:11,color:"#888",marginBottom:12}}>Pick the week start (Sunday), tap Load to fill cards, make edits, then Push.</div>
             <div style={{fontSize:13,fontWeight:800,color:"#1A2744",marginBottom:8}}>Front of House</div>
-            {staff.map(s=><PayrollCard key={s.id} name={s.name} icon="👤" sid={s.id} payType={s.payType} rate={s.rate} shiftRate={s.shiftRate} nightRate={s.nightRate} calcFn={()=>calcPay(s)} isKitchen={false} cardMode={s.cardMode||"fixed"} cardFixed={s.cardFixed} staffId={s.id}/>)}
+            {staff.map(s=><PayrollCard key={s.id+'-'+clearKey} name={s.name} icon="👤" sid={s.id} payType={s.payType} rate={s.rate} shiftRate={s.shiftRate} nightRate={s.nightRate} calcFn={()=>calcPay(s)} isKitchen={false} cardMode={s.cardMode||"fixed"} cardFixed={s.cardFixed} staffId={s.id}/>)}
             <div style={{fontSize:13,fontWeight:800,color:"#1A2744",margin:"14px 0 8px"}}>Kitchen Staff</div>
             <div style={{display:"flex",gap:6,marginBottom:10}}>
               <input className="inp sm" style={{flex:1}} placeholder="Add kitchen staff name…" value={newKName} onChange={e=>setNewKName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addKitchen()}/>
               <button className="btn sm navy" onClick={addKitchen}>Add</button>
             </div>
             {kitchenStaff.length===0&&<div style={{fontSize:13,color:"#ccc",marginBottom:10,fontStyle:"italic"}}>No kitchen staff yet — add via Staff tab</div>}
-            {kitchenStaff.map(k=><PayrollCard key={k.id} name={k.name} icon="👨‍🍳" sid={kId(k.id)} payType={k.payType||"hourly"} rate={k.rate} shiftRate={k.shiftRate} nightRate={k.nightRate} calcFn={()=>calcKitchenPay(k)} isKitchen={true} kitchenId={k.id} cardMode={k.cardMode||"fixed"} cardFixed={k.cardFixed}/>)}
+            {kitchenStaff.map(k=><PayrollCard key={k.id+'-'+clearKey} name={k.name} icon="👨‍🍳" sid={kId(k.id)} payType={k.payType||"hourly"} rate={k.rate} shiftRate={k.shiftRate} nightRate={k.nightRate} calcFn={()=>calcKitchenPay(k)} isKitchen={true} kitchenId={k.id} cardMode={k.cardMode||"fixed"} cardFixed={k.cardFixed}/>)}
             <div className="psum">
               <div className="psumtitle">Week Summary — {fmtRange(weekRange.start,weekRange.end)}</div>
               <div className="psumrow"><span>💵 Total Cash</span><span className="psumamt">£{totCash}</span></div>
