@@ -139,7 +139,7 @@ const TKFIELDS = [
 const todayISO  = () => new Date().toISOString().split("T")[0];
 const nowTime   = () => new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
 const fmtDate   = iso => { if(!iso)return""; const[y,m,d]=iso.split("-"); return`${d}/${m}/${y}`; };
-const r2 = v => Math.round((parseFloat(v)||0)*100)/100; // proper 2dp rounding, avoids 2.9999... artifacts
+const r2 = v => Math.round((parseFloat(v)||0)*100)/100; // ⚠️ PERMANENT: always use r2() for monetary values — never toFixed(2) on raw floats, never TKFIELDS.reduce with signs for totals
 const addDays   = (iso,n) => { const d=new Date(iso+"T12:00:00"); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
 const dispDate  = (iso,wd=false) => { if(!iso)return""; const d=new Date(iso+"T12:00:00"); return wd?d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}):d.toLocaleDateString("en-GB",{day:"numeric",month:"short"}); };
 const fmtRange  = (s,e) => `${fmtDate(s)} – ${fmtDate(e)}`;
@@ -680,12 +680,16 @@ function ManagerApp({onLogout}){
 
   // ── Payroll extras ──
   function getExtras(sid){return extras[sid]||{tips:"",additions:[],deductions:[],notes:[],manualFull:"",manualNight:"",manualHrs:"",manualCash:"",manualCard:"",manualTotal:"",id:null,ws:null};}
+  // State-only update — called from PayrollCard inputs so calcPay recomputes immediately.
+  // Does NOT write to DB. DB write only happens in exportPayroll flush.
+  function setExtrasState(sid,fn){
+    setExtras(p=>({...p,[sid]:fn(p[sid]||getExtras(sid))}));
+  }
+  // Full upsert to DB — only called from exportPayroll flush on Push.
   async function updateExtras(sid,fn){
     const next=fn(getExtras(sid));setExtras(p=>({...p,[sid]:next}));
     const ws=weekRange.start;
     const payload={staff_id:sid,week_start:ws,tips:next.tips||"0",additions:next.additions||[],deductions:next.deductions||[],notes:next.notes||[],manual_full:next.manualFull||null,manual_night:next.manualNight||null,manual_hrs:next.manualHrs||null,manual_cash:next.manualCash||null,manual_card:next.manualCard||null,manual_total:next.manualTotal||null};
-    // Always upsert — never plain insert — to prevent duplicate rows per staff+week.
-    // Requires UNIQUE(staff_id, week_start) constraint on payroll_extras table.
     const{data}=await db.from("payroll_extras").upsert(payload,{onConflict:"staff_id,week_start"}).select().single();
     if(data)setExtras(p=>({...p,[sid]:{...next,id:data.id,ws}}));
   }
@@ -1371,15 +1375,15 @@ function ManagerApp({onLogout}){
           <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
             <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>EDIT COUNTS <span style={{fontWeight:400}}>(blank = auto from rota/clock)</span></div>
             <div style={{display:"flex",gap:8}}>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>{setLFull(e.target.value);setCountsEdited(true);}}/></div>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Night Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lNight} onChange={e=>{setLNight(e.target.value);setCountsEdited(true);}}/></div>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder="0" value={lHrs} onChange={e=>{setLHrs(e.target.value);setCountsEdited(true);}}/></div>
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>{setLFull(e.target.value);setCountsEdited(true);}} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualFull:e.target.value}))}/></div>
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Night Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lNight} onChange={e=>{setLNight(e.target.value);setCountsEdited(true);}} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualNight:e.target.value}))}/></div>
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder="0" value={lHrs} onChange={e=>{setLHrs(e.target.value);setCountsEdited(true);}} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>
             </div>
           </div>
           <div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{(parseFloat(p.hrs||0)*parseFloat(rate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
-          <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)}/></div>
+          <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,tips:e.target.value}))}/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#50DC78",marginBottom:4}}>ADDITIONS</div><AddDeductRow sid={sid} type="add"/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#E05252",marginBottom:4}}>DEDUCTIONS</div><AddDeductRow sid={sid} type="ded"/></div>
           {/* Notes */}
@@ -1430,11 +1434,11 @@ function ManagerApp({onLogout}){
           {showOverride&&<div className="override-box">
             <div style={{fontSize:11,color:"#78350F",marginBottom:8,fontWeight:700}}>These values replace everything in the spreadsheet export. Leave blank to use calculated values.</div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {payType==="shift"&&<><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>FULL SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>setLFull(e.target.value)}/></div><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>NIGHT SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lNight} onChange={e=>setLNight(e.target.value)}/></div></>}
-              {payType==="hourly"&&<div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>HOURS</div><input type="number" min="0" step="0.25" className="inp sm" style={{width:"100%"}} placeholder="0" value={lHrs} onChange={e=>setLHrs(e.target.value)}/></div>}
-              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CASH £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCash} onChange={e=>setLCash(e.target.value)}/></div>
-              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CARD £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCard} onChange={e=>setLCard(e.target.value)}/></div>
-              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>TOTAL £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lTotal} onChange={e=>setLTotal(e.target.value)}/></div>
+              {payType==="shift"&&<><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>FULL SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>setLFull(e.target.value)}/></div><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>NIGHT SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lNight} onChange={e=>setLNight(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualNight:e.target.value}))}/></div></>}
+              {payType==="hourly"&&<div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>HOURS</div><input type="number" min="0" step="0.25" className="inp sm" style={{width:"100%"}} placeholder="0" value={lHrs} onChange={e=>setLHrs(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>}
+              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CASH £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCash} onChange={e=>setLCash(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualCash:e.target.value}))}/></div>
+              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CARD £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCard} onChange={e=>setLCard(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualCard:e.target.value}))}/></div>
+              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>TOTAL £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lTotal} onChange={e=>setLTotal(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualTotal:e.target.value}))}/></div>
             </div>
             <button className="btn danger" style={{marginTop:8,padding:"8px"}} onClick={()=>{updateExtras(sid,ex=>({...ex,manualCash:"",manualCard:"",manualTotal:"",manualFull:"",manualNight:"",manualHrs:""}));setLCash("");setLCard("");setLTotal("");setLFull("");setLNight("");setLHrs("");}}>Clear All Overrides</button>
           </div>}
@@ -2031,7 +2035,8 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
             <span className="pending-badge">{pendingTakings.length}</span>
           </div>
           {pendingTakings.sort((a,b)=>b.date.localeCompare(a.date)).map(sub=>{
-            const total=TKFIELDS.reduce((s,f)=>s+parseFloat(sub[f.db]||0)*f.sign,0);
+            const _dep=parseFloat(sub.deposit_receipt||0);const _vp=parseFloat(sub.voucher_purchase||0);
+            const total=r2(parseFloat(sub.deliveroo||0)+parseFloat(sub.uber||0)+parseFloat(sub.cash||0)+parseFloat(sub.card||0)+parseFloat(sub.online||0)-parseFloat(sub.shop_expense||0)+_dep+_vp);
             return(
               <div key={sub.id} className="tmsg new">
                 <div className="tmsg-h">🆕 {sub.staff_name} · {dispDate(sub.date,true)}<span style={{float:"right",fontSize:14,fontWeight:900}}>£{total.toFixed(2)}</span></div>
@@ -2108,7 +2113,8 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
         <div style={{marginTop:10}}>
           <div style={{fontSize:13,fontWeight:800,color:"#1A2744",marginBottom:8}}>📋 Recent Takings (last 7)</div>
           {[...takings].filter(s=>!s.is_new).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,7).map(sub=>{
-            const total=TKFIELDS.reduce((s,f)=>s+parseFloat(sub[f.db]||0)*f.sign,0);
+            const _dep=parseFloat(sub.deposit_receipt||0);const _vp=parseFloat(sub.voucher_purchase||0);
+            const total=r2(parseFloat(sub.deliveroo||0)+parseFloat(sub.uber||0)+parseFloat(sub.cash||0)+parseFloat(sub.card||0)+parseFloat(sub.online||0)-parseFloat(sub.shop_expense||0)+_dep+_vp);
             return(<div key={sub.id} className="tmsg"><div className="tmsg-h">{sub.staff_id==="manager"?"📝":"✓"} {sub.staff_name} · {dispDate(sub.date,true)}<span style={{float:"right",fontSize:14,fontWeight:900}}>£{total.toFixed(2)}</span></div><div className="tmsg-d">{TKFIELDS.filter(f=>parseFloat(sub[f.db]||0)>0).map(f=>`${f.label.replace(/[🛵💵💳🌐🎟️🎫🧾]/g,"").trim()}: £${sub[f.db]}`).join(" · ")}</div></div>);
           })}
         </div>
