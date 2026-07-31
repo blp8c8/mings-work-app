@@ -665,8 +665,10 @@ function ManagerApp({onLogout}){
     const next=fn(getExtras(sid));setExtras(p=>({...p,[sid]:next}));
     const ws=weekRange.start;
     const payload={staff_id:sid,week_start:ws,tips:next.tips||"0",additions:next.additions||[],deductions:next.deductions||[],notes:next.notes||[],manual_full:next.manualFull||null,manual_night:next.manualNight||null,manual_hrs:next.manualHrs||null,manual_cash:next.manualCash||null,manual_card:next.manualCard||null,manual_total:next.manualTotal||null};
-    if(next.id&&next.ws===ws){await db.from("payroll_extras").update(payload).eq("id",next.id);}
-    else{const{data}=await db.from("payroll_extras").insert(payload).select().single();if(data)setExtras(p=>({...p,[sid]:{...next,id:data.id,ws}}));}
+    // Always upsert — never plain insert — to prevent duplicate rows per staff+week.
+    // Requires UNIQUE(staff_id, week_start) constraint on payroll_extras table.
+    const{data}=await db.from("payroll_extras").upsert(payload,{onConflict:"staff_id,week_start"}).select().single();
+    if(data)setExtras(p=>({...p,[sid]:{...next,id:data.id,ws}}));
   }
 
   // ── Pay calculations ──
@@ -1044,7 +1046,6 @@ function ManagerApp({onLogout}){
     const ws=weekRange.start;
     const flushOps=Object.entries(extras).map(([sid,ex])=>{
       const payload={staff_id:sid,week_start:ws,tips:ex.tips||"0",additions:ex.additions||[],deductions:ex.deductions||[],notes:ex.notes||[],manual_full:ex.manualFull||null,manual_night:ex.manualNight||null,manual_hrs:ex.manualHrs||null,manual_cash:ex.manualCash||null,manual_card:ex.manualCard||null,manual_total:ex.manualTotal||null};
-      if(ex.id&&ex.ws===ws)return db.from("payroll_extras").update(payload).eq("id",ex.id);
       return db.from("payroll_extras").upsert(payload,{onConflict:"staff_id,week_start"});
     });
     await Promise.all(flushOps);
@@ -1401,28 +1402,51 @@ function ManagerApp({onLogout}){
 
   // ── Modals ──
   function AddStaffModal({onClose}){
+    const[type,setType]=useState("foh"); // "foh" | "kitchen"
     const[name,setName]=useState("");const[code,setCode]=useState("");const[rate,setRate]=useState("");const[shiftRate,setSR]=useState("");const[nightRate,setNR]=useState("");const[cardFixed,setCF]=useState("0");const[err,setErr]=useState("");const[saving,setSaving]=useState(false);
     async function save(){
-      setErr("");if(!name.trim())return setErr("Enter a name");if(!/^\d{8}$/.test(code))return setErr("Code must be 8 digits");
+      setErr("");if(!name.trim())return setErr("Enter a name");
       setSaving(true);
-      const{error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:"hourly",rate:rate||"0",shift_rate:shiftRate||"0",night_rate:nightRate||"0",card_fixed:cardFixed||"0",card_mode:"fixed"});
-      if(error){setSaving(false);return setErr(error.code==="23505"?"Code already taken":error.message);}
-      setStaff(p=>[...p,{id:code,name:name.trim(),code,payType:"hourly",rate:rate||"0",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardFixed:cardFixed||"0",cardMode:"fixed"}].sort((a,b)=>a.name.localeCompare(b.name)));
-      t("✅ "+name.trim()+" added");onClose();setSaving(false);
+      if(type==="foh"){
+        if(!/^\d{8}$/.test(code)){setSaving(false);return setErr("Code must be 8 digits");}
+        const{error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:"hourly",rate:rate||"0",shift_rate:shiftRate||"0",night_rate:nightRate||"0",card_fixed:cardFixed||"0",card_mode:"fixed"});
+        if(error){setSaving(false);return setErr(error.code==="23505"?"Code already taken":error.message);}
+        setStaff(p=>[...p,{id:code,name:name.trim(),code,payType:"hourly",rate:rate||"0",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardFixed:cardFixed||"0",cardMode:"fixed",tipsPct:"0"}].sort((a,b)=>a.name.localeCompare(b.name)));
+        t("✅ "+name.trim()+" (FOH) added");
+      }else{
+        const{data,error}=await db.from("kitchen_staff").insert({name:name.trim(),cash_card:"cash",pay_type:"hourly",shift_rate:shiftRate||"0",night_rate:nightRate||"0",rate:rate||"0",card_mode:"fixed",card_fixed:cardFixed||"0"}).select().single();
+        if(error){setSaving(false);return setErr(error.message);}
+        setKitchenStaff(p=>[...p,{...data,payType:"hourly",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardMode:"fixed",cardFixed:cardFixed||"0"}]);
+        t("✅ "+name.trim()+" (Kitchen) added");
+      }
+      onClose();setSaving(false);
     }
-    return(<div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">➕ Add Staff Member</div><div className="ssub2">Front of house staff added directly by manager</div>
-      <label className="lbl">Full Name</label><input className="inp" placeholder="e.g. Amy Chen" value={name} onChange={e=>setName(e.target.value)}/>
-      <label className="lbl">8-Digit Code</label><input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={code} onChange={e=>setCode(e.target.value)}/>
-      <div style={{display:"flex",gap:8}}>
-        <div style={{flex:1}}><label className="lbl">£/HR</label><input className="inp" type="number" placeholder="0.00" value={rate} onChange={e=>setRate(e.target.value)}/></div>
-        <div style={{flex:1}}><label className="lbl">Full Shift £</label><input className="inp" type="number" placeholder="0.00" value={shiftRate} onChange={e=>setSR(e.target.value)}/></div>
-        <div style={{flex:1}}><label className="lbl">Night £</label><input className="inp" type="number" placeholder="0.00" value={nightRate} onChange={e=>setNR(e.target.value)}/></div>
-      </div>
-      <label className="lbl">Fixed Card Payment (£)</label><input className="inp" type="number" placeholder="0.00" value={cardFixed} onChange={e=>setCF(e.target.value)}/>
-      {err&&<div className="err">{err}</div>}
-      <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Add Staff Member"}</button>
-      <button className="btn sec" onClick={onClose}>Cancel</button>
-    </div></div>);
+    return(
+      <div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}>
+        <div className="stitle">➕ Add Staff Member</div>
+        <label className="lbl">Staff Type</label>
+        <div className="toggle" style={{marginBottom:14}}>
+          <button className={`tgl${type==="foh"?" on":""}`} onClick={()=>{setType("foh");setErr("");}}>👤 Front of House</button>
+          <button className={`tgl${type==="kitchen"?" on":""}`} onClick={()=>{setType("kitchen");setErr("");}}>👨‍🍳 Kitchen</button>
+        </div>
+        <label className="lbl">Full Name</label>
+        <input className="inp" placeholder={type==="foh"?"e.g. Amy Chen":"e.g. Marco"} value={name} onChange={e=>setName(e.target.value)}/>
+        {type==="foh"&&<>
+          <label className="lbl">8-Digit Login Code</label>
+          <input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={code} onChange={e=>setCode(e.target.value)}/>
+        </>}
+        <div style={{display:"flex",gap:8}}>
+          <div style={{flex:1}}><label className="lbl">£/HR</label><input className="inp" type="number" placeholder="0.00" value={rate} onChange={e=>setRate(e.target.value)}/></div>
+          <div style={{flex:1}}><label className="lbl">Full Shift £</label><input className="inp" type="number" placeholder="0.00" value={shiftRate} onChange={e=>setSR(e.target.value)}/></div>
+          <div style={{flex:1}}><label className="lbl">Night £</label><input className="inp" type="number" placeholder="0.00" value={nightRate} onChange={e=>setNR(e.target.value)}/></div>
+        </div>
+        <label className="lbl">Fixed Card Payment (£)</label>
+        <input className="inp" type="number" placeholder="0.00" value={cardFixed} onChange={e=>setCF(e.target.value)}/>
+        {err&&<div className="err">{err}</div>}
+        <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Add Staff Member"}</button>
+        <button className="btn sec" onClick={onClose}>Cancel</button>
+      </div></div>
+    );
   }
 
   function PinModal({onClose}){
@@ -1600,9 +1624,10 @@ function ManagerApp({onLogout}){
             <button className="btn navy" style={{marginBottom:14}} onClick={()=>setAddStaffModal(true)}>➕ Add Staff Member</button>
 
             {staff.length===0&&<div className="empty"><div className="emptyicon">👥</div><div className="emptytxt">No staff yet — add one above</div></div>}
-            {staff.map(s=>{
+            {staff.map((s,idx)=>{
               return(
-                <div key={s.id} className="card w" style={{marginBottom:12}}>
+                <React.Fragment key={s.id}>
+                <div className="card w" style={{marginBottom:12}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                     <div style={{display:"flex",gap:10,alignItems:"center"}}>
                       <div className="avatar" style={{width:38,height:38,fontSize:15}}>{s.name[0]}</div>
@@ -1651,22 +1676,21 @@ function ManagerApp({onLogout}){
 
                   <button className="btn danger" style={{marginTop:10,padding:"10px"}} onClick={()=>removeStaff(s)}>🗑️ Remove {s.name.split(" ")[0]}</button>
                 </div>
+                {idx===staff.length-1&&(()=>{
+                  const total=staff.reduce((a,s)=>a+parseFloat(s.tipsPct||0),0);
+                  const ok=Math.abs(total-100)<0.01;
+                  return(<div style={{background:ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 14px",marginBottom:10,marginTop:4}}>
+                    <div style={{fontSize:13,fontWeight:800,color:ok?"#065F46":"#7F1D1D"}}>
+                      {ok?"✅ Tips % total: 100% — all accounted for":`⚠️ Tips % total: ${total.toFixed(0)}% — does not add up to 100%`}
+                    </div>
+                    <div style={{fontSize:11,color:ok?"#047857":"#991B1B",marginTop:3}}>
+                      {staff.map(s=>`${s.name.split(" ")[0]}: ${s.tipsPct||0}%`).join(" · ")}
+                    </div>
+                  </div>);
+                })()}
+                </React.Fragment>
               );
             })}
-
-            {/* Tips % validator — shown right after FOH staff, before Kitchen section */}
-            {staff.length>0&&(()=>{
-              const total=staff.reduce((a,s)=>a+parseFloat(s.tipsPct||0),0);
-              const ok=Math.abs(total-100)<0.01;
-              return(<div style={{background:ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 14px",marginBottom:14,marginTop:4}}>
-                <div style={{fontSize:13,fontWeight:800,color:ok?"#065F46":"#7F1D1D"}}>
-                  {ok?"✅ Tips % total: 100% — all accounted for":`⚠️ Tips % total: ${total.toFixed(0)}% — does not add up to 100%`}
-                </div>
-                <div style={{fontSize:11,color:ok?"#047857":"#991B1B",marginTop:3}}>
-                  {staff.map(s=>`${s.name.split(" ")[0]}: ${s.tipsPct||0}%`).join(" · ")}
-                </div>
-              </div>);
-            })()}
 
             <div className="sec" style={{marginTop:20}}>Kitchen Staff</div>
             <div style={{display:"flex",gap:6,marginBottom:10}}>
