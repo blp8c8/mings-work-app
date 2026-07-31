@@ -473,7 +473,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   function shiftLabel(sh){if(!sh||sh.type==="Off")return"Day off";if(sh.type==="Full Day (11am–close)")return"Full Day 11am–close";if(sh.type==="Night (5:30pm–close)")return"Night 5:30pm–close";if(sh.type==="Custom")return`${sh.customIn||"?"}–${sh.customOut||"?"}`;return sh.type;}
   if(loading)return<Loading text="Loading your data…"/>;
 
-  function RotaList(){return rota.map((sh,idx)=>{const isToday=sh.date===todayISO();const dayName=DAYS_MON[idx];const rejected=rejections.some(r=>r.day===dayName);const confirmed=confirmations.some(r=>r.day===dayName);const isOff=sh.type==="Off";return(<div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}`}><div className="rdaylbl"><div className="rdayname">{dayName}</div><div className="rdaydate">{dispDate(sh.date)}</div>{isToday&&<div className="rdayflag">TODAY</div>}</div><div className="rdayshift">{shiftLabel(sh)}</div>{!isOff&&!rejected&&!confirmed&&<div className="rdaybtns"><button className="okbtn" onClick={()=>confirmShift(idx)}>✓ OK</button><button className="nobtn" onClick={()=>{setRejectModal(idx);setRejectReason("");}}>✕ Can't</button></div>}{confirmed&&<span className="chip g">✓ OK</span>}{rejected&&<span className="chip r">Rejected</span>}</div>);});}
+  function RotaList(){return rota.map((sh,idx)=>{const isToday=sh.date===todayISO();const dayName=DAYS_MON[idx];const rejected=rejections.some(r=>r.day===dayName);const confirmed=confirmations.some(r=>r.day===dayName);const isOff=sh.type==="Off";return(<div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}`}><div className="rdaylbl"><div className="rdayname">{dayName}</div><div className="rdaydate">{dispDate(sh.date)}</div>{isToday&&<div className="rdayflag">TODAY</div>}</div><div className="rdayshift">{shiftLabel(sh)}</div>{!isOff&&!rejected&&!confirmed&&<div className="rdaybtns"><button className="okbtn" onClick={()=>confirmShift(idx)}>✓ OK</button><button className="nobtn" onClick={()=>{setRejectModal(idx);setRejectReason("");}}>✕ Can't</button></div>}{confirmed&&<span className="chip g">✓ OK</span>}{rejected&&!isOff&&<span className="chip r">Rejected</span>}</div>);});}
 
   const navItems=[{id:"home",icon:"🏠",label:"Home"},{id:"rota",icon:"📋",label:"Rota"},{id:"absence",icon:"📅",label:"Absence"},...(assigned?[{id:"takings",icon:"📊",label:"Takings",badge:!submitted}]:[])];
   return(
@@ -1081,8 +1081,18 @@ function ManagerApp({onLogout}){
     }
 
     // Now fetch ALL payroll_extras from DB — guaranteed to include current week
-    const{data:allEx}=await db.from("payroll_extras").select("*");
-    if(!allEx){t("❌ Could not load payroll data from DB");return;}
+    const{data:allExDb}=await db.from("payroll_extras").select("*");
+    if(!allExDb){t("❌ Could not load payroll data from DB");return;}
+
+    // Merge current extras STATE on top of DB rows so unsaved field edits are included.
+    // For each staff in current extras, if their week_start matches current week,
+    // use the state version (most up-to-date). DB rows for other weeks stay as-is.
+    const allEx=[...allExDb];
+    Object.entries(extras).forEach(([sid,ex])=>{
+      const idx=allEx.findIndex(e=>e.staff_id===sid&&e.week_start===ws);
+      const merged={staff_id:sid,week_start:ws,tips:ex.tips||"0",additions:ex.additions||[],deductions:ex.deductions||[],notes:ex.notes||[],manual_full:ex.manualFull||null,manual_night:ex.manualNight||null,manual_hrs:ex.manualHrs||null,manual_cash:ex.manualCash||null,manual_card:ex.manualCard||null,manual_total:ex.manualTotal||null};
+      if(idx>=0)allEx[idx]=merged;else allEx.push(merged);
+    });
 
     // ── Build Payroll tab: one row per staff per week, ALL weeks ──
     const payrollHdr=["Date Range","Name","Type","Full Shifts","Night Shifts","Hours","Rate/Hour (£)","Rate/Full Shift (£)","Rate/Night Shift (£)","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes","Override?"];
@@ -1189,17 +1199,16 @@ function ManagerApp({onLogout}){
     // ── Build PayrollMonthly: group by month, one row per staff ──
     const monthlyRows=await buildPayrollMonthly(payrollMonth,allEx);
 
-    // ── Push all three tabs ──
     t("⏳ Pushing Payroll tab…");
-    const r1=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"Payroll",payrollRows);
-    if(!r1.ok){t("❌ Payroll: "+r1.err);return;}
+    const wr1=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"Payroll",payrollRows);
+    if(!wr1.ok){t("❌ Payroll: "+wr1.err);return;}
     t("⏳ Pushing PayrollWeekly tab…");
-    const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollWeekly",wklyRows);
-    if(!r2.ok){t("❌ Weekly: "+r2.err);return;}
+    const wr2=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollWeekly",wklyRows);
+    if(!wr2.ok){t("❌ Weekly: "+wr2.err);return;}
     if(monthlyRows.length>1){
       t("⏳ Pushing PayrollMonthly tab…");
-      const r3=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",monthlyRows);
-      if(!r3.ok){t("❌ Monthly: "+r3.err);return;}
+      const wr3=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",monthlyRows);
+      if(!wr3.ok){t("❌ Monthly: "+wr3.err);return;}
     }
     setExtras({});
     setClearKey(k=>k+1);
