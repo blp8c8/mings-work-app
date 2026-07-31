@@ -401,6 +401,8 @@ function StaffRegister({onBack,onRegister}){
 function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[tab,setTab]=useState("home");const[msg,setMsg]=useState("");
   const[clockedIn,setClockedIn]=useState(false);const[clockInTime,setClockInTime]=useState(null);
+  const[breakTime,setBreakTime]=useState("0");
+  const[lateModal,setLateModal]=useState(false); // shows when staff clocks out late
   const[logs,setLogs]=useState([]);const[rota,setRota]=useState([]);
   const[absences,setAbsences]=useState([]);const[rejections,setRejections]=useState([]);
   const[confirmations,setConfirmations]=useState([]);
@@ -443,7 +445,35 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     setRota(dates.map(dateISO=>{const jsDay=new Date(dateISO+"T12:00:00").getDay();const row=(data||[]).find(r=>r.day_index===jsDay);return{date:dateISO,jsDay,type:row?.shift_type||"Off",customIn:row?.custom_in||"",customOut:row?.custom_out||""};}));
   }
   async function clockIn(){const time=nowTime();const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:time,note:""}).select().single();if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(time);t("✅ Clocked in at "+time);}else t("❌ "+error.message);}
-  async function clockOut(){const active=logs.find(l=>l.date===todayISO()&&l.time_in&&!l.time_out);if(!active)return;const time=nowTime();const{error}=await db.from("clock_logs").update({time_out:time}).eq("id",active.id);if(!error){setLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time}:l));setClockedIn(false);t("👋 Clocked out at "+time);}else t("❌ "+error.message);}
+  async function doClockOut(noteType){
+    const active=logs.find(l=>l.date===todayISO()&&l.time_in&&!l.time_out);
+    if(!active)return;
+    const time=nowTime();
+    const bt=parseFloat(breakTime||0);
+    const{error}=await db.from("clock_logs").update({time_out:time,note:noteType||"",break_time:bt}).eq("id",active.id);
+    if(!error){setLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time,note:noteType||"",break_time:bt}:l));setClockedIn(false);setBreakTime("0");setLateModal(false);t("👋 Clocked out at "+time+(bt>0?` (${bt}hr break deducted)`:""));}
+    else t("❌ "+error.message);
+  }
+  function clockOut(){
+    // Check if hourly-only staff and if clocked out >15 min after rota end
+    const isHourlyOnly=parseFloat(user.shiftRate||0)===0&&parseFloat(user.nightRate||0)===0&&parseFloat(user.rate||0)>0;
+    if(isHourlyOnly){
+      const todayRota=rota.find(sh=>sh.date===todayISO());
+      if(todayRota&&todayRota.customOut){
+        const[endH,endM]=todayRota.customOut.split(":").map(Number);
+        const now=new Date();
+        const endMins=endH*60+endM;
+        const nowMins=now.getHours()*60+now.getMinutes();
+        if(nowMins-endMins>15){setLateModal(true);return;}
+      }else if(todayRota&&todayRota.type==="Full Day (11am–close)"){
+        // Full day ends at 23:00 — if clocking out after 23:15, flag
+        const now=new Date();if(now.getHours()*60+now.getMinutes()>23*60+15){setLateModal(true);return;}
+      }else if(todayRota&&todayRota.type==="Night (5:30pm–close)"){
+        const now=new Date();if(now.getHours()*60+now.getMinutes()>23*60+15){setLateModal(true);return;}
+      }
+    }
+    doClockOut("");
+  }
   async function reportAbsence(){
     if(!absDate||!absPeriod)return t("Please pick a date and period");
     const daysNotice=Math.floor((new Date(absDate+"T12:00:00")-new Date(todayISO()+"T12:00:00"))/(1000*60*60*24));
@@ -482,7 +512,18 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     <div className="app">
       <Toast msg={msg}/>
       <div className="hdr"><div><div className="hdr-greet">Good {now.getHours()<12?"morning":now.getHours()<18?"afternoon":"evening"},</div><div className="hdr-name">{user.name.split(" ")[0]} 👋</div></div><button style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}} onClick={onLogout}>🚪</button></div>
-      {tab==="home"&&<div className="body">{assigned&&!submitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-t">📊 You're today's Takings Person!</div><div className="notif-s">Tap to record today's takings →</div></div>}<div className="clkcard"><div className="clktime">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div><div className="clkdate">{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div><div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:"● Not clocked in"}</div><div className="clkbtns"><button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button><button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button></div>{logs.slice(0,3).length>0&&<div className="clkhist">{logs.slice(0,3).map(l=><div key={l.id} className="clkrow"><span>{dispDate(l.date,true)}</span><span>{l.time_in}→{l.time_out||"active"}</span><span style={{fontWeight:700}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(1)+"h":""}</span></div>)}</div>}</div><div className="sec">This Week</div><RotaList/></div>}
+      {tab==="home"&&<div className="body">{assigned&&!submitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-t">📊 You're today's Takings Person!</div><div className="notif-s">Tap to record today's takings →</div></div>}<div className="clkcard"><div className="clktime">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div><div className="clkdate">{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div><div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:"● Not clocked in"}</div>
+        {clockedIn&&parseFloat(user.shiftRate||0)===0&&parseFloat(user.rate||0)>0&&(
+          <div style={{margin:"10px 0 0"}}>
+            <div style={{fontSize:12,color:"#888",marginBottom:4}}>Break time (hours)</div>
+            <div style={{display:"flex",gap:6,alignItems:"center"}}>
+              {[0,0.5,1,1.5,2,2.5,3].map(v=><button key={v} className={`tgl${parseFloat(breakTime)===v?" on":""}`} style={{padding:"6px 10px",fontSize:11}} onClick={()=>setBreakTime(String(v))}>{v===0?"None":v+"hr"}</button>)}
+            </div>
+          </div>
+        )}
+        <div className="clkbtns"><button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button><button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button></div>{logs.slice(0,3).length>0&&<div className="clkhist">{logs.slice(0,3).map(l=><div key={l.id} className="clkrow"><span>{dispDate(l.date,true)}</span><span>{l.time_in}→{l.time_out||"active"}</span><span style={{fontWeight:700}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(1)+"h":""}</span></div>)}</div>}</div><div className="sec">This Week</div><RotaList/>
+      {lateModal&&<div className="overlay"><div className="sheet"><div className="stitle">⏰ Late Clock-Out</div><div className="ssub2">You're clocking out later than your scheduled end time. Which applies?</div><button className="btn" onClick={()=>doClockOut("forgot")}>🕐 I forgot to clock out earlier</button><button className="btn sec" onClick={()=>doClockOut("overtime")}>⏱ I was working extra time</button><button className="btn sec" onClick={()=>setLateModal(false)}>Cancel</button></div></div>}
+      </div>}
       {tab==="rota"&&<div className="body"><div className="sec">My Rota</div>
         <div style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:11,padding:"10px 13px",marginBottom:12,fontSize:12,color:"#1E40AF",lineHeight:1.7}}>
           📅 <strong>Check your rota every Wednesday</strong> and accept or reject by <strong>Friday</strong>. For any emergency, contact the manager directly.
@@ -564,7 +605,7 @@ function ManagerApp({onLogout}){
   const[rotaRecipient,setRotaRecipient]=useState("");
   const[newKName,setNewKName]=useState("");
   const[absStaff,setAbsStaff]=useState("");const[absDate,setAbsDate]=useState("");const[absPeriod,setAbsPeriod]=useState("");
-  const[gsConfig,setGsConfig]=useState({webAppUrl:"",payrollId:"",takingsId:""});
+  const[gsConfig,setGsConfig]=useState({webAppUrl:"",payrollId:"",takingsId:"",clockLogId:""});
   // Add FOH staff from manager
   const[addStaffModal,setAddStaffModal]=useState(false);
   const[clockDate,setClockDate]=useState(()=>todayISO());
@@ -587,7 +628,7 @@ function ManagerApp({onLogout}){
       if(!data)return;
       setExtras(p=>{
         const em={...p};
-        data.forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",id:e.id,ws:e.week_start};});
+        data.forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",extraTime:e.extra_time||"",id:e.id,ws:e.week_start};});
         return em;
       });
     });
@@ -606,7 +647,7 @@ function ManagerApp({onLogout}){
       db.from("takings_defaults").select("*"),
       db.from("takings_assignment").select("staff_id").eq("date",todayISO()).maybeSingle(),
       db.from("payroll_extras").select("*"),
-      db.from("app_settings").select("key,value").in("key",["gs_webapp_url","gs_payroll_id","gs_takings_id","manager_pin"]),
+      db.from("app_settings").select("key,value").in("key",["gs_webapp_url","gs_payroll_id","gs_takings_id","gs_clocklog_id","manager_pin"]),
     ]);
     setStaff((staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardMode:s.card_mode||"fixed",tipsPct:s.tips_pct||"0"})));
     setAbsences(absR.data||[]);setClockLogs(logR.data||[]);setRejections(rejR.data||[]);
@@ -616,10 +657,10 @@ function ManagerApp({onLogout}){
     const staffIds=new Set((staffR.data||[]).map(s=>s.id));
     const dd={};(defR.data||[]).forEach(r=>{if(staffIds.has(r.staff_id))dd[r.day_of_week]=r.staff_id;});setTakingDefaults(dd);
     const em={};
-    (extR.data||[]).forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",id:e.id,ws:e.week_start};});
+    (extR.data||[]).forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",extraTime:e.extra_time||"",id:e.id,ws:e.week_start};});
     setExtras(em);
     const gsRows=gsR.data||[];
-    setGsConfig({webAppUrl:gsRows.find(r=>r.key==="gs_webapp_url")?.value||"",payrollId:gsRows.find(r=>r.key==="gs_payroll_id")?.value||"",takingsId:gsRows.find(r=>r.key==="gs_takings_id")?.value||""});
+    setGsConfig({webAppUrl:gsRows.find(r=>r.key==="gs_webapp_url")?.value||"",payrollId:gsRows.find(r=>r.key==="gs_payroll_id")?.value||"",takingsId:gsRows.find(r=>r.key==="gs_takings_id")?.value||"",clockLogId:gsRows.find(r=>r.key==="gs_clocklog_id")?.value||""});
     setLoading(false);
   }
 
@@ -639,7 +680,7 @@ function ManagerApp({onLogout}){
 
   async function saveGsConfig(cfg){
     setGsConfig(cfg);
-    for(const[key,value]of[["gs_webapp_url",cfg.webAppUrl],["gs_payroll_id",cfg.payrollId],["gs_takings_id",cfg.takingsId]]){
+    for(const[key,value]of[["gs_webapp_url",cfg.webAppUrl],["gs_payroll_id",cfg.payrollId],["gs_takings_id",cfg.takingsId],["gs_clocklog_id",cfg.clockLogId||""]]){
       await db.from("app_settings").upsert({key,value});
     }
     t("✅ Google Sheets config saved!");
@@ -679,7 +720,7 @@ function ManagerApp({onLogout}){
   function staffAssignedDays(staffId){return Object.entries(takingDefaults).filter(([,sid])=>sid===staffId).map(([dow])=>parseInt(dow));}
 
   // ── Payroll extras ──
-  function getExtras(sid){return extras[sid]||{tips:"",additions:[],deductions:[],notes:[],manualFull:"",manualNight:"",manualHrs:"",manualCash:"",manualCard:"",manualTotal:"",id:null,ws:null};}
+  function getExtras(sid){return extras[sid]||{tips:"",additions:[],deductions:[],notes:[],manualFull:"",manualNight:"",manualHrs:"",manualCash:"",manualCard:"",manualTotal:"",extraTime:"",id:null,ws:null};}
   // State-only update — called from PayrollCard inputs so calcPay recomputes immediately.
   // Does NOT write to DB. DB write only happens in exportPayroll flush.
   function setExtrasState(sid,fn){
@@ -689,7 +730,7 @@ function ManagerApp({onLogout}){
   async function updateExtras(sid,fn){
     const next=fn(getExtras(sid));setExtras(p=>({...p,[sid]:next}));
     const ws=weekRange.start;
-    const payload={staff_id:sid,week_start:ws,tips:next.tips||"0",additions:next.additions||[],deductions:next.deductions||[],notes:next.notes||[],manual_full:next.manualFull||null,manual_night:next.manualNight||null,manual_hrs:next.manualHrs||null,manual_cash:next.manualCash||null,manual_card:next.manualCard||null,manual_total:next.manualTotal||null};
+    const payload={staff_id:sid,week_start:ws,tips:next.tips||"0",additions:next.additions||[],deductions:next.deductions||[],notes:next.notes||[],manual_full:next.manualFull||null,manual_night:next.manualNight||null,manual_hrs:next.manualHrs||null,manual_cash:next.manualCash||null,manual_card:next.manualCard||null,manual_total:next.manualTotal||null,extra_time:next.extraTime||null};
     const{data}=await db.from("payroll_extras").upsert(payload,{onConflict:"staff_id,week_start"}).select().single();
     if(data)setExtras(p=>({...p,[sid]:{...next,id:data.id,ws}}));
   }
@@ -710,9 +751,22 @@ function ManagerApp({onLogout}){
 
   function calcPay(s){
     const ex=getExtras(s.id);
-    const full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):0;
-    const night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):0;
-    const hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):0;
+    const hasShiftRate=parseFloat(s.shiftRate||0)>0||parseFloat(s.nightRate||0)>0;
+    const myRota=rota[s.id]||[];
+    // Shifts: if staff has a shift rate, auto-count from rota (override with manual)
+    const autoFull=myRota.filter(sh=>sh?.type==="Full Day (11am–close)").length;
+    const autoNight=myRota.filter(sh=>sh?.type==="Night (5:30pm–close)").length;
+    const full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):(hasShiftRate?autoFull:0);
+    const night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):(hasShiftRate?autoNight:0);
+    // Hours: if hourly-only staff, auto-sum from clock logs (override with manual)
+    let autoHrs=0;
+    if(!hasShiftRate){
+      const logsInRange=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=weekRange.start&&l.date<=weekRange.end);
+      const dailyRaw={};
+      logsInRange.forEach(l=>{dailyRaw[l.date]=(dailyRaw[l.date]||0)+parseHrs(l.time_in,l.time_out);});
+      autoHrs=Object.values(dailyRaw).reduce((a,dayHrs)=>a+roundHrsUp(dayHrs),0);
+    }
+    const hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):autoHrs;
     // Auto-calculate tips from takings total tips * staff tipsPct — only if ex.tips is blank
     const weekTakings=takings.filter(tk=>tk.date>=weekRange.start&&tk.date<=weekRange.end);
     const weekTipsCash=weekTakings.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0),0);
@@ -1097,7 +1151,7 @@ function ManagerApp({onLogout}){
     });
 
     // ── Build Payroll tab: one row per staff per week, ALL weeks ──
-    const payrollHdr=["Date Range","Name","Type","Full Shifts","Night Shifts","Hours","Rate/Hour (£)","Rate/Full Shift (£)","Rate/Night Shift (£)","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes","Override?"];
+    const payrollHdr=["Date Range","Name","Type","Full Shifts","Night Shifts","Hours","Rate/Hour (£)","Rate/Full Shift (£)","Rate/Night Shift (£)","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes","Extra Time","Override?"];
     const payrollRows=[payrollHdr];
     // Group extras by week_start
     const weekStarts=[...new Set(allEx.map(e=>e.week_start).filter(Boolean))].sort();
@@ -1124,7 +1178,7 @@ function ManagerApp({onLogout}){
         const weekTipsTotal=weekTakingsForWs.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0)+parseFloat(tk.tips_card||0),0);
         const autoTips=r2(weekTipsTotal*parseFloat(s.tipsPct||0)/100);
         const tips=storedTips>0?storedTips:autoTips;
-        payrollRows.push([wRange,s.name,"FOH",full,night,hrs.toFixed(2),s.rate||"0",s.shiftRate||"0",s.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),tips.toFixed(2),addT.toFixed(2),dedT.toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),ex.manual_total?"MANUAL":""]);
+        payrollRows.push([wRange,s.name,"FOH",full,night,r2(hrs).toFixed(2),s.rate||"0",s.shiftRate||"0",s.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),ex.extra_time||"",ex.manual_total?"MANUAL":""]);
       });
       // Kitchen staff
       kitchenStaff.forEach(k=>{
@@ -1142,7 +1196,7 @@ function ManagerApp({onLogout}){
         const{cardAmt,cashAmt}=splitCard(k.cardMode||"fixed",k.cardFixed,salaryTotal);
         const cash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
         const card=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
-        payrollRows.push([wRange,k.name,"Kitchen",full,night,hrs.toFixed(2),k.rate||"0",k.shiftRate||"0",k.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),tips.toFixed(2),addT.toFixed(2),dedT.toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),ex.manual_total?"MANUAL":""]);
+        payrollRows.push([wRange,k.name,"Kitchen",full,night,r2(hrs).toFixed(2),k.rate||"0",k.shiftRate||"0",k.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),"",ex.manual_total?"MANUAL":""]);
       });
     });
 
@@ -1272,7 +1326,49 @@ function ManagerApp({onLogout}){
     t("✅ Expenses merged into Daily sheet!");
   }
 
-  // ── Rota share ──
+  async function pushClockLog(date){
+    if(!gsConfig.webAppUrl||!gsConfig.clockLogId)return;
+    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Note","Extra Time (hrs)"];
+    const rows=[hdr];
+    const dayLogs=clockLogs.filter(l=>l.date===date);
+    dayLogs.forEach(l=>{
+      // Rota type for this staff on this date
+      const staffRota=rota[l.staff_id]||[];
+      const jsDay=new Date(date+"T12:00:00").getDay();
+      const rotaEntry=staffRota.find(d=>d.jsDay===jsDay);
+      let rotaType="";
+      if(rotaEntry){
+        if(rotaEntry.type==="Full Day (11am–close)")rotaType="Full Day";
+        else if(rotaEntry.type==="Night (5:30pm–close)")rotaType="Night Shift";
+        else if(rotaEntry.type==="Custom")rotaType=`Custom ${rotaEntry.customIn||""}–${rotaEntry.customOut||""}`;
+        else rotaType=rotaEntry.type;
+      }
+      // Extra time: clock-out minus scheduled end, rounded to 0/0.5/1/2
+      let extraTime=0;
+      if(l.time_out&&rotaEntry&&rotaEntry.customOut){
+        const[eH,eM]=rotaEntry.customOut.split(":").map(Number);
+        const[oH,oM]=l.time_out.split(":").map(Number);
+        const diffMins=(oH*60+oM)-(eH*60+eM);
+        if(diffMins>15){
+          const rawHrs=diffMins/60;
+          extraTime=Math.floor(rawHrs*2)/2; // round down to nearest 0.5
+          extraTime=Math.min(extraTime,2); // cap at 2hrs
+        }
+      }
+      const noteLabel=l.note==="forgot"?"Forgot to clock out":l.note==="overtime"?"Working extra time":l.note||"";
+      rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",noteLabel,extraTime>0?extraTime:""]);
+    });
+    if(rows.length>1)await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",rows);
+  }
+  // Check daily auto-push (runs on load, fires if today's log not yet pushed)
+  const[lastClockPush,setLastClockPush]=useState(()=>localStorage.getItem("lastClockPush")||"");
+  useEffect(()=>{
+    if(!gsConfig.clockLogId||!gsConfig.webAppUrl)return;
+    const yesterday=addDays(todayISO(),-1);
+    if(lastClockPush!==yesterday){
+      pushClockLog(yesterday).then(()=>{localStorage.setItem("lastClockPush",yesterday);setLastClockPush(yesterday);});
+    }
+  },[gsConfig.clockLogId]);
   function buildRotaText(sId){
     const s=staff.find(x=>x.id===sId);if(!s)return"";
     const days=rota[sId]||[];
@@ -1349,6 +1445,7 @@ function ManagerApp({onLogout}){
     const[lNight,setLNight]=useState(ex.manualNight||"");
     const[lHrs,setLHrs]=useState(ex.manualHrs||"");
     const[lTips,setLTips]=useState(ex.tips||"");
+    const[lExtraTime,setLExtraTime]=useState(ex.extraTime||"");
     const[lCash,setLCash]=useState(ex.manualCash||"");
     const[lCard,setLCard]=useState(ex.manualCard||"");
     const[lTotal,setLTotal]=useState(ex.manualTotal||"");
@@ -1360,10 +1457,11 @@ function ManagerApp({onLogout}){
       setLNight(ex.manualNight||"");
       setLHrs(ex.manualHrs||"");
       setLTips(ex.tips||"");
+      setLExtraTime(ex.extraTime||"");
       setLCash(ex.manualCash||"");
       setLCard(ex.manualCard||"");
       setLTotal(ex.manualTotal||"");
-    },[ex.manualFull,ex.manualNight,ex.manualHrs,ex.tips,ex.manualCash,ex.manualCard,ex.manualTotal]);
+    },[ex.manualFull,ex.manualNight,ex.manualHrs,ex.tips,ex.manualCash,ex.manualCard,ex.manualTotal,ex.extraTime]);
     return(
       <div className="paycard">
         <div className="phead">
@@ -1427,6 +1525,7 @@ function ManagerApp({onLogout}){
           <div className="row"><span>💳 Card</span><span className="rowb">£{p.cardAmt}</span></div>
           <div className="row"><span style={{fontWeight:800}}>Salary Total</span><span style={{fontWeight:900,color:"#F5A623",fontSize:15}}>£{p.total}</span></div>
           {!isKitchen&&<div className="row" style={{borderTop:"1px dashed #E5E5E5",marginTop:4,paddingTop:4}}><span>💳 Tips (card) {p.autoTips!=="0.00"&&!ex.tips&&<span style={{fontSize:10,color:"#aaa"}}>(auto from takings)</span>}</span><span className="rowb" style={{color:"#50DC78"}}>£{p.tips}</span></div>}
+          {!isKitchen&&<div className="row"><span>⏱ Extra Time</span><select className="mini" value={lExtraTime} onChange={e=>{setLExtraTime(e.target.value);setExtrasState(sid,ex=>({...ex,extraTime:e.target.value}));}}><option value="">None</option><option value="0.5">0.5 hr</option><option value="1">1 hr</option><option value="1.5">1.5 hr</option><option value="2">2 hr</option></select></div>}
           {/* Manual override — overrides ALL exported values including shifts/hours */}
           <button style={{marginTop:8,background:showOverride?"#FEF3C7":"#F0F0F0",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",width:"100%",color:showOverride?"#78350F":"#555"}} onClick={()=>setShowOverride(v=>!v)}>
             {showOverride?"▲ Hide Override":"✏️ Override Exported Values (shifts, hours, cash, card, total)"}
@@ -1456,9 +1555,9 @@ function ManagerApp({onLogout}){
       setSaving(true);
       if(type==="foh"){
         if(!/^\d{8}$/.test(code)){setSaving(false);return setErr("Code must be 8 digits");}
-        const{error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:"hourly",rate:rate||"0",shift_rate:shiftRate||"0",night_rate:nightRate||"0",card_fixed:cardFixed||"0",card_mode:"fixed"});
+        const{data:newStaff,error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:"hourly",rate:rate||"0",shift_rate:shiftRate||"0",night_rate:nightRate||"0",card_fixed:cardFixed||"0",card_mode:"fixed"}).select().single();
         if(error){setSaving(false);return setErr(error.code==="23505"?"Code already taken":error.message);}
-        setStaff(p=>[...p,{id:code,name:name.trim(),code,payType:"hourly",rate:rate||"0",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardFixed:cardFixed||"0",cardMode:"fixed",tipsPct:"0"}].sort((a,b)=>a.name.localeCompare(b.name)));
+        setStaff(p=>[...p,{...newStaff,payType:"hourly",rate:rate||"0",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardFixed:cardFixed||"0",cardMode:"fixed",tipsPct:"0"}].sort((a,b)=>a.name.localeCompare(b.name)));
         t("✅ "+name.trim()+" (FOH) added");
       }else{
         const{data,error}=await db.from("kitchen_staff").insert({name:name.trim(),cash_card:"cash",pay_type:"hourly",shift_rate:shiftRate||"0",night_rate:nightRate||"0",rate:rate||"0",card_mode:"fixed",card_fixed:cardFixed||"0"}).select().single();
@@ -1506,6 +1605,7 @@ function ManagerApp({onLogout}){
     const[webAppUrl,setWebAppUrl]=useState(gsConfig.webAppUrl||"");
     const[payrollId,setPayrollId]=useState(gsConfig.payrollId||"");
     const[takingsId,setTakingsId]=useState(gsConfig.takingsId||"");
+    const[clockLogId,setClockLogId]=useState(gsConfig.clockLogId||"");
     const[saving,setSaving]=useState(false);
     const[showScript,setShowScript]=useState(false);
     const[testing,setTesting]=useState(false);
@@ -1531,14 +1631,14 @@ function ManagerApp({onLogout}){
 
     async function save(){
       setSaving(true);
-      await saveGsConfig({webAppUrl:urlTrimmed,payrollId:cleanPayrollId,takingsId:cleanTakingsId});
+      await saveGsConfig({webAppUrl:urlTrimmed,payrollId:cleanPayrollId,takingsId:cleanTakingsId,clockLogId:clockLogId.trim()});
       setSaving(false);onClose();
     }
     async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(urlTrimmed);setTestResult(r);setTesting(false);}
     async function testIds(){
       setTesting(true);setTestResult(null);
       const results=[];
-      for(const[label,id] of [["Payroll",cleanPayrollId],["Takings",cleanTakingsId]]){
+      for(const[label,id] of [["Payroll",cleanPayrollId],["Takings",cleanTakingsId],["Clock Log",clockLogId.trim()]]){
         if(!id){results.push(`${label}: no ID entered`);continue;}
         const payload=encodeURIComponent(JSON.stringify({
           spreadsheetId:id,tab:"TestConnection",
@@ -1623,6 +1723,10 @@ function ManagerApp({onLogout}){
           {takingsId&&takingsIdValid&&cleanTakingsId!==takingsId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ Will save ID: <code style={{background:"#F0F0F0",padding:"1px 4px",borderRadius:3}}>{cleanTakingsId}</code></div>}
           {takingsId&&takingsIdValid&&cleanTakingsId===takingsId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ ID looks valid</div>}
           <div style={{fontSize:11,color:"#888",marginBottom:14}}>Paste the full sheet URL or just the ID — we auto-extract it</div>
+
+          <label className="lbl">Clock Log Spreadsheet ID</label>
+          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:4,borderColor:clockLogId?(clockLogId.length>20?"#50DC78":"#E05252"):"#E5E5E5"}} placeholder="Paste the ID or full URL of Ming's clock log sheet" value={clockLogId} onChange={e=>setClockLogId(e.target.value)}/>
+          <div style={{fontSize:11,color:"#888",marginBottom:14}}>The spreadsheet for daily clock log auto-push (Ming's clock log)</div>
 
           {/* Test whether the IDs actually open real spreadsheets */}
           {urlLooksValid&&(cleanPayrollId||cleanTakingsId)&&(
@@ -1850,6 +1954,11 @@ function ManagerApp({onLogout}){
         {tab==="clock"&&(
           <>
             <div className="sec">Clock Logs</div>
+            <div style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:11,padding:"10px 13px",marginBottom:12,fontSize:12,color:"#1E40AF",lineHeight:1.7}}>
+              <strong>For hourly-paid FOH staff:</strong><br/>
+              1) If working overtime, consult the leading staff first. Staff should tap <strong>"Working extra time"</strong> when clocking out.<br/>
+              2) Break time is recorded by staff when clocking out and is automatically deducted from worked hours.
+            </div>
             <div className="wnav">
               <button className="wnavbtn" onClick={()=>setClockDate(addDays(clockDate,-1))} disabled={clockShowAll}>‹</button>
               <div className="wnavlbl">{clockShowAll?"Showing all history":dispDate(clockDate,true)}</div>
@@ -1858,6 +1967,7 @@ function ManagerApp({onLogout}){
             <div style={{display:"flex",gap:6,marginBottom:14,alignItems:"center"}}>
               <input type="date" className="inp sm" style={{flex:1}} value={clockDate} onChange={e=>{setClockDate(e.target.value);setClockShowAll(false);}} disabled={clockShowAll}/>
               <button className="btn sm sec" onClick={()=>{setClockDate(todayISO());setClockShowAll(false);}}>Today</button>
+              {gsConfig.clockLogId&&<button className="btn sm navy" onClick={()=>{pushClockLog(clockDate);t("⏳ Pushing clock log…");}}>📤 Push Clock Log</button>}
               <button className={`btn sm${clockShowAll?" navy":" sec"}`} onClick={()=>setClockShowAll(v=>!v)}>{clockShowAll?"✓ All Dates":"All Dates"}</button>
             </div>
             {staff.map(s=>{
@@ -1895,7 +2005,7 @@ function ManagerApp({onLogout}){
                 const{data}=await db.from("payroll_extras").select("*").eq("week_start",weekRange.start);
                 if(data&&data.length){
                   const em={};
-                  data.forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",id:e.id,ws:e.week_start};});
+                  data.forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",extraTime:e.extra_time||"",id:e.id,ws:e.week_start};});
                   setExtras(em);
                   t("✅ Loaded data for "+data.length+" staff");
                 }else{
