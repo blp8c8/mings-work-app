@@ -246,6 +246,7 @@ body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-col
 .mtabs::-webkit-scrollbar{display:none;}
 .mtab{white-space:nowrap;padding:10px 11px;border:none;background:none;font-size:12px;font-weight:700;color:#bbb;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;}
 .mtab.on{color:#1A2744;border-bottom-color:#F5A623;}
+.mtab.rej{color:#E05252;}
 .mbody{padding:12px 16px 110px;}
 .card{background:#F7F4EF;border-radius:14px;padding:13px 14px;margin-bottom:10px;}
 .card.w{background:#fff;border:1.5px solid #F0F0F0;}
@@ -448,7 +449,17 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     const{data,error}=await db.from("absences").insert({staff_id:user.id,staff_name:user.name,date:absDate,period:absPeriod}).select().single();
     if(!error){setAbsences(p=>[...p,data]);setAbsDate("");setAbsPeriod("");t("📅 Absence sent!");}else t("❌ "+error.message);
   }
-  const absNoticeShort=absDate&&Math.floor((new Date(absDate+"T12:00:00")-new Date(todayISO()+"T12:00:00"))/(1000*60*60*24))<5;
+  // Next Wednesday from today — the rota gets assigned on Wednesday
+  // so any absence before next Wednesday must be called in directly
+  function nextWednesday(){
+    const today=new Date(todayISO()+"T12:00:00");
+    const dow=today.getDay(); // 0=Sun,1=Mon,...,6=Sat
+    const daysUntilWed=((3-dow)+7)%7||7; // days until next Wed (at least 1)
+    const wed=new Date(today);wed.setDate(today.getDate()+daysUntilWed);
+    return wed.toISOString().split("T")[0];
+  }
+  const nextWed=nextWednesday();
+  const absBeforeNextWed=absDate&&absDate<nextWed;
   async function confirmShift(idx){const{data,error}=await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:DAYS_MON[idx]}).select().single();if(!error){setConfirmations(p=>[...p,data]);t("✅ Confirmed!");}else t("❌ "+error.message);}
   async function rejectShift(){const{data,error}=await db.from("rejections").insert({staff_id:user.id,staff_name:user.name,day:DAYS_MON[rejectModal],reason:rejectReason}).select().single();if(!error){setRejections(p=>[...p,data]);setRejectModal(null);t("Rejection sent");}else t("❌ "+error.message);}
   async function submitTakings(){const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(tVals[f.key]||0);if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});const{error}=await db.from("takings").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),...vals,note:tNote,is_new:true,is_corrected:false});if(!error){setTVals({});setTCC({});setTNote("");setSubmitted(true);t("📊 Submitted!");setTab("home");}else t("❌ "+error.message);}
@@ -470,8 +481,12 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
       <Toast msg={msg}/>
       <div className="hdr"><div><div className="hdr-greet">Good {now.getHours()<12?"morning":now.getHours()<18?"afternoon":"evening"},</div><div className="hdr-name">{user.name.split(" ")[0]} 👋</div></div><button style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}} onClick={onLogout}>🚪</button></div>
       {tab==="home"&&<div className="body">{assigned&&!submitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-t">📊 You're today's Takings Person!</div><div className="notif-s">Tap to record today's takings →</div></div>}<div className="clkcard"><div className="clktime">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div><div className="clkdate">{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div><div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:"● Not clocked in"}</div><div className="clkbtns"><button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button><button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button></div>{logs.slice(0,3).length>0&&<div className="clkhist">{logs.slice(0,3).map(l=><div key={l.id} className="clkrow"><span>{dispDate(l.date,true)}</span><span>{l.time_in}→{l.time_out||"active"}</span><span style={{fontWeight:700}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(1)+"h":""}</span></div>)}</div>}</div><div className="sec">This Week</div><RotaList/></div>}
-      {tab==="rota"&&<div className="body"><div className="sec">My Rota</div><div className="wnav"><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button><div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button></div><RotaList/></div>}
-      {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A2744",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={todayISO()} onChange={e=>setAbsDate(e.target.value)}/>{absNoticeShort&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 5 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This absence is too soon to report through the app. Please contact the manager directly as soon as possible to let them know.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod||absNoticeShort}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#F7F4EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</>}</div>}
+      {tab==="rota"&&<div className="body"><div className="sec">My Rota</div>
+        <div style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:11,padding:"10px 13px",marginBottom:12,fontSize:12,color:"#1E40AF",lineHeight:1.7}}>
+          📅 <strong>Check your rota every Wednesday</strong> and accept or reject by <strong>Friday</strong>. For any emergency, contact the manager directly.
+        </div>
+        <div className="wnav"><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button><div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button></div><RotaList/></div>}
+      {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A2744",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={todayISO()} onChange={e=>setAbsDate(e.target.value)}/>{absBeforeNextWed&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Too soon to report online</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is before the next rota is assigned (Wednesday {fmtDate(nextWed)}). Please <strong>call the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod||absBeforeNextWed}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#F7F4EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</>}</div>}
       {tab==="takings"&&<div className="body"><div className="sec">📊 Daily Takings</div>
         {!assigned?<div className="empty"><div className="emptyicon">🔒</div><div className="emptytxt">Not assigned today</div></div>
         :submitted&&!showCorrect?(
@@ -595,7 +610,8 @@ function ManagerApp({onLogout}){
     setTakings(takR.data||[]);setExpenses(expR.data||[]);
     setKitchenStaff((kitR.data||[]).map(k=>({...k,payType:k.pay_type||"hourly",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0",cardMode:k.card_mode||"fixed",cardFixed:k.card_fixed||"0"})));
     setTodayOverride(ovR.data?.staff_id||null);
-    const dd={};(defR.data||[]).forEach(r=>{dd[r.day_of_week]=r.staff_id;});setTakingDefaults(dd);
+    const staffIds=new Set((staffR.data||[]).map(s=>s.id));
+    const dd={};(defR.data||[]).forEach(r=>{if(staffIds.has(r.staff_id))dd[r.day_of_week]=r.staff_id;});setTakingDefaults(dd);
     const em={};
     (extR.data||[]).forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",id:e.id,ws:e.week_start};});
     setExtras(em);
@@ -770,7 +786,13 @@ function ManagerApp({onLogout}){
   async function removeStaff(s){
     if(!window.confirm(`Remove ${s.name}? This cannot be undone.`))return;
     const{error}=await db.from("staff").delete().eq("id",s.id);
-    if(!error){setStaff(p=>p.filter(x=>x.id!==s.id));t(`${s.name} removed`);}else t("❌ "+error.message);
+    if(!error){
+      setStaff(p=>p.filter(x=>x.id!==s.id));
+      // Clean up any takings assignments for removed staff
+      await db.from("takings_defaults").delete().eq("staff_id",s.id);
+      setTakingDefaults(p=>{const n={...p};Object.keys(n).forEach(k=>{if(n[k]===s.id)delete n[k];});return n;});
+      t(`${s.name} removed`);
+    }else t("❌ "+error.message);
   }
 
   // ── Expenses ──
@@ -1025,13 +1047,13 @@ function ManagerApp({onLogout}){
       const cashInHand=(cash-shopExp-otherExpCash+depCash+vpCash).toFixed(2);
       rows.push([
         fmtRangeExport(ws,end),
-        del.toFixed(2),uber.toFixed(2),cash.toFixed(2),card.toFixed(2),online.toFixed(2),
-        shopExp.toFixed(2),
-        depCash.toFixed(2),depCard.toFixed(2),
-        vpCash.toFixed(2),vpCard.toFixed(2),
-        otherExpCash.toFixed(2),otherExpCard.toFixed(2),
-        total,cashInHand,total,
-        tipsCash.toFixed(2),tipsCard.toFixed(2)
+        r2(del),r2(uber),r2(cash),r2(card),r2(online),
+        r2(shopExp),
+        r2(depCash),r2(depCard),
+        r2(vpCash),r2(vpCard),
+        r2(otherExpCash),r2(otherExpCard),
+        r2(income-otherExpCash-otherExpCard),r2(cash-shopExp-otherExpCash+depCash+vpCash),r2(income-otherExpCash-otherExpCard),
+        r2(tipsCash),r2(tipsCard)
       ]);
     });
     return rows;
@@ -1040,15 +1062,20 @@ function ManagerApp({onLogout}){
   async function exportPayroll(){
     if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
 
-    // Flush any in-flight blur-writes: explicitly upsert current extras state to DB
-    // so the allEx fetch below sees the latest data (not stale from last blur).
-    t("⏳ Saving current week data…");
     const ws=weekRange.start;
-    const flushOps=Object.entries(extras).map(([sid,ex])=>{
-      const payload={staff_id:sid,week_start:ws,tips:ex.tips||"0",additions:ex.additions||[],deductions:ex.deductions||[],notes:ex.notes||[],manual_full:ex.manualFull||null,manual_night:ex.manualNight||null,manual_hrs:ex.manualHrs||null,manual_cash:ex.manualCash||null,manual_card:ex.manualCard||null,manual_total:ex.manualTotal||null};
-      return db.from("payroll_extras").upsert(payload,{onConflict:"staff_id,week_start"});
-    });
-    await Promise.all(flushOps);
+    // Flush current extras state to DB before fetching allEx
+    if(Object.keys(extras).length>0){
+      t("⏳ Saving current week data…");
+      try{
+        const flushOps=Object.entries(extras).map(([sid,ex])=>{
+          const payload={staff_id:sid,week_start:ws,tips:ex.tips||"0",additions:ex.additions||[],deductions:ex.deductions||[],notes:ex.notes||[],manual_full:ex.manualFull||null,manual_night:ex.manualNight||null,manual_hrs:ex.manualHrs||null,manual_cash:ex.manualCash||null,manual_card:ex.manualCard||null,manual_total:ex.manualTotal||null};
+          return db.from("payroll_extras").upsert(payload,{onConflict:"staff_id,week_start"});
+        });
+        const results=await Promise.all(flushOps);
+        const errs=results.filter(r=>r.error).map(r=>r.error.message);
+        if(errs.length>0){t("❌ Save error: "+errs[0]);return;}
+      }catch(e){t("❌ Save error: "+e.message);return;}
+    }
 
     // Now fetch ALL payroll_extras from DB — guaranteed to include current week
     const{data:allEx}=await db.from("payroll_extras").select("*");
@@ -1217,8 +1244,7 @@ function ManagerApp({onLogout}){
     });
     // Rebuild full daily with merged expenses and push
     const allDates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
-    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Other Expenses Cash (£)","Other Expenses Card (£)","Total","Cash in Hand","Net Total","Other Expense Notes"];
-    const allRows=[hdr,...allDates.map(d=>buildDailyForDate(d)[0])];
+    const allRows=buildDaily(); // uses correct 19-column header including Tips Cash, Tips Card
     t(`⏳ Merging expenses into Daily tab…`);
     const r=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",allRows);
     if(!r.ok){t("❌ "+r.err);return;}
@@ -1611,8 +1637,8 @@ function ManagerApp({onLogout}){
       </div>
 
       <div className="mtabs">
-        {[{id:"staff",label:"👥 Staff"},{id:"rota",label:"📋 Rota"},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:`📊 Takings${newCount>0?` (${newCount})`:""}`},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:"📅 Absences"}]
-          .map(tb=><button key={tb.id} className={`mtab${tab===tb.id?" on":""}`} onClick={()=>setTab(tb.id)}>{tb.label}</button>)}
+        {[{id:"staff",label:"👥 Staff"},{id:"rota",label:`📋 Rota${rejections.length>0?` (${rejections.length})`:""}`},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:`📊 Takings${newCount>0?` (${newCount})`:""}`},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:"📅 Absences"}]
+          .map(tb=><button key={tb.id} className={`mtab${tab===tb.id?" on":""}${tb.id==="rota"&&rejections.length>0?" rej":""}`} onClick={()=>setTab(tb.id)}>{tb.label}</button>)}
       </div>
 
       <div className="mbody">
