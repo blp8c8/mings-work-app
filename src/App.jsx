@@ -705,13 +705,10 @@ function ManagerApp({onLogout}){
   }
 
   function calcPay(s){
-    const myRota=rota[s.id]||[];const logsInRange=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=weekRange.start&&l.date<=weekRange.end);
     const ex=getExtras(s.id);
-    let full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):myRota.filter(sh=>sh?.type==="Full Day (11am–close)").length;
-    let night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):myRota.filter(sh=>sh?.type==="Night (5:30pm–close)").length;
-    const dailyRaw={};
-    logsInRange.forEach(l=>{dailyRaw[l.date]=(dailyRaw[l.date]||0)+parseHrs(l.time_in,l.time_out);});
-    let hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):Object.values(dailyRaw).reduce((a,dayHrs)=>a+roundHrsUp(dayHrs),0);
+    const full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):0;
+    const night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):0;
+    const hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):0;
     // Auto-calculate tips from takings total tips * staff tipsPct — only if ex.tips is blank
     const weekTakings=takings.filter(tk=>tk.date>=weekRange.start&&tk.date<=weekRange.end);
     const weekTipsCash=weekTakings.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0),0);
@@ -735,10 +732,9 @@ function ManagerApp({onLogout}){
 
   function calcKitchenPay(k){
     const sid=kId(k.id);const ex=getExtras(sid);
-    const kh=kitchenHours[k.id]||{hours:""};
-    let hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):parseFloat(kh.hours||0);
-    let full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):0;
-    let night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):0;
+    const hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):0;
+    const full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):0;
+    const night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):0;
     const tips=parseFloat(ex.tips||0);
     const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
@@ -1375,15 +1371,15 @@ function ManagerApp({onLogout}){
           <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
             <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>EDIT COUNTS <span style={{fontWeight:400}}>(blank = auto from rota/clock)</span></div>
             <div style={{display:"flex",gap:8}}>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>{setLFull(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualFull:e.target.value}))}/></div>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Night Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lNight} onChange={e=>{setLNight(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualNight:e.target.value}))}/></div>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder="0" value={lHrs} onChange={e=>{setLHrs(e.target.value);setCountsEdited(true);}} onBlur={e=>updateExtras(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>{setLFull(e.target.value);setCountsEdited(true);}}/></div>
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Night Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lNight} onChange={e=>{setLNight(e.target.value);setCountsEdited(true);}}/></div>
+              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder="0" value={lHrs} onChange={e=>{setLHrs(e.target.value);setCountsEdited(true);}}/></div>
             </div>
           </div>
           <div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{(parseFloat(p.hrs||0)*parseFloat(rate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
-          <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,tips:e.target.value}))}/></div>
+          <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)}/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#50DC78",marginBottom:4}}>ADDITIONS</div><AddDeductRow sid={sid} type="add"/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#E05252",marginBottom:4}}>DEDUCTIONS</div><AddDeductRow sid={sid} type="ded"/></div>
           {/* Notes */}
@@ -1434,11 +1430,11 @@ function ManagerApp({onLogout}){
           {showOverride&&<div className="override-box">
             <div style={{fontSize:11,color:"#78350F",marginBottom:8,fontWeight:700}}>These values replace everything in the spreadsheet export. Leave blank to use calculated values.</div>
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {payType==="shift"&&<><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>FULL SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>setLFull(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualFull:e.target.value}))}/></div><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>NIGHT SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lNight} onChange={e=>setLNight(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualNight:e.target.value}))}/></div></>}
-              {payType==="hourly"&&<div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>HOURS</div><input type="number" min="0" step="0.25" className="inp sm" style={{width:"100%"}} placeholder="0" value={lHrs} onChange={e=>setLHrs(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>}
-              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CASH £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCash} onChange={e=>setLCash(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualCash:e.target.value}))}/></div>
-              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CARD £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCard} onChange={e=>setLCard(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualCard:e.target.value}))}/></div>
-              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>TOTAL £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lTotal} onChange={e=>setLTotal(e.target.value)} onBlur={e=>updateExtras(sid,ex=>({...ex,manualTotal:e.target.value}))}/></div>
+              {payType==="shift"&&<><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>FULL SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>setLFull(e.target.value)}/></div><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>NIGHT SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lNight} onChange={e=>setLNight(e.target.value)}/></div></>}
+              {payType==="hourly"&&<div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>HOURS</div><input type="number" min="0" step="0.25" className="inp sm" style={{width:"100%"}} placeholder="0" value={lHrs} onChange={e=>setLHrs(e.target.value)}/></div>}
+              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CASH £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCash} onChange={e=>setLCash(e.target.value)}/></div>
+              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CARD £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCard} onChange={e=>setLCard(e.target.value)}/></div>
+              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>TOTAL £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lTotal} onChange={e=>setLTotal(e.target.value)}/></div>
             </div>
             <button className="btn danger" style={{marginTop:8,padding:"8px"}} onClick={()=>{updateExtras(sid,ex=>({...ex,manualCash:"",manualCard:"",manualTotal:"",manualFull:"",manualNight:"",manualHrs:""}));setLCash("");setLCard("");setLTotal("");setLFull("");setLNight("");setLHrs("");}}>Clear All Overrides</button>
           </div>}
@@ -1797,8 +1793,8 @@ function ManagerApp({onLogout}){
               if(dayIdx>=0){
                 const jsDay=dayIdx===6?0:dayIdx+1;
                 const rotaEntry=(rota[r.staff_id]||[]).find(d=>d.jsDay===jsDay);
-                if(rotaEntry){
-                  await db.from("rota").update({type:"Off"}).eq("id",rotaEntry.id);
+                if(rotaEntry&&rotaEntry.rowId){
+                  await db.from("rota").update({shift_type:"Off"}).eq("id",rotaEntry.rowId);
                   setRota(p=>({...p,[r.staff_id]:(p[r.staff_id]||[]).map(d=>d.jsDay===jsDay?{...d,type:"Off"}:d)}));
                 }
               }
