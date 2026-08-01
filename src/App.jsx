@@ -135,7 +135,46 @@ const TKFIELDS = [
   { key:"tipsCard",         label:"Tips Card 💳",          db:"tips_card",         sign: 0, infoOnly:true, hint:"Card tips received — informational only, does not affect totals" },
 ];
 
-// ─── Helpers ─────────────────────────────────────────────────────────
+// ── Bank holidays & special restaurant days 2026/2027 ──
+const BANK_HOLIDAYS=[
+  "2026-01-01","2026-04-03","2026-04-06","2026-05-04","2026-05-25","2026-08-31","2026-12-25","2026-12-28",
+  "2027-01-01","2027-03-26","2027-03-29","2027-05-03","2027-05-31","2027-08-30","2027-12-27","2027-12-28"
+];
+const SPECIAL_DAYS=[
+  {date:"2026-02-14",label:"Valentine's Day 💝",type:"special"},
+  {date:"2026-03-15",label:"Mother's Day 💐",type:"special"},
+  {date:"2026-06-21",label:"Father's Day 👔",type:"special"},
+  {date:"2026-10-31",label:"Halloween 🎃",type:"special"},
+  {date:"2026-11-05",label:"Bonfire Night 🎆",type:"special"},
+  {date:"2026-12-24",label:"Christmas Eve 🎄",type:"special"},
+  {date:"2026-12-25",label:"Christmas Day 🎅",type:"bh"},
+  {date:"2026-12-26",label:"Boxing Day 🎁",type:"special"},
+  {date:"2026-12-31",label:"New Year's Eve 🥂",type:"special"},
+  {date:"2027-01-01",label:"New Year's Day 🎉",type:"bh"},
+  {date:"2027-02-14",label:"Valentine's Day 💝",type:"special"},
+  {date:"2027-03-14",label:"Mother's Day 💐",type:"special"},
+  {date:"2027-06-20",label:"Father's Day 👔",type:"special"},
+  {date:"2027-10-31",label:"Halloween 🎃",type:"special"},
+  {date:"2027-11-05",label:"Bonfire Night 🎆",type:"special"},
+  {date:"2027-12-24",label:"Christmas Eve 🎄",type:"special"},
+  {date:"2027-12-26",label:"Boxing Day 🎁",type:"special"},
+  {date:"2027-12-31",label:"New Year's Eve 🥂",type:"special"},
+];
+function getWeekAlerts(startISO){
+  const end=addDays(startISO,6);
+  const alerts=[];
+  BANK_HOLIDAYS.forEach(d=>{if(d>=startISO&&d<=end)alerts.push({date:d,label:`Bank Holiday: ${new Date(d+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}`,type:"bh"});});
+  SPECIAL_DAYS.forEach(s=>{if(s.date>=startISO&&s.date<=end)alerts.push(s);});
+  return alerts;
+}
+// Snap any date to the nearest preceding Sunday
+function snapToSunday(isoDate){
+  const d=new Date(isoDate+"T12:00:00");
+  const dow=d.getDay(); // 0=Sun
+  if(dow===0)return isoDate;
+  d.setDate(d.getDate()-dow);
+  return d.toISOString().split("T")[0];
+}
 const todayISO  = () => new Date().toISOString().split("T")[0];
 const nowTime   = () => new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
 const fmtDate   = iso => { if(!iso)return""; const[y,m,d]=iso.split("-"); return`${d}/${m}/${y}`; };
@@ -169,122 +208,122 @@ function rotaWeekOf(iso) {
 const CSS=`
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;}
-body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-color:transparent;overscroll-behavior:none;}
+body{font-family:'Inter',sans-serif;background:#FFF5EF;-webkit-tap-highlight-color:transparent;overscroll-behavior:none;}
 .app{max-width:430px;margin:0 auto;min-height:100vh;background:#fff;position:relative;overflow-x:hidden;}
-.role-screen{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;background:linear-gradient(160deg,#1A2744,#2C3E6B);}
+.role-screen{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;background:linear-gradient(160deg,#1A1A2E,#3D2010);}
 .role-logo{font-size:52px;margin-bottom:12px;}.role-title{font-size:28px;font-weight:900;color:#fff;text-align:center;margin-bottom:6px;}
 .role-sub{font-size:14px;color:rgba(255,255,255,.55);margin-bottom:36px;text-align:center;}
 .role-btn{width:100%;padding:20px;border-radius:18px;border:none;cursor:pointer;margin-bottom:12px;display:flex;align-items:center;gap:14px;transition:transform .1s;}
-.role-btn:active{transform:scale(.97);}.role-btn.staff{background:#F5A623;color:#1A2744;}.role-btn.manager{background:#fff;color:#1A2744;}
+.role-btn:active{transform:scale(.97);}.role-btn.staff{background:#E8620A;color:#fff;}.role-btn.manager{background:#fff;color:#1A1A2E;}
 .ri{font-size:30px;}.rl{font-size:17px;font-weight:800;display:block;}.rd{font-size:12px;font-weight:500;opacity:.6;display:block;}
 .auth{min-height:100vh;padding:48px 24px 32px;display:flex;flex-direction:column;}
-.back{background:none;border:none;font-size:26px;cursor:pointer;align-self:flex-start;margin-bottom:20px;color:#1A2744;}
-.atitle{font-size:25px;font-weight:900;color:#1A2744;margin-bottom:6px;}
+.back{background:none;border:none;font-size:26px;cursor:pointer;align-self:flex-start;margin-bottom:20px;color:#1A1A2E;}
+.atitle{font-size:25px;font-weight:900;color:#1A1A2E;margin-bottom:6px;}
 .asub{font-size:14px;color:#888;margin-bottom:24px;line-height:1.6;}
-.lbl{font-size:12px;font-weight:700;color:#888;margin-bottom:5px;display:block;text-transform:uppercase;letter-spacing:.5px;}
-.inp{width:100%;padding:14px;border:2px solid #E5E5E5;border-radius:12px;font-size:15px;font-family:inherit;margin-bottom:14px;outline:none;transition:border-color .2s;background:#fff;}
-.inp:focus{border-color:#F5A623;}.inp.code{font-size:26px;letter-spacing:8px;font-weight:800;text-align:center;color:#1A2744;}
+.lbl{font-size:13px;font-weight:700;color:#888;margin-bottom:5px;display:block;text-transform:uppercase;letter-spacing:.5px;}
+.inp{width:100%;padding:14px;border:2px solid #E5E5E5;border-radius:12px;font-size:16px;font-family:inherit;margin-bottom:14px;outline:none;transition:border-color .2s;background:#fff;}
+.inp:focus{border-color:#E8620A;}.inp.code{font-size:26px;letter-spacing:8px;font-weight:800;text-align:center;color:#1A1A2E;}
 .inp.sm{padding:9px 11px;font-size:13px;margin-bottom:0;border-radius:9px;}
 .inp.time{padding:8px 9px;font-size:12px;margin-bottom:0;flex:1;border-radius:8px;}
-.btn{width:100%;padding:16px;background:#F5A623;border:none;border-radius:14px;font-size:15px;font-weight:800;color:#1A2744;cursor:pointer;margin-top:8px;transition:transform .1s;display:block;text-align:center;}
+.btn{width:100%;padding:16px;background:#E8620A;border:none;border-radius:14px;font-size:16px;font-weight:800;color:#1A1A2E;cursor:pointer;margin-top:8px;transition:transform .1s;display:block;text-align:center;}
 .btn:active{transform:scale(.98);}.btn:disabled{opacity:.4;cursor:not-allowed;}
-.btn.sec{background:#F0F0F0;color:#1A2744;margin-top:10px;}.btn.danger{background:#E05252;color:#fff;}
-.btn.green{background:#50DC78;color:#1A2744;}.btn.navy{background:#1A2744;color:#fff;}
+.btn.sec{background:#F0F0F0;color:#1A1A2E;margin-top:10px;}.btn.danger{background:#E05252;color:#fff;}
+.btn.green{background:#50DC78;color:#1A1A2E;}.btn.navy{background:#1A1A2E;color:#fff;}
 .btn.sm{padding:9px 14px;font-size:12px;width:auto;margin-top:0;border-radius:9px;}
 .err{color:#E05252;font-weight:700;font-size:13px;margin-bottom:10px;}
 .slist{display:flex;flex-direction:column;gap:10px;margin-bottom:18px;}
-.sitem{padding:14px 16px;background:#F7F4EF;border-radius:12px;display:flex;align-items:center;gap:12px;cursor:pointer;border:2px solid transparent;}
+.sitem{padding:14px 16px;background:#FFF5EF;border-radius:12px;display:flex;align-items:center;gap:12px;cursor:pointer;border:2px solid transparent;}
 .sitem:hover{border-color:#ddd;}
-.avatar{width:42px;height:42px;border-radius:21px;background:#1A2744;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;flex-shrink:0;}
+.avatar{width:42px;height:42px;border-radius:21px;background:#E8620A;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;flex-shrink:0;}
 .hdr{padding:18px 18px 8px;display:flex;align-items:center;justify-content:space-between;}
-.hdr-name{font-size:19px;font-weight:900;color:#1A2744;}.hdr-greet{font-size:12px;color:#aaa;font-weight:500;}
+.hdr-name{font-size:20px;font-weight:900;color:#1A1A2E;}.hdr-greet{font-size:12px;color:#aaa;font-weight:500;}
 .body{padding:0 16px 110px;}
-.sec{font-size:16px;font-weight:800;color:#1A2744;margin:16px 0 10px;}
-.ssub{font-size:12px;color:#aaa;margin-top:-6px;margin-bottom:10px;}
+.sec{font-size:17px;font-weight:800;color:#1A1A2E;margin:16px 0 10px;}
+.ssub{font-size:13px;color:#aaa;margin-top:-6px;margin-bottom:10px;}
 .bnav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;background:#fff;border-top:1px solid #F0F0F0;display:flex;padding:8px 0 env(safe-area-inset-bottom,18px);z-index:100;}
 .nbtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;border:none;background:none;cursor:pointer;padding:4px;position:relative;}
-.ni{font-size:20px;}.nl{font-size:10px;font-weight:700;color:#bbb;text-transform:uppercase;letter-spacing:.3px;}.nbtn.on .nl{color:#F5A623;}
+.ni{font-size:20px;}.nl{font-size:10px;font-weight:700;color:#bbb;text-transform:uppercase;letter-spacing:.3px;}.nbtn.on .nl{color:#E8620A;}
 .nbadge{position:absolute;top:0;right:calc(50% - 18px);background:#E05252;color:#fff;border-radius:10px;font-size:10px;font-weight:800;padding:1px 5px;min-width:16px;text-align:center;}
-.clkcard{background:linear-gradient(135deg,#1A2744,#2C3E6B);border-radius:20px;padding:20px;margin-bottom:14px;color:#fff;}
+.clkcard{background:linear-gradient(135deg,#1A1A2E,#2D1F0E);border-radius:20px;padding:20px;margin-bottom:14px;color:#fff;}
 .clktime{font-size:40px;font-weight:900;letter-spacing:-1px;}.clkdate{font-size:12px;color:rgba(255,255,255,.5);margin-bottom:12px;}
 .clkst{display:inline-block;padding:3px 11px;border-radius:20px;font-size:11px;font-weight:700;margin-bottom:14px;}
 .clkst.in{background:rgba(80,220,120,.2);color:#50DC78;}.clkst.out{background:rgba(255,255,255,.1);color:rgba(255,255,255,.4);}
 .clkbtns{display:flex;gap:8px;}
 .clkbtn{flex:1;padding:13px;border-radius:11px;border:none;font-size:13px;font-weight:800;cursor:pointer;}
-.clkbtn.in{background:#50DC78;color:#1A2744;}.clkbtn.out{background:#E05252;color:#fff;}.clkbtn:disabled{opacity:.3;cursor:not-allowed;}
+.clkbtn.in{background:#50DC78;color:#1A1A2E;}.clkbtn.out{background:#E05252;color:#fff;}.clkbtn:disabled{opacity:.3;cursor:not-allowed;}
 .clkhist{margin-top:12px;}
 .clkrow{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.08);font-size:11px;color:rgba(255,255,255,.65);}
 .clkrow:last-child{border:none;}
-.rday{background:#F7F4EF;border-radius:13px;padding:11px 13px;margin-bottom:7px;display:flex;align-items:center;gap:8px;}
-.rday.today{background:#FFF8EC;border:2px solid #F5A623;}.rday.off{opacity:.4;}
-.rdaylbl{min-width:60px;}.rdayname{font-size:12px;font-weight:800;color:#1A2744;}
-.rdaydate{font-size:10px;color:#aaa;}.rdayflag{font-size:9px;font-weight:700;color:#F5A623;}
-.rdayshift{flex:1;font-size:13px;font-weight:700;color:#1A2744;}
+.rday{background:#FFF5EF;border-radius:13px;padding:11px 13px;margin-bottom:7px;display:flex;align-items:center;gap:8px;}
+.rday.today{background:#FFF8EC;border:2px solid #E8620A;}.rday.off{opacity:.4;}
+.rdaylbl{min-width:60px;}.rdayname{font-size:12px;font-weight:800;color:#1A1A2E;}
+.rdaydate{font-size:10px;color:#aaa;}.rdayflag{font-size:9px;font-weight:700;color:#E8620A;}
+.rdayshift{flex:1;font-size:13px;font-weight:700;color:#1A1A2E;}
 .rdaybtns{display:flex;gap:5px;}
 .okbtn{border:none;background:#D1FAE5;color:#065F46;border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;}
 .nobtn{border:none;background:#FEE2E2;color:#E05252;border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;}
-.abscard{background:#FFF8EC;border:2px solid #F5A623;border-radius:16px;padding:16px;margin-bottom:14px;}
+.abscard{background:#FFF8EC;border:2px solid #E8620A;border-radius:16px;padding:16px;margin-bottom:14px;}
 .peribtns{display:flex;gap:6px;margin-bottom:12px;}
-.pbtn{flex:1;padding:10px 4px;border:2px solid #E5E5E5;border-radius:10px;background:#fff;font-size:12px;font-weight:700;color:#1A2744;cursor:pointer;text-align:center;}
-.pbtn.sel{border-color:#F5A623;background:#FFF8EC;}
-.toast{position:fixed;top:24px;left:50%;transform:translateX(-50%);background:#1A2744;color:#fff;padding:10px 18px;border-radius:40px;font-size:13px;font-weight:700;z-index:999;white-space:nowrap;animation:fio 2.8s forwards;pointer-events:none;}
+.pbtn{flex:1;padding:10px 4px;border:2px solid #E5E5E5;border-radius:10px;background:#fff;font-size:12px;font-weight:700;color:#1A1A2E;cursor:pointer;text-align:center;}
+.pbtn.sel{border-color:#E8620A;background:#FFF8EC;}
+.toast{position:fixed;top:24px;left:50%;transform:translateX(-50%);background:#E8620A;color:#fff;padding:10px 18px;border-radius:40px;font-size:13px;font-weight:700;z-index:999;white-space:nowrap;animation:fio 2.8s forwards;pointer-events:none;}
 @keyframes fio{0%{opacity:0;top:10px}12%{opacity:1;top:24px}80%{opacity:1}100%{opacity:0}}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;z-index:200;}
 .sheet{background:#fff;border-radius:24px 24px 0 0;padding:24px 20px 44px;width:100%;max-width:430px;max-height:90vh;overflow-y:auto;}
-.stitle{font-size:19px;font-weight:900;color:#1A2744;margin-bottom:4px;}
+.stitle{font-size:19px;font-weight:900;color:#1A1A2E;margin-bottom:4px;}
 .ssub2{font-size:13px;color:#888;margin-bottom:14px;}
 .toggle{display:flex;border:2px solid #E5E5E5;border-radius:10px;overflow:hidden;width:fit-content;}
 .tgl{padding:6px 13px;border:none;background:#fff;font-size:12px;font-weight:700;cursor:pointer;color:#888;}
-.tgl.on{background:#1A2744;color:#fff;}
+.tgl.on{background:#E8620A;color:#fff;}
 .day-tog{padding:5px 8px;border:1.5px solid #E5E5E5;border-radius:7px;background:#fff;font-size:11px;font-weight:700;cursor:pointer;color:#888;}
-.day-tog.on{background:#F5A623;border-color:#F5A623;color:#1A2744;}
+.day-tog.on{background:#E8620A;border-color:#E8620A;color:#1A1A2E;}
 .day-tog:disabled{opacity:.35;cursor:not-allowed;}
-.mhdr{background:linear-gradient(135deg,#1A2744,#0F1D3A);padding:22px 16px 14px;display:flex;justify-content:space-between;align-items:flex-start;}
+.mhdr{background:linear-gradient(135deg,#1A1A2E,#0F0F1A);padding:22px 16px 14px;display:flex;justify-content:space-between;align-items:flex-start;}
 .mtitle{font-size:20px;font-weight:900;color:#fff;}.msub{font-size:11px;color:rgba(255,255,255,.4);}
 .mlo{background:rgba(255,255,255,.12);border:none;color:#fff;border-radius:8px;padding:5px 10px;cursor:pointer;font-size:12px;font-weight:600;}
 .mtabs{display:flex;overflow-x:auto;gap:2px;padding:0 12px;border-bottom:2px solid #F0F0F0;scrollbar-width:none;}
 .mtabs::-webkit-scrollbar{display:none;}
 .mtab{white-space:nowrap;padding:10px 11px;border:none;background:none;font-size:12px;font-weight:700;color:#bbb;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;}
-.mtab.on{color:#1A2744;border-bottom-color:#F5A623;}
+.mtab.on{color:#E8620A;border-bottom-color:#E8620A;}
 .mtab.rej{color:#E05252;}
 .mbody{padding:12px 16px 110px;}
-.card{background:#F7F4EF;border-radius:14px;padding:13px 14px;margin-bottom:10px;}
+.card{background:#FFF5EF;border-radius:14px;padding:13px 14px;margin-bottom:10px;}
 .card.w{background:#fff;border:1.5px solid #F0F0F0;}
 .chead{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;}
-.cname{font-size:14px;font-weight:800;color:#1A2744;}.csub{font-size:11px;color:#888;margin-top:2px;}
+.cname{font-size:15px;font-weight:800;color:#1A1A2E;}.csub{font-size:11px;color:#888;margin-top:2px;}
 .chip{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;}
 .chip.g{background:#D1FAE5;color:#065F46;}.chip.r{background:#FEE2E2;color:#7F1D1D;}.chip.a{background:#FEF3C7;color:#78350F;}
-.row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed #F0F0F0;font-size:13px;color:#555;}
-.row:last-child{border:none;}.rowb{font-weight:800;color:#1A2744;}
+.row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed #F0F0F0;font-size:14px;color:#555;}
+.row:last-child{border:none;}.rowb{font-weight:800;color:#1A1A2E;}
 .paycard{background:#fff;border:2px solid #F0F0F0;border-radius:14px;margin-bottom:10px;overflow:hidden;}
-.phead{background:#F7F4EF;padding:11px 14px;display:flex;justify-content:space-between;align-items:center;}
-.pname{font-size:14px;font-weight:800;color:#1A2744;}.ptotal{font-size:18px;font-weight:900;color:#F5A623;}
+.phead{background:#FFF5EF;padding:11px 14px;display:flex;justify-content:space-between;align-items:center;}
+.pname{font-size:14px;font-weight:800;color:#1A1A2E;}.ptotal{font-size:18px;font-weight:900;color:#E8620A;}
 .pbody{padding:11px 14px;}
 .mini{width:72px;padding:5px 7px;border:1.5px solid #ddd;border-radius:6px;font-size:13px;text-align:right;font-family:inherit;outline:none;}
-.mini:focus{border-color:#F5A623;}
+.mini:focus{border-color:#E8620A;}
 .addrow{display:flex;gap:5px;align-items:center;margin-top:6px;}
 .addinp{flex:1;padding:7px 9px;border:1.5px solid #E5E5E5;border-radius:8px;font-size:12px;font-family:inherit;outline:none;}
-.addinp:focus{border-color:#F5A623;}
-.addbtn{padding:7px 11px;background:#F5A623;border:none;border-radius:7px;font-size:11px;font-weight:800;color:#1A2744;cursor:pointer;}
+.addinp:focus{border-color:#E8620A;}
+.addbtn{padding:7px 11px;background:#E8620A;border:none;border-radius:7px;font-size:11px;font-weight:800;color:#1A1A2E;cursor:pointer;}
 .addbtn.r{background:#FEE2E2;color:#7F1D1D;}
-.psum{background:linear-gradient(135deg,#1A2744,#2C3E6B);border-radius:16px;padding:16px;margin-top:14px;color:#fff;}
+.psum{background:linear-gradient(135deg,#1A1A2E,#2D1F0E);border-radius:16px;padding:16px;margin-top:14px;color:#fff;}
 .psumtitle{font-size:12px;font-weight:700;color:rgba(255,255,255,.5);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px;}
 .psumrow{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.1);font-size:14px;color:rgba(255,255,255,.8);}
-.psumrow:last-child{border:none;}.psumamt{font-weight:900;color:#F5A623;}
-.expsec{background:#F7F4EF;border-radius:14px;padding:13px;margin-top:12px;}
-.exptitle{font-size:13px;font-weight:800;color:#1A2744;margin-bottom:9px;}
+.psumrow:last-child{border:none;}.psumamt{font-weight:900;color:#E8620A;}
+.expsec{background:#FFF5EF;border-radius:14px;padding:13px;margin-top:12px;}
+.exptitle{font-size:13px;font-weight:800;color:#1A1A2E;margin-bottom:9px;}
 .expbtn{width:100%;padding:13px;border:none;border-radius:11px;font-size:13px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;margin-bottom:7px;}
-.expbtn:last-child{margin-bottom:0;}.expbtn.p{background:#1A2744;color:#fff;}.expbtn.s{background:#E8F0E9;color:#1A2744;}
+.expbtn:last-child{margin-bottom:0;}.expbtn.p{background:#1A1A2E;color:#fff;}.expbtn.s{background:#E8F0E9;color:#1A1A2E;}
 .tfield{margin-bottom:9px;}
 .tlbl{font-size:12px;font-weight:700;color:#555;margin-bottom:3px;display:flex;justify-content:space-between;align-items:center;}
 .thint{font-size:10px;color:#aaa;margin-top:2px;font-style:italic;}
 .tmsg{background:#D1FAE5;border:1.5px solid #50DC78;border-radius:13px;padding:12px 14px;margin-bottom:10px;}
 .tmsg-h{font-size:13px;font-weight:800;color:#065F46;margin-bottom:3px;}
 .tmsg-d{font-size:12px;color:#047857;}
-.tmsg.new{background:#FFF8EC;border-color:#F5A623;}
+.tmsg.new{background:#FFF8EC;border-color:#E8620A;}
 .tmsg.new .tmsg-h{color:#78350F;}.tmsg.new .tmsg-d{color:#92400E;}
-.notif{background:linear-gradient(135deg,#F5A623,#E8940A);border-radius:14px;padding:14px;margin-bottom:14px;cursor:pointer;}
-.notif-t{font-size:14px;font-weight:900;color:#1A2744;margin-bottom:3px;}
+.notif{background:linear-gradient(135deg,#E8620A,#E8940A);border-radius:14px;padding:14px;margin-bottom:14px;cursor:pointer;}
+.notif-t{font-size:14px;font-weight:900;color:#1A1A2E;margin-bottom:3px;}
 .notif-s{font-size:12px;color:rgba(26,39,68,.7);}
 .warn{background:#FEE2E2;border:2px solid #E05252;border-radius:13px;padding:12px 14px;margin-bottom:12px;}
 .warn-t{font-size:13px;font-weight:800;color:#7F1D1D;margin-bottom:3px;}.warn-s{font-size:12px;color:#991B1B;}
@@ -292,22 +331,22 @@ body{font-family:'Inter',sans-serif;background:#F7F4EF;-webkit-tap-highlight-col
 .logentry{padding:9px 0;border-bottom:1px dashed #E5E5E5;}.logentry:last-child{border:none;}
 .logtop{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;}
 .lognote{width:100%;padding:7px 9px;border:1.5px solid #E5E5E5;border-radius:8px;font-size:12px;font-family:inherit;outline:none;margin-top:4px;background:#fff;resize:none;}
-.lognote:focus{border-color:#F5A623;}
+.lognote:focus{border-color:#E8620A;}
 .logedit{display:flex;gap:5px;align-items:center;margin-bottom:5px;}
 .logelbl{font-size:10px;font-weight:700;color:#aaa;min-width:24px;}
-.wnav{display:flex;align-items:center;gap:8px;background:#FFF8EC;border:1.5px solid #F5A623;border-radius:12px;padding:10px 14px;margin-bottom:12px;}
+.wnav{display:flex;align-items:center;gap:8px;background:#FFF8EC;border:1.5px solid #E8620A;border-radius:12px;padding:10px 14px;margin-bottom:12px;}
 .wnavbtn{background:#fff;border:1.5px solid #E5E5E5;border-radius:8px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px;flex-shrink:0;}
 .wnavlbl{flex:1;text-align:center;font-size:12px;font-weight:700;color:#92400E;line-height:1.4;}
 .divider{height:1px;background:#F0F0F0;margin:10px 0;}
 .empty{text-align:center;padding:36px 20px;color:#ccc;}
 .emptyicon{font-size:42px;margin-bottom:8px;}.emptytxt{font-size:14px;font-weight:600;}
-.loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#F7F4EF;gap:16px;}
-.spinner{width:40px;height:40px;border:4px solid #E5E5E5;border-top-color:#F5A623;border-radius:50%;animation:spin .8s linear infinite;}
+.loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;background:#FFF5EF;gap:16px;}
+.spinner{width:40px;height:40px;border:4px solid #E5E5E5;border-top-color:#E8620A;border-radius:50%;animation:spin .8s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg)}}.loadtxt{font-size:14px;font-weight:600;color:#888;}
 .cashrow{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #F0F0F0;font-size:15px;}
-.cashrow:last-child{border:none;}.cashname{font-weight:700;color:#1A2744;}.cashamt{font-weight:900;color:#065F46;font-size:16px;}
-.gs-banner{background:#FFF8EC;border:1.5px solid #F5A623;border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:13px;color:#78350F;}
-.override-box{background:#FFF3CD;border:1.5px solid #F5A623;border-radius:10px;padding:10px 12px;margin-top:8px;}
+.cashrow:last-child{border:none;}.cashname{font-weight:700;color:#1A1A2E;}.cashamt{font-weight:900;color:#065F46;font-size:16px;}
+.gs-banner{background:#FFF8EC;border:1.5px solid #E8620A;border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:13px;color:#78350F;}
+.override-box{background:#FFF3CD;border:1.5px solid #E8620A;border-radius:10px;padding:10px 12px;margin-top:8px;}
 .pending-badge{background:#E05252;color:#fff;border-radius:10px;font-size:10px;font-weight:800;padding:1px 7px;margin-left:6px;}
 `;
 
@@ -357,7 +396,7 @@ function StaffLogin({staff,onLogin,onBack,onRegister}){
         {staff.map(s=>(
           <div key={s.id} className="sitem" onClick={()=>{setSel(s);setStep("code");setCode("");setErr("");}}>
             <div className="avatar">{s.name[0]}</div>
-            <div><div style={{fontSize:15,fontWeight:700,color:"#1A2744"}}>{s.name}</div><div style={{fontSize:11,color:"#aaa"}}>Tap to sign in</div></div>
+            <div><div style={{fontSize:15,fontWeight:700,color:"#1A1A2E"}}>{s.name}</div><div style={{fontSize:11,color:"#aaa"}}>Tap to sign in</div></div>
           </div>
         ))}
       </div>
@@ -402,7 +441,8 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[tab,setTab]=useState("home");const[msg,setMsg]=useState("");
   const[clockedIn,setClockedIn]=useState(false);const[clockInTime,setClockInTime]=useState(null);
   const[breakTime,setBreakTime]=useState("0");
-  const[lateModal,setLateModal]=useState(false); // shows when staff clocks out late
+  const[lateModal,setLateModal]=useState(false);
+  const[staffClockWeek,setStaffClockWeek]=useState(()=>snapToSunday(todayISO()));
   const[logs,setLogs]=useState([]);const[rota,setRota]=useState([]);
   const[absences,setAbsences]=useState([]);const[rejections,setRejections]=useState([]);
   const[confirmations,setConfirmations]=useState([]);
@@ -507,29 +547,109 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
 
   function RotaList(){return rota.map((sh,idx)=>{const isToday=sh.date===todayISO();const dayName=DAYS_MON[idx];const rejected=rejections.some(r=>r.day===dayName);const confirmed=confirmations.some(r=>r.day===dayName);const isOff=sh.type==="Off";return(<div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}`}><div className="rdaylbl"><div className="rdayname">{dayName}</div><div className="rdaydate">{dispDate(sh.date)}</div>{isToday&&<div className="rdayflag">TODAY</div>}</div><div className="rdayshift">{shiftLabel(sh)}</div>{!isOff&&!rejected&&!confirmed&&<div className="rdaybtns"><button className="okbtn" onClick={()=>confirmShift(idx)}>✓ OK</button><button className="nobtn" onClick={()=>{setRejectModal(idx);setRejectReason("");}}>✕ Can't</button></div>}{confirmed&&<span className="chip g">✓ OK</span>}{rejected&&!isOff&&<span className="chip r">Rejected</span>}</div>);});}
 
-  const navItems=[{id:"home",icon:"🏠",label:"Home"},{id:"rota",icon:"📋",label:"Rota"},{id:"absence",icon:"📅",label:"Absence"},...(assigned?[{id:"takings",icon:"📊",label:"Takings",badge:!submitted}]:[])];
+  const navItems=[{id:"home",icon:"🏠",label:"Home"},{id:"clock",icon:"⏰",label:"Clock"},{id:"rota",icon:"📋",label:"Rota"},{id:"absence",icon:"📅",label:"Absence"},...(assigned?[{id:"takings",icon:"📊",label:"Takings",badge:!submitted}]:[])];
   return(
     <div className="app">
       <Toast msg={msg}/>
       <div className="hdr"><div><div className="hdr-greet">Good {now.getHours()<12?"morning":now.getHours()<18?"afternoon":"evening"},</div><div className="hdr-name">{user.name.split(" ")[0]} 👋</div></div><button style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}} onClick={onLogout}>🚪</button></div>
-      {tab==="home"&&<div className="body">{assigned&&!submitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-t">📊 You're today's Takings Person!</div><div className="notif-s">Tap to record today's takings →</div></div>}<div className="clkcard"><div className="clktime">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div><div className="clkdate">{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div><div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:"● Not clocked in"}</div>
-        {clockedIn&&parseFloat(user.shiftRate||0)===0&&parseFloat(user.rate||0)>0&&(
-          <div style={{margin:"10px 0 0"}}>
-            <div style={{fontSize:12,color:"#888",marginBottom:4}}>Break time (hours)</div>
-            <div style={{display:"flex",gap:6,alignItems:"center"}}>
-              {[0,0.5,1,1.5,2,2.5,3].map(v=><button key={v} className={`tgl${parseFloat(breakTime)===v?" on":""}`} style={{padding:"6px 10px",fontSize:11}} onClick={()=>setBreakTime(String(v))}>{v===0?"None":v+"hr"}</button>)}
+      {tab==="home"&&<div className="body">
+        {/* Welcome message banner */}
+        {user.welcomeMsg&&<div style={{background:"linear-gradient(135deg,#E8620A,#FF8C42)",borderRadius:14,padding:"14px 16px",marginBottom:14,color:"#fff"}}>
+          <div style={{fontSize:13,fontWeight:800,marginBottom:3}}>👋 Message from the Manager</div>
+          <div style={{fontSize:14,lineHeight:1.6}}>{user.welcomeMsg}</div>
+        </div>}
+        {assigned&&!submitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-t">📊 You're today's Takings Person!</div><div className="notif-s">Tap to record today's takings →</div></div>}
+        {/* Forgot to clock in banner */}
+        {!clockedIn&&(()=>{
+          const todayRota=rota.find(sh=>sh.date===todayISO());
+          if(!todayRota||todayRota.type==="Off")return null;
+          const now=new Date();
+          const nowMins=now.getHours()*60+now.getMinutes();
+          let startMins=null;
+          if(todayRota.type==="Full Day (11am–close)")startMins=11*60;
+          else if(todayRota.type==="Night (5:30pm–close)")startMins=17*60+30;
+          else if(todayRota.type==="Custom"&&todayRota.customIn){const[h,m]=todayRota.customIn.split(":").map(Number);startMins=h*60+m;}
+          if(startMins===null||nowMins<startMins+10)return null;
+          return(<div style={{background:"#FFF5EF",border:"2px solid #E8620A",borderRadius:13,padding:"13px 15px",marginBottom:12}}>
+            <div style={{fontSize:14,fontWeight:800,color:"#E8620A",marginBottom:6}}>⏰ Did you forget to clock in?</div>
+            <div style={{fontSize:13,color:"#555",marginBottom:10}}>You're scheduled to work today but haven't clocked in yet.</div>
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn sm" style={{flex:1,background:"#E8620A",color:"#fff"}} onClick={clockIn}>Clock in now</button>
+              <button className="btn sm sec" style={{flex:1}} onClick={async()=>{
+                let startTime="";
+                if(todayRota.type==="Full Day (11am–close)")startTime="11:00";
+                else if(todayRota.type==="Night (5:30pm–close)")startTime="17:30";
+                else if(todayRota.customIn)startTime=todayRota.customIn;
+                if(!startTime)return clockIn();
+                const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:startTime,note:"back-stamped"}).select().single();
+                if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(startTime);t("✅ Back-stamped to "+startTime);}
+                else t("❌ "+error.message);
+              }}>Back-stamp to {todayRota.type==="Full Day (11am–close)"?"11:00":todayRota.type==="Night (5:30pm–close)"?"17:30":todayRota.customIn||"start"}</button>
             </div>
+          </div>);
+        })()}
+        <div className="sec">This Week</div><RotaList/>
+      </div>}
+
+      {tab==="clock"&&<div className="body">
+        <div className="sec">Clock In / Out</div>
+        {/* Info banner for hourly staff */}
+        {parseFloat(user.shiftRate||0)===0&&parseFloat(user.rate||0)>0&&(
+          <div style={{background:"#FFF5EF",border:"1.5px solid #E8620A",borderRadius:11,padding:"10px 13px",marginBottom:12,fontSize:13,color:"#E8620A",lineHeight:1.7}}>
+            <strong>Hourly-paid staff:</strong> Select your break time before clocking out. If finishing early or staying late, you'll be asked why.
           </div>
         )}
-        <div className="clkbtns"><button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button><button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button></div>{logs.slice(0,3).length>0&&<div className="clkhist">{logs.slice(0,3).map(l=><div key={l.id} className="clkrow"><span>{dispDate(l.date,true)}</span><span>{l.time_in}→{l.time_out||"active"}</span><span style={{fontWeight:700}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(1)+"h":""}</span></div>)}</div>}</div><div className="sec">This Week</div><RotaList/>
-      {lateModal&&<div className="overlay"><div className="sheet"><div className="stitle">⏰ Late Clock-Out</div><div className="ssub2">You're clocking out later than your scheduled end time. Which applies?</div><button className="btn" onClick={()=>doClockOut("forgot")}>🕐 I forgot to clock out earlier</button><button className="btn sec" onClick={()=>doClockOut("overtime")}>⏱ I was working extra time</button><button className="btn sec" onClick={()=>setLateModal(false)}>Cancel</button></div></div>}
+        {/* Clock card */}
+        <div className="clkcard">
+          <div className="clktime">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div>
+          <div className="clkdate">{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div>
+          <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:"● Not clocked in"}</div>
+          {clockedIn&&parseFloat(user.shiftRate||0)===0&&parseFloat(user.rate||0)>0&&(
+            <div style={{margin:"10px 0 0"}}>
+              <div style={{fontSize:13,color:"rgba(255,255,255,.7)",marginBottom:6}}>Break time</div>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                {[0,0.5,1,1.5,2,2.5,3].map(v=><button key={v} className={`tgl${parseFloat(breakTime)===v?" on":""}`} style={{padding:"6px 10px",fontSize:12,background:parseFloat(breakTime)===v?"#E8620A":"rgba(255,255,255,.15)",color:"#fff",border:"none",borderRadius:7}} onClick={()=>setBreakTime(String(v))}>{v===0?"None":v+"hr"}</button>)}
+              </div>
+            </div>
+          )}
+          <div className="clkbtns" style={{marginTop:14}}>
+            <button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button>
+            <button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button>
+          </div>
+        </div>
+        {/* 7-day log */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <div className="sec" style={{margin:0}}>Weekly Log</div>
+          <div style={{display:"flex",gap:6}}>
+            <button className="btn sm sec" style={{padding:"5px 10px"}} onClick={()=>setStaffClockWeek(addDays(staffClockWeek,-7))}>‹</button>
+            <span style={{fontSize:12,color:"#888",alignSelf:"center"}}>{fmtDate(staffClockWeek)}–{fmtDate(addDays(staffClockWeek,6))}</span>
+            <button className="btn sm sec" style={{padding:"5px 10px"}} onClick={()=>setStaffClockWeek(addDays(staffClockWeek,7))}>›</button>
+          </div>
+        </div>
+        {weekDates(staffClockWeek).map(dateISO=>{
+          const dayLogs=logs.filter(l=>l.date===dateISO);
+          const totalHrs=dayLogs.reduce((a,l)=>a+parseHrs(l.time_in,l.time_out),0);
+          const breakHrs=dayLogs.reduce((a,l)=>a+parseFloat(l.break_time||0),0);
+          const netHrs=Math.max(0,totalHrs-breakHrs);
+          const jsDay=new Date(dateISO+"T12:00:00").getDay();
+          const dayName=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][jsDay];
+          return(<div key={dateISO} style={{background:dateISO===todayISO()?"#FFF5EF":"#F8F8F8",border:dateISO===todayISO()?"2px solid #E8620A":"1.5px solid #F0F0F0",borderRadius:11,padding:"10px 13px",marginBottom:6,display:"flex",alignItems:"center",gap:10}}>
+            <div style={{minWidth:36,fontSize:13,fontWeight:800,color:dateISO===todayISO()?"#E8620A":"#1A1A2E"}}>{dayName}</div>
+            <div style={{fontSize:12,color:"#aaa",minWidth:56}}>{fmtDate(dateISO).slice(0,5)}</div>
+            {dayLogs.length>0
+              ?<div style={{flex:1,fontSize:13}}>{dayLogs[0].time_in}→{dayLogs[0].time_out||"active"}{netHrs>0&&<span style={{fontWeight:800,color:"#E8620A",marginLeft:8}}>{netHrs.toFixed(1)}h</span>}{breakHrs>0&&<span style={{fontSize:11,color:"#aaa",marginLeft:4}}>(-{breakHrs}hr break)</span>}</div>
+              :<div style={{flex:1,fontSize:12,color:"#ccc"}}>—</div>
+            }
+          </div>);
+        })}
+        {lateModal&&<div className="overlay"><div className="sheet"><div className="stitle">⏰ Late Clock-Out</div><div className="ssub2">You're clocking out later than your scheduled end time. Which applies?</div><button className="btn" onClick={()=>doClockOut("forgot")}>🕐 I forgot to clock out earlier</button><button className="btn sec" onClick={()=>doClockOut("overtime")}>⏱ I was working extra time</button><button className="btn sec" onClick={()=>setLateModal(false)}>Cancel</button></div></div>}
       </div>}
       {tab==="rota"&&<div className="body"><div className="sec">My Rota</div>
         <div style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:11,padding:"10px 13px",marginBottom:12,fontSize:12,color:"#1E40AF",lineHeight:1.7}}>
           📅 <strong>Check your rota every Wednesday</strong> and accept or reject by <strong>Friday</strong>. For any emergency, contact the manager directly.
         </div>
         <div className="wnav"><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button><div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button></div><RotaList/></div>}
-      {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A2744",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={todayISO()} onChange={e=>setAbsDate(e.target.value)}/>{absBeforeNextWed&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Too soon to report online</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is before the next rota is assigned (Wednesday {fmtDate(nextWed)}). Please <strong>call the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod||absBeforeNextWed}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#F7F4EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</>}</div>}
+      {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={todayISO()} onChange={e=>setAbsDate(e.target.value)}/>{absBeforeNextWed&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Too soon to report online</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is before the next rota is assigned (Wednesday {fmtDate(nextWed)}). Please <strong>call the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod||absBeforeNextWed}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</>}</div>}
       {tab==="takings"&&<div className="body"><div className="sec">📊 Daily Takings</div>
         {!assigned?<div className="empty"><div className="emptyicon">🔒</div><div className="emptytxt">Not assigned today</div></div>
         :submitted&&!showCorrect?(
@@ -549,7 +669,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
             }
           </div>
         ):(
-          <>{submitted&&showCorrect&&<div style={{background:"#FFF8EC",border:"1.5px solid #F5A623",borderRadius:11,padding:"10px 13px",marginBottom:12}}><div style={{fontSize:12,fontWeight:800,color:"#92400E"}}>✏️ Correcting today's submission — this is your one chance to fix a mistake.</div></div>}
+          <>{submitted&&showCorrect&&<div style={{background:"#FFF8EC",border:"1.5px solid #E8620A",borderRadius:11,padding:"10px 13px",marginBottom:12}}><div style={{fontSize:12,fontWeight:800,color:"#92400E"}}>✏️ Correcting today's submission — this is your one chance to fix a mistake.</div></div>}
           <div style={{fontSize:12,color:"#888",marginBottom:14}}>For {dispDate(todayISO(),true)}. <strong>Enter all amounts as positive numbers.</strong></div>
           {TKFIELDS.filter(f=>!f.managerOnly).map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(tCC[f.key]||"cash")===c?" on":""}`} onClick={()=>setTCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:4}} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" onKeyDown={e=>{if(["e","E","+","-"].includes(e.key))e.preventDefault();}} value={tVals[f.key]||""} onChange={e=>setTVals(p=>({...p,[f.key]:e.target.value}))}/></div>)}
           <label className="lbl" style={{marginTop:10}}>Note (optional)</label><textarea className="lognote" rows={3} style={{marginBottom:12}} placeholder="Any notes…" value={tNote} onChange={e=>setTNote(e.target.value)}/>
@@ -605,7 +725,7 @@ function ManagerApp({onLogout}){
   const[rotaRecipient,setRotaRecipient]=useState("");
   const[newKName,setNewKName]=useState("");
   const[absStaff,setAbsStaff]=useState("");const[absDate,setAbsDate]=useState("");const[absPeriod,setAbsPeriod]=useState("");
-  const[gsConfig,setGsConfig]=useState({webAppUrl:"",payrollId:"",takingsId:"",clockLogId:""});
+  const[gsConfig,setGsConfig]=useState({webAppUrl:"",payrollId:"",takingsId:"",clockLogId:"",welcomeMsg:""});
   // Add FOH staff from manager
   const[addStaffModal,setAddStaffModal]=useState(false);
   const[clockDate,setClockDate]=useState(()=>todayISO());
@@ -647,7 +767,7 @@ function ManagerApp({onLogout}){
       db.from("takings_defaults").select("*"),
       db.from("takings_assignment").select("staff_id").eq("date",todayISO()).maybeSingle(),
       db.from("payroll_extras").select("*"),
-      db.from("app_settings").select("key,value").in("key",["gs_webapp_url","gs_payroll_id","gs_takings_id","gs_clocklog_id","manager_pin"]),
+      db.from("app_settings").select("key,value").in("key",["gs_webapp_url","gs_payroll_id","gs_takings_id","gs_clocklog_id","manager_pin","welcome_message"]),
     ]);
     setStaff((staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardMode:s.card_mode||"fixed",tipsPct:s.tips_pct||"0"})));
     setAbsences(absR.data||[]);setClockLogs(logR.data||[]);setRejections(rejR.data||[]);
@@ -660,7 +780,7 @@ function ManagerApp({onLogout}){
     (extR.data||[]).forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",extraTime:e.extra_time||"",id:e.id,ws:e.week_start};});
     setExtras(em);
     const gsRows=gsR.data||[];
-    setGsConfig({webAppUrl:gsRows.find(r=>r.key==="gs_webapp_url")?.value||"",payrollId:gsRows.find(r=>r.key==="gs_payroll_id")?.value||"",takingsId:gsRows.find(r=>r.key==="gs_takings_id")?.value||"",clockLogId:gsRows.find(r=>r.key==="gs_clocklog_id")?.value||""});
+    setGsConfig({webAppUrl:gsRows.find(r=>r.key==="gs_webapp_url")?.value||"",payrollId:gsRows.find(r=>r.key==="gs_payroll_id")?.value||"",takingsId:gsRows.find(r=>r.key==="gs_takings_id")?.value||"",clockLogId:gsRows.find(r=>r.key==="gs_clocklog_id")?.value||"",welcomeMsg:gsRows.find(r=>r.key==="welcome_message")?.value||""});
     setLoading(false);
   }
 
@@ -680,7 +800,7 @@ function ManagerApp({onLogout}){
 
   async function saveGsConfig(cfg){
     setGsConfig(cfg);
-    for(const[key,value]of[["gs_webapp_url",cfg.webAppUrl],["gs_payroll_id",cfg.payrollId],["gs_takings_id",cfg.takingsId],["gs_clocklog_id",cfg.clockLogId||""]]){
+    for(const[key,value]of[["gs_webapp_url",cfg.webAppUrl],["gs_payroll_id",cfg.payrollId],["gs_takings_id",cfg.takingsId],["gs_clocklog_id",cfg.clockLogId||""],["welcome_message",cfg.welcomeMsg||""]]){
       await db.from("app_settings").upsert({key,value});
     }
     t("✅ Google Sheets config saved!");
@@ -1470,7 +1590,7 @@ function ManagerApp({onLogout}){
         </div>
         <div className="pbody">
           {/* Edit Counts — show only what's relevant for this staff member's pay type */}
-          <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+          <div style={{background:"#FFF5EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
             <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>EDIT COUNTS <span style={{fontWeight:400}}>(blank = auto from rota/clock)</span></div>
             <div style={{display:"flex",gap:8}}>
               <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>{setLFull(e.target.value);setCountsEdited(true);}} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualFull:e.target.value}))}/></div>
@@ -1502,7 +1622,7 @@ function ManagerApp({onLogout}){
               <button className="btn danger" style={{marginTop:0,padding:"7px"}} onClick={()=>{const el=document.getElementById(isKitchen?`cf-pk-${kitchenId}`:`cf-ps-${staffId}`);el?.focus();el?.scrollIntoView({behavior:"smooth",block:"center"});}}>Edit Fixed Amount</button>
             </div>
           )}
-          <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+          <div style={{background:"#FFF5EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
             <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>CARD PAYMENT</div>
             <div className="toggle" style={{marginBottom:cardMode==="fixed"?10:0,width:"100%"}}>
               <button className={`tgl${cardMode==="fixed"?" on":""}`} style={{flex:1}} onClick={async()=>{if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardMode:"fixed"}:x));await db.from("kitchen_staff").update({card_mode:"fixed"}).eq("id",kitchenId);}else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"fixed"}:x));await db.from("staff").update({card_mode:"fixed"}).eq("id",staffId);}}}>Fixed £</button>
@@ -1523,7 +1643,7 @@ function ManagerApp({onLogout}){
           </div>
           <div className="row"><span>💵 Cash</span><span className="rowb">£{p.cashAmt}</span></div>
           <div className="row"><span>💳 Card</span><span className="rowb">£{p.cardAmt}</span></div>
-          <div className="row"><span style={{fontWeight:800}}>Salary Total</span><span style={{fontWeight:900,color:"#F5A623",fontSize:15}}>£{p.total}</span></div>
+          <div className="row"><span style={{fontWeight:800}}>Salary Total</span><span style={{fontWeight:900,color:"#E8620A",fontSize:15}}>£{p.total}</span></div>
           {!isKitchen&&<div className="row" style={{borderTop:"1px dashed #E5E5E5",marginTop:4,paddingTop:4}}><span>💳 Tips (card) {p.autoTips!=="0.00"&&!ex.tips&&<span style={{fontSize:10,color:"#aaa"}}>(auto from takings)</span>}</span><span className="rowb" style={{color:"#50DC78"}}>£{p.tips}</span></div>}
           {!isKitchen&&<div className="row"><span>⏱ Extra Time</span><select className="mini" value={lExtraTime} onChange={e=>{setLExtraTime(e.target.value);setExtrasState(sid,ex=>({...ex,extraTime:e.target.value}));}}><option value="">None</option><option value="0.5">0.5 hr</option><option value="1">1 hr</option><option value="1.5">1.5 hr</option><option value="2">2 hr</option></select></div>}
           {/* Manual override — overrides ALL exported values including shifts/hours */}
@@ -1606,6 +1726,7 @@ function ManagerApp({onLogout}){
     const[payrollId,setPayrollId]=useState(gsConfig.payrollId||"");
     const[takingsId,setTakingsId]=useState(gsConfig.takingsId||"");
     const[clockLogId,setClockLogId]=useState(gsConfig.clockLogId||"");
+    const[welcomeMsg,setWelcomeMsg]=useState(gsConfig.welcomeMsg||"");
     const[saving,setSaving]=useState(false);
     const[showScript,setShowScript]=useState(false);
     const[testing,setTesting]=useState(false);
@@ -1631,7 +1752,7 @@ function ManagerApp({onLogout}){
 
     async function save(){
       setSaving(true);
-      await saveGsConfig({webAppUrl:urlTrimmed,payrollId:cleanPayrollId,takingsId:cleanTakingsId,clockLogId:clockLogId.trim()});
+      await saveGsConfig({webAppUrl:urlTrimmed,payrollId:cleanPayrollId,takingsId:cleanTakingsId,clockLogId:clockLogId.trim(),welcomeMsg:welcomeMsg.trim()});
       setSaving(false);onClose();
     }
     async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(urlTrimmed);setTestResult(r);setTesting(false);}
@@ -1669,7 +1790,7 @@ function ManagerApp({onLogout}){
 
           <button className="btn sec" style={{marginTop:0,marginBottom:14}} onClick={()=>setShowScript(v=>!v)}>{showScript?"▲ Hide setup steps":"▼ Show 3-minute setup steps"}</button>
           {showScript&&(
-            <div style={{background:"#F7F4EF",borderRadius:10,padding:"12px 13px",fontSize:12,color:"#444",marginBottom:14,lineHeight:1.8}}>
+            <div style={{background:"#FFF5EF",borderRadius:10,padding:"12px 13px",fontSize:12,color:"#444",marginBottom:14,lineHeight:1.8}}>
               <strong>Step 1</strong> — Go to <strong>script.google.com</strong> → click <strong>New project</strong><br/>
               <strong>Step 2</strong> — Delete everything in the editor, paste in this code:
               <textarea readOnly className="lognote" rows={12} style={{fontFamily:"monospace",fontSize:10,marginTop:6,marginBottom:6,background:"#fff"}} value={scriptCode} onClick={e=>e.target.select()}/>
@@ -1738,6 +1859,10 @@ function ManagerApp({onLogout}){
             </div>
           )}
 
+          <label className="lbl">Welcome Message for Staff</label>
+          <textarea className="lognote" rows={3} style={{marginBottom:14,fontSize:14}} placeholder="e.g. Welcome back! Remember: Friday is early close at 10pm." value={welcomeMsg} onChange={e=>setWelcomeMsg(e.target.value)}/>
+          <div style={{fontSize:11,color:"#888",marginBottom:14}}>This message shows to all staff when they log in. Leave blank to show nothing.</div>
+
           <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Save & Connect"}</button>
           <button className="btn sec" onClick={onClose}>Cancel</button>
         </div>
@@ -1755,14 +1880,14 @@ function ManagerApp({onLogout}){
       <div className="mhdr">
         <div><div className="mtitle">🔑 Manager Panel</div><div className="msub">Restaurant back office</div></div>
         <div style={{display:"flex",gap:7,alignItems:"center"}}>
-          <button onClick={()=>setSettingsModal(true)} style={{background:"rgba(255,255,255,.12)",border:"none",color:gsReady?"#50DC78":"#F5A623",borderRadius:7,padding:"5px 9px",cursor:"pointer",fontSize:12}}>⚙️ Sheets</button>
+          <button onClick={()=>setSettingsModal(true)} style={{background:"rgba(255,255,255,.12)",border:"none",color:gsReady?"#50DC78":"#E8620A",borderRadius:7,padding:"5px 9px",cursor:"pointer",fontSize:12}}>⚙️ Sheets</button>
           <button onClick={()=>setPinModal(true)} style={{background:"rgba(255,255,255,.12)",border:"none",color:"rgba(255,255,255,.7)",borderRadius:7,padding:"5px 9px",cursor:"pointer",fontSize:12}}>🔒 PIN</button>
           <button className="mlo" onClick={onLogout}>Sign out</button>
         </div>
       </div>
 
       <div className="mtabs">
-        {[{id:"staff",label:"👥 Staff"},{id:"rota",label:`📋 Rota${rejections.length>0?` (${rejections.length})`:""}`},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:`📊 Takings${newCount>0?` (${newCount})`:""}`},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:"📅 Absences"}]
+        {[{id:"staff",label:"👥 Staff"},{id:"rota",label:`📋 Rota${rejections.length>0?` (${rejections.length})`:""}`},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:`📊 Takings${newCount>0?` (${newCount})`:""}`},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:"📅 Absences"},{id:"kpi",label:"📈 KPI"}]
           .map(tb=><button key={tb.id} className={`mtab${tab===tb.id?" on":""}${tb.id==="rota"&&rejections.length>0?" rej":""}`} onClick={()=>setTab(tb.id)}>{tb.label}</button>)}
       </div>
 
@@ -1782,10 +1907,10 @@ function ManagerApp({onLogout}){
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                     <div style={{display:"flex",gap:10,alignItems:"center"}}>
                       <div className="avatar" style={{width:38,height:38,fontSize:15}}>{s.name[0]}</div>
-                      <div><div style={{fontSize:15,fontWeight:800,color:"#1A2744"}}>{s.name}</div><div style={{fontSize:11,color:"#aaa"}}>Code: {s.code}</div></div>
+                      <div><div style={{fontSize:15,fontWeight:800,color:"#1A1A2E"}}>{s.name}</div><div style={{fontSize:11,color:"#aaa"}}>Code: {s.code}</div></div>
                     </div>
                   </div>
-                  <div style={{background:"#F7F4EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+                  <div style={{background:"#FFF5EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
                     <div style={{fontSize:11,color:"#888"}}>
                       {(s.cardMode||"fixed")==="cash"?"💵 Always paid in cash":s.cardMode==="card"?"💳 Always paid by card":`💳 Card fixed: £${s.cardFixed||"0"} · 💵 Rest is cash`}
                     </div>
@@ -1854,7 +1979,7 @@ function ManagerApp({onLogout}){
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                   <div style={{display:"flex",gap:10,alignItems:"center"}}>
                     <div className="avatar" style={{width:38,height:38,fontSize:15,background:"#065F46"}}>👨‍🍳</div>
-                    <div style={{fontSize:15,fontWeight:800,color:"#1A2744"}}>{k.name}</div>
+                    <div style={{fontSize:15,fontWeight:800,color:"#1A1A2E"}}>{k.name}</div>
                   </div>
                   <button onClick={()=>delKitchen(k.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ddd"}}>🗑️</button>
                 </div>
@@ -1877,8 +2002,8 @@ function ManagerApp({onLogout}){
                 )}
               </div>
             ))}
-            <div style={{background:"#F7F4EF",borderRadius:12,padding:"12px 14px",fontSize:12,color:"#888",lineHeight:1.6,marginTop:8}}>
-              <strong style={{color:"#1A2744"}}>Self-registration:</strong> Staff can also register themselves via the Staff login screen.
+            <div style={{background:"#FFF5EF",borderRadius:12,padding:"12px 14px",fontSize:12,color:"#888",lineHeight:1.6,marginTop:8}}>
+              <strong style={{color:"#1A1A2E"}}>Self-registration:</strong> Staff can also register themselves via the Staff login screen.
             </div>
           </>
         )}
@@ -1887,6 +2012,7 @@ function ManagerApp({onLogout}){
         {tab==="rota"&&(
           <>
             <div className="sec">Assign Rota</div>
+            {getWeekAlerts(rotaMon).map((a,i)=><div key={i} style={{background:a.type==="bh"?"#FEF3C7":"#EFF6FF",border:`1.5px solid ${a.type==="bh"?"#F59E0B":"#BFDBFE"}`,borderRadius:10,padding:"8px 12px",marginBottom:8,fontSize:13,color:a.type==="bh"?"#78350F":"#1E40AF"}}>{a.type==="bh"?"⚠️ Bank Holiday:":"📅"} {a.label}</div>)}
             <div className="wnav">
               <button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button>
               <div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div>
@@ -1930,14 +2056,14 @@ function ManagerApp({onLogout}){
 
             {/* ── Push Full Rota ── */}
             {staff.length>0&&(
-              <div className="card" style={{marginTop:10,background:"#1A2744",borderRadius:16}}>
+              <div className="card" style={{marginTop:10,background:"#1A1A2E",borderRadius:16}}>
                 <div style={{fontSize:14,fontWeight:800,color:"#fff",marginBottom:4}}>📋 Push Full Week Rota</div>
                 <div style={{fontSize:12,color:"rgba(255,255,255,.55)",marginBottom:12}}>Select the lead staff member who receives the full rota, then copy to clipboard to send via WhatsApp or message.</div>
                 <select className="inp sm" style={{display:"block",width:"100%",marginBottom:10,background:"rgba(255,255,255,.1)",border:"1.5px solid rgba(255,255,255,.2)",color:"#fff"}} value={rotaRecipient} onChange={e=>setRotaRecipient(e.target.value)}>
                   <option value="" style={{color:"#000"}}>— Select recipient —</option>
                   {staff.map(s=><option key={s.id} value={s.id} style={{color:"#000"}}>{s.name}</option>)}
                 </select>
-                <button className="btn" style={{background:"#F5A623",color:"#1A2744",marginTop:0}} disabled={!rotaRecipient} onClick={()=>{
+                <button className="btn" style={{background:"#E8620A",color:"#1A1A2E",marginTop:0}} disabled={!rotaRecipient} onClick={()=>{
                   const text=buildFullRotaText(rotaRecipient);
                   navigator.clipboard.writeText(text)
                     .then(()=>t(`📋 Full rota copied for ${staff.find(s=>s.id===rotaRecipient)?.name?.split(" ")[0]}! Paste into WhatsApp or message.`))
@@ -1980,12 +2106,12 @@ function ManagerApp({onLogout}){
                 {sLogs.length===0&&<div style={{fontSize:12,color:"#ccc",fontStyle:"italic"}}>No records {clockShowAll?"yet":"for this date"}</div>}
                 {sLogs.map(l=>(
                   <div key={l.id} className="logentry">
-                    <div className="logtop"><span style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{dispDate(l.date,true)}</span><span style={{fontSize:13,fontWeight:800,color:l.time_out?"#1A2744":"#50DC78"}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(2)+"h":"active"}</span></div>
+                    <div className="logtop"><span style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(l.date,true)}</span><span style={{fontSize:13,fontWeight:800,color:l.time_out?"#1A1A2E":"#50DC78"}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(2)+"h":"active"}</span></div>
                     <div className="logedit"><span className="logelbl">In</span><input type="time" className="inp time" value={l.time_in||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v}:x));db.from("clock_logs").update({time_in:v}).eq("id",l.id);}}/><span className="logelbl">Out</span><input type="time" className="inp time" value={l.time_out||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v}:x));db.from("clock_logs").update({time_out:v}).eq("id",l.id);}}/></div>
                     <textarea className="lognote" rows={2} placeholder="Note…" value={l.note||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:v}:x));db.from("clock_logs").update({note:v}).eq("id",l.id);}}/>
                   </div>
                 ))}
-                <button className="btn sm" style={{marginTop:9,background:"#F5A623"}} onClick={async()=>{const dateForEntry=clockShowAll?todayISO():clockDate;const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:""}).select().single();if(!error)setClockLogs(p=>[data,...p]);else t("❌ "+error.message);}}>+ Add Entry {clockShowAll?"":`for ${dispDate(clockDate)}`}</button>
+                <button className="btn sm" style={{marginTop:9,background:"#E8620A"}} onClick={async()=>{const dateForEntry=clockShowAll?todayISO():clockDate;const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:""}).select().single();if(!error)setClockLogs(p=>[data,...p]);else t("❌ "+error.message);}}>+ Add Entry {clockShowAll?"":`for ${dispDate(clockDate)}`}</button>
               </div>
             );})}
           </>
@@ -1997,7 +2123,7 @@ function ManagerApp({onLogout}){
             <div className="sec">Payroll</div>
             <div className="ssub">Private — staff never see salaries</div>
             <div style={{display:"flex",gap:6,marginBottom:6,alignItems:"center"}}>
-              <input type="date" className="inp sm" style={{flex:1}} value={weekRange.start} onChange={e=>{const s=e.target.value;setWeekRange({start:s,end:addDays(s,6)});}}/>
+              <input type="date" className="inp sm" style={{flex:1}} value={weekRange.start} onChange={e=>{const s=snapToSunday(e.target.value);setWeekRange({start:s,end:addDays(s,6)});}}/>
               <span style={{fontSize:12,color:"#aaa"}}>→</span>
               <input type="date" className="inp sm" style={{flex:1}} value={weekRange.end} onChange={e=>setWeekRange(p=>({...p,end:e.target.value}))}/>
               <button className="btn sm navy" onClick={async()=>{
@@ -2014,10 +2140,11 @@ function ManagerApp({onLogout}){
                 }
               }}>Load</button>
             </div>
-            <div style={{fontSize:11,color:"#888",marginBottom:12}}>Pick the week start (Sunday), tap Load to fill cards, make edits, then Push.</div>
-            <div style={{fontSize:13,fontWeight:800,color:"#1A2744",marginBottom:8}}>Front of House</div>
+            <div style={{fontSize:11,color:"#888",marginBottom:8}}>Pick the week start (Sunday), tap Load to fill cards, make edits, then Push.</div>
+            {getWeekAlerts(weekRange.start).map((a,i)=><div key={i} style={{background:a.type==="bh"?"#FEF3C7":"#EFF6FF",border:`1.5px solid ${a.type==="bh"?"#F59E0B":"#BFDBFE"}`,borderRadius:10,padding:"8px 12px",marginBottom:8,fontSize:13,color:a.type==="bh"?"#78350F":"#1E40AF"}}>{a.type==="bh"?"⚠️":"📅"} {a.label}</div>)}
+            <div style={{fontSize:13,fontWeight:800,color:"#1A1A2E",marginBottom:8}}>Front of House</div>
             {staff.map(s=><PayrollCard key={s.id+'-'+clearKey} name={s.name} icon="👤" sid={s.id} payType={s.payType} rate={s.rate} shiftRate={s.shiftRate} nightRate={s.nightRate} calcFn={()=>calcPay(s)} isKitchen={false} cardMode={s.cardMode||"fixed"} cardFixed={s.cardFixed} staffId={s.id}/>)}
-            <div style={{fontSize:13,fontWeight:800,color:"#1A2744",margin:"14px 0 8px"}}>Kitchen Staff</div>
+            <div style={{fontSize:13,fontWeight:800,color:"#1A1A2E",margin:"14px 0 8px"}}>Kitchen Staff</div>
             <div style={{display:"flex",gap:6,marginBottom:10}}>
               <input className="inp sm" style={{flex:1}} placeholder="Add kitchen staff name…" value={newKName} onChange={e=>setNewKName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addKitchen()}/>
               <button className="btn sm navy" onClick={addKitchen}>Add</button>
@@ -2043,7 +2170,7 @@ function ManagerApp({onLogout}){
               <button className="expbtn s" onClick={()=>copyTSV(buildPayrollWeekly(),t)}>📋 Copy Weekly Summary</button>
               <button className="expbtn s" onClick={()=>setCashPopup(true)}>💵 View Cash Payments</button>
               <div style={{borderTop:"1px dashed #E5E5E5",marginTop:10,paddingTop:10}}>
-                <div style={{fontSize:12,fontWeight:700,color:"#1A2744",marginBottom:6}}>📅 Monthly Payroll</div>
+                <div style={{fontSize:12,fontWeight:700,color:"#1A1A2E",marginBottom:6}}>📅 Monthly Payroll</div>
                 <div style={{fontSize:11,color:"#888",marginBottom:8}}>Selects all weeks whose Saturday (pay-end date) falls within this month.</div>
                 <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
                   <input type="month" className="inp sm" style={{flex:1}} value={payrollMonth} onChange={e=>setPayrollMonth(e.target.value)}/>
@@ -2078,7 +2205,7 @@ function ManagerApp({onLogout}){
             <div className="sec">Absences</div>
             <button className="btn navy" style={{marginBottom:14}} onClick={()=>{setAbsModal(true);setAbsStaff("");setAbsDate("");setAbsPeriod("");}}>+ Log Absence for Staff</button>
             {absences.length===0?<div className="empty"><div className="emptyicon">📅</div><div className="emptytxt">No absences reported</div></div>
-              :absences.map(a=><div key={a.id} style={{background:"#FFF8EC",border:"1.5px solid #F5A623",borderRadius:12,padding:"10px 13px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:800,color:"#1A2744",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#888",marginTop:2}}>{dispDate(a.date,true)} — {a.period}</div></div><button onClick={async()=>{await db.from("absences").delete().eq("id",a.id);setAbsences(p=>p.filter(x=>x.id!==a.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ccc"}}>🗑️</button></div>)}
+              :absences.map(a=><div key={a.id} style={{background:"#FFF8EC",border:"1.5px solid #E8620A",borderRadius:12,padding:"10px 13px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:800,color:"#1A1A2E",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#888",marginTop:2}}>{dispDate(a.date,true)} — {a.period}</div></div><button onClick={async()=>{await db.from("absences").delete().eq("id",a.id);setAbsences(p=>p.filter(x=>x.id!==a.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ccc"}}>🗑️</button></div>)}
           </>
         )}
       </div>
@@ -2105,8 +2232,72 @@ function ManagerApp({onLogout}){
         </div>
       )}
 
-      {cashPopup&&<div className="overlay" onClick={()=>setCashPopup(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">💵 Cash Payments</div><div className="ssub2">{fmtRange(weekRange.start,weekRange.end)}</div>{staff.filter(s=>parseFloat(calcPay(s).cashAmt)>0).map(s=>{const p=calcPay(s);return<div key={s.id} className="cashrow"><span className="cashname">{s.name}</span><span className="cashamt">£{p.cashAmt}</span></div>;})}  {kitchenStaff.filter(k=>parseFloat(calcKitchenPay(k).cashAmt)>0).map(k=>{const p=calcKitchenPay(k);return<div key={k.id} className="cashrow"><span className="cashname">👨‍🍳 {k.name}</span><span className="cashamt">£{p.cashAmt}</span></div>;})} <div style={{borderTop:"2px solid #F0F0F0",marginTop:10,paddingTop:10,display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:800,color:"#1A2744"}}><span>Total Cash Out</span><span>£{totCash}</span></div><button className="btn sec" style={{marginTop:14}} onClick={()=>setCashPopup(false)}>Close</button></div></div>}
-      {shareModal&&<div className="overlay" onClick={()=>setShareModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">📤 Share Rota</div><div className="ssub2">{staff.find(s=>s.id===shareModal)?.name}</div><textarea className="lognote" rows={12} readOnly style={{fontFamily:"monospace",fontSize:12,background:"#F7F4EF"}} value={buildRotaText(shareModal)}/><button className="btn" style={{marginTop:12}} onClick={()=>{navigator.clipboard.writeText(buildRotaText(shareModal)).then(()=>t("📋 Copied!"));setShareModal(null);}}>📋 Copy</button><button className="btn sec" onClick={()=>setShareModal(null)}>Close</button></div></div>}
+      {cashPopup&&<div className="overlay" onClick={()=>setCashPopup(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">💵 Cash Payments</div><div className="ssub2">{fmtRange(weekRange.start,weekRange.end)}</div>{staff.filter(s=>parseFloat(calcPay(s).cashAmt)>0).map(s=>{const p=calcPay(s);return<div key={s.id} className="cashrow"><span className="cashname">{s.name}</span><span className="cashamt">£{p.cashAmt}</span></div>;})}  {kitchenStaff.filter(k=>parseFloat(calcKitchenPay(k).cashAmt)>0).map(k=>{const p=calcKitchenPay(k);return<div key={k.id} className="cashrow"><span className="cashname">👨‍🍳 {k.name}</span><span className="cashamt">£{p.cashAmt}</span></div>;})} <div style={{borderTop:"2px solid #F0F0F0",marginTop:10,paddingTop:10,display:"flex",justifyContent:"space-between",fontSize:15,fontWeight:800,color:"#1A1A2E"}}><span>Total Cash Out</span><span>£{totCash}</span></div><button className="btn sec" style={{marginTop:14}} onClick={()=>setCashPopup(false)}>Close</button></div></div>}
+      {shareModal&&<div className="overlay" onClick={()=>setShareModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">📤 Share Rota</div><div className="ssub2">{staff.find(s=>s.id===shareModal)?.name}</div><textarea className="lognote" rows={12} readOnly style={{fontFamily:"monospace",fontSize:12,background:"#FFF5EF"}} value={buildRotaText(shareModal)}/><button className="btn" style={{marginTop:12}} onClick={()=>{navigator.clipboard.writeText(buildRotaText(shareModal)).then(()=>t("📋 Copied!"));setShareModal(null);}}>📋 Copy</button><button className="btn sec" onClick={()=>setShareModal(null)}>Close</button></div></div>}
+        {/* ══ KPI ══ */}
+        {tab==="kpi"&&(()=>{
+          const[kpiWeek,setKpiWeek]=React.useState(()=>snapToSunday(todayISO()));
+          // Build last 8 weeks for trend
+          const weeks=[];for(let i=7;i>=0;i--){const s=snapToSunday(addDays(todayISO(),-i*7));weeks.push(s);}
+          // For each week compute KPIs
+          function weekKPI(ws){
+            const we=addDays(ws,6);
+            const wTakings=takings.filter(t=>t.date>=ws&&t.date<=we);
+            const totalTakings=wTakings.reduce((a,t)=>a+[...Object.keys(t)].filter(k=>['deliveroo','uber','cash','card','online'].includes(k)).reduce((s,k)=>s+parseFloat(t[k]||0),0),0);
+            // Labour from payroll_extras for this week
+            let totalWages=0;
+            staff.forEach(s=>{const ex=extras[s.id];if(ex&&ex.ws===ws){const p=calcPay(s);totalWages+=parseFloat(p.total);}});
+            kitchenStaff.forEach(k=>{const ex=extras[kId(k.id)];if(ex&&ex.ws===ws){const p=calcKitchenPay(k);totalWages+=parseFloat(p.total);}});
+            const labourPct=totalTakings>0?r2(totalWages/totalTakings*100):0;
+            const wTips=wTakings.reduce((a,t)=>a+parseFloat(t.tips_cash||0)+parseFloat(t.tips_card||0),0);
+            return{ws,we,totalTakings:r2(totalTakings),totalWages:r2(totalWages),labourPct,wTips:r2(wTips)};
+          }
+          const trend=weeks.map(weekKPI);
+          const selected=weekKPI(kpiWeek);
+          const alerts=getWeekAlerts(kpiWeek);
+          return(
+            <div className="mbody">
+              <div className="sec">📈 Weekly KPI</div>
+              {/* Week selector */}
+              <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:14}}>
+                <button className="btn sm sec" onClick={()=>setKpiWeek(snapToSunday(addDays(kpiWeek,-7)))}>‹</button>
+                <span style={{flex:1,textAlign:"center",fontSize:13,fontWeight:700}}>{fmtDate(kpiWeek)} – {fmtDate(addDays(kpiWeek,6))}</span>
+                <button className="btn sm sec" onClick={()=>setKpiWeek(snapToSunday(addDays(kpiWeek,7)))}>›</button>
+              </div>
+              {/* Alerts */}
+              {alerts.map((a,i)=><div key={i} style={{background:a.type==="bh"?"#FEF3C7":"#EFF6FF",border:`1.5px solid ${a.type==="bh"?"#F59E0B":"#BFDBFE"}`,borderRadius:10,padding:"8px 12px",marginBottom:8,fontSize:13,color:a.type==="bh"?"#78350F":"#1E40AF"}}>
+                {a.type==="bh"?"⚠️":"📅"} {a.label}
+              </div>)}
+              {/* KPI cards */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+                {[
+                  {label:"Total Takings",value:`£${selected.totalTakings.toFixed(2)}`,color:"#E8620A"},
+                  {label:"Total Wages",value:`£${selected.totalWages.toFixed(2)}`,color:"#1A1A2E"},
+                  {label:"Labour %",value:`${selected.labourPct.toFixed(1)}%`,color:selected.labourPct>35?"#E05252":selected.labourPct>28?"#F59E0B":"#50DC78"},
+                  {label:"Tips Total",value:`£${selected.wTips.toFixed(2)}`,color:"#50DC78"},
+                ].map(kpi=><div key={kpi.label} style={{background:"#FFF5EF",borderRadius:13,padding:"14px 13px"}}>
+                  <div style={{fontSize:12,color:"#aaa",marginBottom:4}}>{kpi.label}</div>
+                  <div style={{fontSize:22,fontWeight:900,color:kpi.color}}>{kpi.value}</div>
+                </div>)}
+              </div>
+              {/* 8-week trend */}
+              <div className="sec">8-Week Trend</div>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                  <thead><tr style={{background:"#FFF5EF"}}>{["Week","Takings","Wages","Labour %","Tips"].map(h=><th key={h} style={{padding:"7px 8px",textAlign:"left",fontWeight:700,color:"#888",whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+                  <tbody>{trend.map((w,i)=><tr key={i} style={{borderBottom:"1px solid #F0F0F0",background:w.ws===kpiWeek?"#FFF5EF":"transparent"}}>
+                    <td style={{padding:"7px 8px",whiteSpace:"nowrap",fontWeight:w.ws===kpiWeek?800:400}}>{fmtDate(w.ws).slice(0,5)}</td>
+                    <td style={{padding:"7px 8px"}}>£{w.totalTakings.toFixed(0)}</td>
+                    <td style={{padding:"7px 8px"}}>£{w.totalWages.toFixed(0)}</td>
+                    <td style={{padding:"7px 8px",color:w.labourPct>35?"#E05252":w.labourPct>28?"#F59E0B":"#50DC78",fontWeight:700}}>{w.labourPct.toFixed(1)}%</td>
+                    <td style={{padding:"7px 8px"}}>£{w.wTips.toFixed(0)}</td>
+                  </tr>)}</tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
+
       {absModal&&<div className="overlay" onClick={()=>setAbsModal(false)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">📅 Log Absence</div><label className="lbl">Staff Member</label><select className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} value={absStaff} onChange={e=>setAbsStaff(e.target.value)}><option value="">— Select —</option>{staff.length>0&&<optgroup label="Front of House">{staff.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</optgroup>}{kitchenStaff.length>0&&<optgroup label="Kitchen">{kitchenStaff.map(k=><option key={"k_"+k.id} value={"k_"+k.id}>{"👨‍🍳 "+k.name}</option>)}</optgroup>}</select><label className="lbl">Date</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:14}} value={absDate} onChange={e=>setAbsDate(e.target.value)}/><label className="lbl" style={{marginBottom:8}}>Period</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:12}} onClick={async()=>{if(!absStaff||!absDate||!absPeriod)return t("Fill in all fields");const isKitchen=absStaff.startsWith("k_");const foundFoh=staff.find(x=>x.id===absStaff);const foundKit=kitchenStaff.find(x=>"k_"+x.id===absStaff);const personName=(foundFoh||foundKit)?.name||"";const{data,error}=await db.from("absences").insert({staff_id:absStaff,staff_name:personName,date:absDate,period:absPeriod}).select().single();if(!error){setAbsences(p=>[...p,data]);setAbsModal(false);t("📅 Absence logged");}else t("❌ "+error.message);}}>Save Absence</button><button className="btn sec" onClick={()=>setAbsModal(false)}>Cancel</button></div></div>}
     </div>
   );
@@ -2169,7 +2360,7 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
           const myDays=staffAssignedDays(s.id);
           return(
             <div key={s.id} style={{marginBottom:14,paddingBottom:14,borderBottom:"1px dashed #E5E5E5"}}>
-              <div style={{fontSize:13,fontWeight:800,color:"#1A2744",marginBottom:8}}>👤 {s.name}</div>
+              <div style={{fontSize:13,fontWeight:800,color:"#1A1A2E",marginBottom:8}}>👤 {s.name}</div>
               <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
                 {DAYS_MON.map((dayName,monIdx)=>{
                   const dow=monIdx===6?0:monIdx+1;
@@ -2221,7 +2412,7 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
       {/* Recent Takings — at bottom */}
       {takings.filter(s=>!s.is_new).length>0&&(
         <div style={{marginTop:10}}>
-          <div style={{fontSize:13,fontWeight:800,color:"#1A2744",marginBottom:8}}>📋 Recent Takings (last 7)</div>
+          <div style={{fontSize:13,fontWeight:800,color:"#1A1A2E",marginBottom:8}}>📋 Recent Takings (last 7)</div>
           {[...takings].filter(s=>!s.is_new).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,7).map(sub=>{
             const _dep=parseFloat(sub.deposit_receipt||0);const _vp=parseFloat(sub.voucher_purchase||0);
             const total=r2(parseFloat(sub.deliveroo||0)+parseFloat(sub.uber||0)+parseFloat(sub.cash||0)+parseFloat(sub.card||0)+parseFloat(sub.online||0)-parseFloat(sub.shop_expense||0)+_dep+_vp);
@@ -2326,7 +2517,7 @@ function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast,gsReady,gsConfig,bu
     <>
       <div className="sec">Shop Expenses</div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>Add / Edit</div>
+        <div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>Add / Edit</div>
         <button style={{background:editMode?"#FEE2E2":"#DBEAFE",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",color:editMode?"#7F1D1D":"#1E40AF"}} onClick={()=>{setEditMode(v=>!v);setEditExpense(null);}}>
           {editMode?"+ Add New":"✏️ Edit Existing"}
         </button>
@@ -2351,13 +2542,13 @@ function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast,gsReady,gsConfig,bu
           {filteredForEdit.map(e=>(
             <div key={e.id} style={{padding:"8px 0",borderBottom:"1px dashed #E5E5E5",cursor:"pointer"}} onClick={()=>setEditExpense({...e})}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div><div style={{fontSize:13,fontWeight:700,color:editExpense?.id===e.id?"#F5A623":"#1A2744"}}>{e.description}</div><div style={{fontSize:11,color:"#aaa"}}>{e.pay_type==="cash"?"💵":"💳"} £{e.amount.toFixed(2)}</div></div>
-                <span style={{fontSize:11,color:"#F5A623",fontWeight:700}}>{editExpense?.id===e.id?"editing ✏️":"tap to edit"}</span>
+                <div><div style={{fontSize:13,fontWeight:700,color:editExpense?.id===e.id?"#E8620A":"#1A1A2E"}}>{e.description}</div><div style={{fontSize:11,color:"#aaa"}}>{e.pay_type==="cash"?"💵":"💳"} £{e.amount.toFixed(2)}</div></div>
+                <span style={{fontSize:11,color:"#E8620A",fontWeight:700}}>{editExpense?.id===e.id?"editing ✏️":"tap to edit"}</span>
               </div>
             </div>
           ))}
           {editExpense&&(
-            <div style={{marginTop:12,padding:"12px",background:"#FFF8EC",borderRadius:10,border:"1.5px solid #F5A623"}}>
+            <div style={{marginTop:12,padding:"12px",background:"#FFF8EC",borderRadius:10,border:"1.5px solid #E8620A"}}>
               <div style={{fontSize:12,fontWeight:800,color:"#92400E",marginBottom:8}}>Editing: {editExpense.description}</div>
               <label className="lbl">Description</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:8}} value={editExpense.description} onChange={e=>setEditExpense(p=>({...p,description:e.target.value}))}/>
               <label className="lbl">Amount (£)</label><input className="inp sm" style={{display:"block",width:"100%",marginBottom:8}} type="number" min="0" value={editExpense.amount} onChange={e=>setEditExpense(p=>({...p,amount:e.target.value}))}/>
@@ -2377,11 +2568,11 @@ function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast,gsReady,gsConfig,bu
           <div className="sec">Recent Expenses {expenses.length>10&&<span style={{fontSize:11,color:"#aaa",fontWeight:400}}>(showing 10 of {expenses.length})</span>}</div>
           {[...expenses].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10).map(e=>(
             <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #F0F0F0"}}>
-              <div><div style={{fontSize:13,fontWeight:700,color:"#1A2744"}}>{e.description}</div><div style={{fontSize:11,color:"#aaa"}}>{dispDate(e.date,true)} · {e.pay_type==="cash"?"💵 Cash":"💳 Card"}</div></div>
+              <div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{e.description}</div><div style={{fontSize:11,color:"#aaa"}}>{dispDate(e.date,true)} · {e.pay_type==="cash"?"💵 Cash":"💳 Card"}</div></div>
               <div style={{display:"flex",gap:8,alignItems:"center"}}><div style={{fontSize:13,fontWeight:800,color:"#E05252"}}>-£{e.amount.toFixed(2)}</div><button onClick={()=>onDelete(e.id)} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#ccc"}}>🗑️</button></div>
             </div>
           ))}
-          <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0 0",fontSize:14,fontWeight:800,color:"#1A2744",borderTop:"2px solid #F0F0F0",marginTop:4}}><span>Total</span><span>£{total.toFixed(2)}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0 0",fontSize:14,fontWeight:800,color:"#1A1A2E",borderTop:"2px solid #F0F0F0",marginTop:4}}><span>Total</span><span>£{total.toFixed(2)}</span></div>
         </>
       )}
       <div className="expsec" style={{marginTop:14}}>
@@ -2417,7 +2608,11 @@ export default function App(){
       Promise.all([
         db.from("takings_assignment").select("staff_id").eq("date",todayISO()).maybeSingle(),
         db.from("takings_defaults").select("staff_id").eq("day_of_week",dow).maybeSingle(),
-      ]).then(([ovR,defR])=>{setEffectiveTakingsPerson(ovR.data?.staff_id||defR.data?.staff_id||null);});
+        db.from("app_settings").select("value").eq("key","welcome_message").maybeSingle(),
+      ]).then(([ovR,defR,wmR])=>{
+        setEffectiveTakingsPerson(ovR.data?.staff_id||defR.data?.staff_id||null);
+        if(wmR.data?.value)setUser(p=>({...p,welcomeMsg:wmR.data.value}));
+      });
     }
   },[screen,user]);
 
