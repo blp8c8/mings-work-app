@@ -490,9 +490,18 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     if(!active)return;
     const time=nowTime();
     const bt=parseFloat(breakTime||0);
-    const{error}=await db.from("clock_logs").update({time_out:time,note:noteType||"",break_time:bt}).eq("id",active.id);
-    if(!error){setLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time,note:noteType||"",break_time:bt}:l));setClockedIn(false);setBreakTime("0");setLateModal(false);t("👋 Clocked out at "+time+(bt>0?` (${bt}hr break deducted)`:""));}
-    else t("❌ "+error.message);
+    // Try with break_time column; if it fails (column not yet added), retry without it
+    let result=await db.from("clock_logs").update({time_out:time,note:noteType||"",break_time:bt}).eq("id",active.id);
+    if(result.error&&(result.error.message?.includes("break_time")||result.error.code==="42703"||result.error.details?.includes("break_time"))){
+      // Column doesn't exist yet — save break time in note suffix instead
+      const noteWithBreak=noteType?(bt>0?`${noteType}|break:${bt}`:noteType):(bt>0?`break:${bt}`:"");
+      result=await db.from("clock_logs").update({time_out:time,note:noteWithBreak}).eq("id",active.id);
+    }
+    if(!result.error){
+      setLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time,note:noteType||"",break_time:bt}:l));
+      setClockedIn(false);setBreakTime("0");setLateModal(false);
+      t("👋 Clocked out at "+time+(bt>0?` (${bt}hr break deducted)`:""));
+    }else t("❌ "+result.error.message);
   }
   function clockOut(){
     // Check if hourly-only staff and if clocked out >15 min after rota end
@@ -716,7 +725,12 @@ function ManagerApp({onLogout}){
   const[weekRange,setWeekRange]=useState(()=>payWeekOf(todayISO()));
   const[payrollMonth,setPayrollMonth]=useState(()=>todayISO().slice(0,7));
   const[clearKey,setClearKey]=useState(0);
-  const[kpiWeek,setKpiWeek]=useState(()=>snapToSunday(todayISO())); // incremented after each payroll push to force PayrollCard reset // YYYY-MM
+  const[kpiWeek,setKpiWeek]=useState(()=>snapToSunday(todayISO()));
+  const[kpiRange,setKpiRange]=useState(8); // number of weeks to show: 1,4,8,12,custom
+  const[kpiCustomStart,setKpiCustomStart]=useState(()=>snapToSunday(addDays(todayISO(),-55)));
+  const[kpiCustomEnd,setKpiCustomEnd]=useState(()=>snapToSunday(todayISO()));
+  const[kpiMetrics,setKpiMetrics]=useState({takings:true,wages:true,labour:true,tips:false});
+  const[kpiCompare,setKpiCompare]=useState("none"); // none|prevPeriod|prevYear|thisMonthAvg|prevMonthAvg
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const[cashPopup,setCashPopup]=useState(false);
   const[pinModal,setPinModal]=useState(false);
@@ -1546,7 +1560,8 @@ function ManagerApp({onLogout}){
     const dedItems=(ex.deductions||[]).map(d=>({...d,signed:-parseFloat(d.amount)}));
     const allItems=[...addItems,...dedItems];
     const[amount,setAmount]=useState("");const[reason,setReason]=useState("Bonus");const[custom,setCustom]=useState("");
-    const REASONS=["Bonus","Overpayment correction","Absence deduction","Transport allowance","Meal allowance","Note only (no £ change)","Custom"];
+    const REASONS=["Sick leave","Left early","Bank holiday","Red day","Custom"];
+    const NOTE_REASONS=["Bank holiday — extra day off","Custom note"];
     return(
       <div>
         {allItems.map((item,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px dashed #F0F0F0"}}>
@@ -1557,17 +1572,24 @@ function ManagerApp({onLogout}){
           }} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#ccc"}}>✕</button>
         </div>)}
         <div className="addrow">
-          <select className="addinp" style={{flex:"none",padding:"6px 7px",fontSize:11}} value={reason} onChange={e=>setReason(e.target.value)}>{REASONS.map(r=><option key={r}>{r}</option>)}</select>
-          {reason!=="Note only (no £ change)"&&<input className="addinp" type="number" placeholder="+ or - £" value={amount} onChange={e=>setAmount(e.target.value)} style={{width:80}}/>}
+          <select className="addinp" style={{flex:"none",padding:"6px 7px",fontSize:11}} value={reason} onChange={e=>setReason(e.target.value)}>
+            <optgroup label="Adjustments (+ or -)">
+              {REASONS.map(r=><option key={r}>{r}</option>)}
+            </optgroup>
+            <optgroup label="Notes only (no £)">
+              {NOTE_REASONS.map(r=><option key={r}>{r}</option>)}
+            </optgroup>
+          </select>
+          {!NOTE_REASONS.includes(reason)&&<input className="addinp" type="number" placeholder="+ or - £" value={amount} onChange={e=>setAmount(e.target.value)} style={{width:80}}/>}
           <button className="addbtn" onClick={()=>{
-            const label=reason==="Custom"&&custom?custom:reason;const amt=parseFloat(amount)||0;
-            if(reason==="Note only (no £ change)"){setExtrasState(sid,ex=>({...ex,notes:[...(ex.notes||[]),label]}));}
+            const label=reason==="Custom"&&custom?custom:reason==="Custom note"&&custom?custom:reason;const amt=parseFloat(amount)||0;
+            if(NOTE_REASONS.includes(reason)){setExtrasState(sid,ex=>({...ex,notes:[...(ex.notes||[]),label]}));}
             else if(amt>0)setExtrasState(sid,ex=>({...ex,additions:[...(ex.additions||[]),{label,amount:String(amt)}]}));
             else if(amt<0)setExtrasState(sid,ex=>({...ex,deductions:[...(ex.deductions||[]),{label,amount:String(Math.abs(amt))}]}));
             setAmount("");setCustom("");
           }}>+ Add</button>
         </div>
-        {reason==="Custom"&&<input className="addinp" style={{marginTop:5,width:"100%"}} placeholder="Custom reason…" value={custom} onChange={e=>setCustom(e.target.value)}/>}
+        {(reason==="Custom"||reason==="Custom note")&&<input className="addinp" style={{marginTop:5,width:"100%"}} placeholder="Custom reason…" value={custom} onChange={e=>setCustom(e.target.value)}/>}
       </div>
     );
   }
@@ -2096,11 +2118,6 @@ function ManagerApp({onLogout}){
         {tab==="clock"&&(
           <>
             <div className="sec">Clock Logs</div>
-            <div style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:11,padding:"10px 13px",marginBottom:12,fontSize:12,color:"#1E40AF",lineHeight:1.7}}>
-              <strong>For hourly-paid FOH staff:</strong><br/>
-              1) If working overtime, consult the leading staff first. Staff should tap <strong>"Working extra time"</strong> when clocking out.<br/>
-              2) Break time is recorded by staff when clocking out and is automatically deducted from worked hours.
-            </div>
             <div className="wnav">
               <button className="wnavbtn" onClick={()=>setClockDate(addDays(clockDate,-1))} disabled={clockShowAll}>‹</button>
               <div className="wnavlbl">{clockShowAll?"Showing all history":dispDate(clockDate,true)}</div>
@@ -2323,59 +2340,195 @@ function ManagerApp({onLogout}){
       {shareModal&&<div className="overlay" onClick={()=>setShareModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">📤 Share Rota</div><div className="ssub2">{staff.find(s=>s.id===shareModal)?.name}</div><textarea className="lognote" rows={12} readOnly style={{fontFamily:"monospace",fontSize:12,background:"#FFF5EF"}} value={buildRotaText(shareModal)}/><button className="btn" style={{marginTop:12}} onClick={()=>{navigator.clipboard.writeText(buildRotaText(shareModal)).then(()=>t("📋 Copied!"));setShareModal(null);}}>📋 Copy</button><button className="btn sec" onClick={()=>setShareModal(null)}>Close</button></div></div>}
         {/* ══ KPI ══ */}
         {tab==="kpi"&&(()=>{
-          // kpiWeek and setKpiWeek are defined at ManagerApp top level
+          // All state at ManagerApp top level (no hooks violation)
           function weekKPI(ws){
             const we=addDays(ws,6);
             const wTakings=takings.filter(t=>t.date>=ws&&t.date<=we);
-            const totalTakings=wTakings.reduce((a,t)=>a+[...Object.keys(t)].filter(k=>['deliveroo','uber','cash','card','online'].includes(k)).reduce((s,k)=>s+parseFloat(t[k]||0),0),0);
-            // Labour from payroll_extras for this week
+            const totalTakings=r2(wTakings.reduce((a,t2)=>a+parseFloat(t2.deliveroo||0)+parseFloat(t2.uber||0)+parseFloat(t2.cash||0)+parseFloat(t2.card||0)+parseFloat(t2.online||0),0));
             let totalWages=0;
-            staff.forEach(s=>{const ex=extras[s.id];if(ex&&ex.ws===ws){const p=calcPay(s);totalWages+=parseFloat(p.total);}});
-            kitchenStaff.forEach(k=>{const ex=extras[kId(k.id)];if(ex&&ex.ws===ws){const p=calcKitchenPay(k);totalWages+=parseFloat(p.total);}});
+            staff.forEach(s=>{const ex2=extras[s.id];if(ex2&&ex2.ws===ws){totalWages+=parseFloat(calcPay(s).total||0);}});
+            kitchenStaff.forEach(k=>{const ex2=extras[kId(k.id)];if(ex2&&ex2.ws===ws){totalWages+=parseFloat(calcKitchenPay(k).total||0);}});
+            totalWages=r2(totalWages);
             const labourPct=totalTakings>0?r2(totalWages/totalTakings*100):0;
-            const wTips=wTakings.reduce((a,t)=>a+parseFloat(t.tips_cash||0)+parseFloat(t.tips_card||0),0);
-            return{ws,we,totalTakings:r2(totalTakings),totalWages:r2(totalWages),labourPct,wTips:r2(wTips)};
+            const wTips=r2(wTakings.reduce((a,t2)=>a+parseFloat(t2.tips_cash||0)+parseFloat(t2.tips_card||0),0));
+            return{ws,we,takings:totalTakings,wages:totalWages,labour:labourPct,tips:wTips};
           }
-          const weeks=[];for(let i=7;i>=0;i--){const s=snapToSunday(addDays(todayISO(),-i*7));weeks.push(s);}
-          const trend=weeks.map(weekKPI);
+          // Build weeks array based on range setting
+          function buildWeeks(){
+            if(kpiRange==="custom"){
+              const weeks=[];let cur=snapToSunday(kpiCustomStart);
+              while(cur<=kpiCustomEnd){weeks.push(cur);cur=addDays(cur,7);}
+              return weeks;
+            }
+            const n=parseInt(kpiRange)||8;
+            const weeks=[];
+            for(let i=n-1;i>=0;i--){weeks.push(snapToSunday(addDays(kpiWeek,-i*7)));}
+            return weeks;
+          }
+          const weeks=buildWeeks();
+          const mainData=weeks.map(ws=>({...weekKPI(ws),label:fmtDate(ws).slice(0,5)}));
+
+          // Comparison series
+          function buildCompareData(){
+            if(kpiCompare==="none")return null;
+            if(kpiCompare==="prevPeriod"){
+              const offset=weeks.length*7;
+              return weeks.map((ws,i)=>({...weekKPI(addDays(ws,-offset)),label:mainData[i].label}));
+            }
+            if(kpiCompare==="prevYear"){
+              return weeks.map((ws,i)=>({...weekKPI(addDays(ws,-364)),label:mainData[i].label}));
+            }
+            if(kpiCompare==="thisMonthAvg"||kpiCompare==="prevMonthAvg"){
+              const now=new Date(todayISO()+"T12:00:00");
+              const mo=kpiCompare==="thisMonthAvg"?now.getMonth():now.getMonth()-1;
+              const yr=kpiCompare==="thisMonthAvg"?now.getFullYear():(mo<0?now.getFullYear()-1:now.getFullYear());
+              const mStart=new Date(yr,((mo+12)%12),1).toISOString().split("T")[0];
+              const mEnd=new Date(yr,((mo+12)%12)+1,0).toISOString().split("T")[0];
+              const mTakings=takings.filter(t=>t.date>=mStart&&t.date<=mEnd);
+              const mWeeks=mTakings.length>0?Math.ceil((new Date(mEnd)-new Date(mStart))/(7*86400000)):1;
+              const avgTakings=r2(mTakings.reduce((a,t2)=>a+parseFloat(t2.deliveroo||0)+parseFloat(t2.uber||0)+parseFloat(t2.cash||0)+parseFloat(t2.card||0)+parseFloat(t2.online||0),0)/mWeeks);
+              return weeks.map((_,i)=>({takings:avgTakings,wages:0,labour:0,tips:0,label:mainData[i].label}));
+            }
+            return null;
+          }
+          const compareData=buildCompareData();
+
+          // Stats bar
+          function stats(arr,key){
+            const vals=arr.map(d=>d[key]).filter(v=>v>0);
+            if(!vals.length)return{avg:0,max:0,min:0,trend:"→"};
+            const avg=r2(vals.reduce((a,v)=>a+v,0)/vals.length);
+            const max=Math.max(...vals);const min=Math.min(...vals);
+            const trend=vals.length>1?(vals[vals.length-1]>vals[0]?"↑":"↓"):"→";
+            return{avg,max,min,trend};
+          }
+
+          const METRIC_CFG={
+            takings:{label:"Takings",color:"#E8620A",fmt:v=>`£${v}`},
+            wages:{label:"Wages",color:"#1A1A2E",fmt:v=>`£${v}`},
+            labour:{label:"Labour %",color:"#F59E0B",fmt:v=>`${v}%`},
+            tips:{label:"Tips",color:"#50DC78",fmt:v=>`£${v}`},
+          };
+          const activeMetrics=Object.keys(kpiMetrics).filter(k=>kpiMetrics[k]);
           const selected=weekKPI(kpiWeek);
           const alerts=getWeekAlerts(kpiWeek);
+
+          // Simple SVG line chart (no recharts dependency issues)
+          function LineChart({data,compareData,metrics}){
+            const W=360,H=180,padL=36,padR=10,padT=10,padB=28;
+            const chartW=W-padL-padR,chartH=H-padT-padB;
+            if(!data.length)return<div style={{textAlign:"center",color:"#ccc",padding:20}}>No data</div>;
+            // Compute y scale across all active metrics and both series
+            let allVals=[];
+            metrics.forEach(m=>{
+              data.forEach(d=>{if(d[m]!=null)allVals.push(d[m]);});
+              if(compareData)compareData.forEach(d=>{if(d[m]!=null)allVals.push(d[m]);});
+            });
+            const yMin=0,yMax=Math.max(...allVals,1)*1.15;
+            const xStep=chartW/(Math.max(data.length-1,1));
+            function px(i){return padL+i*xStep;}
+            function py(v){return padT+chartH*(1-(v-yMin)/(yMax-yMin));}
+            function makePath(series,key){
+              return series.map((d,i)=>`${i===0?"M":"L"}${px(i).toFixed(1)},${py(d[key]||0).toFixed(1)}`).join(" ");
+            }
+            return(
+              <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:"auto",overflow:"visible"}}>
+                {/* Y grid lines */}
+                {[0,.25,.5,.75,1].map(f=>{
+                  const yv=yMin+(yMax-yMin)*f;
+                  const y=py(yv);
+                  return<g key={f}><line x1={padL} y1={y} x2={W-padR} y2={y} stroke="#F0F0F0" strokeWidth="1"/><text x={padL-3} y={y+4} textAnchor="end" fontSize="8" fill="#bbb">{yv>=1000?`${(yv/1000).toFixed(1)}k`:yv.toFixed(0)}</text></g>;
+                })}
+                {/* X labels */}
+                {data.map((d,i)=>i%Math.ceil(data.length/5)===0&&<text key={i} x={px(i)} y={H-padB+16} textAnchor="middle" fontSize="8" fill="#bbb">{d.label}</text>)}
+                {/* Main series lines */}
+                {metrics.map(m=><path key={m} d={makePath(data,m)} fill="none" stroke={METRIC_CFG[m].color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"/>)}
+                {/* Compare series (dashed) */}
+                {compareData&&metrics.map(m=><path key={"c"+m} d={makePath(compareData,m)} fill="none" stroke={METRIC_CFG[m].color} strokeWidth="1.5" strokeDasharray="4 3" opacity="0.5"/>)}
+                {/* Dots on main series */}
+                {metrics.map(m=>data.map((d,i)=><circle key={m+i} cx={px(i)} cy={py(d[m]||0)} r="3" fill={METRIC_CFG[m].color}/>))}
+              </svg>
+            );
+          }
+
           return(
             <div className="mbody">
-              <div className="sec">📈 Weekly KPI</div>
+              <div className="sec">📈 KPI Dashboard</div>
+
               {/* Week selector */}
-              <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:14}}>
-                <button className="btn sm sec" onClick={()=>setKpiWeek(snapToSunday(addDays(kpiWeek,-7)))}>‹</button>
-                <span style={{flex:1,textAlign:"center",fontSize:13,fontWeight:700}}>{fmtDate(kpiWeek)} – {fmtDate(addDays(kpiWeek,6))}</span>
-                <button className="btn sm sec" onClick={()=>setKpiWeek(snapToSunday(addDays(kpiWeek,7)))}>›</button>
+              <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:10}}>
+                <button className="btn sm sec" style={{padding:"6px 10px"}} onClick={()=>setKpiWeek(snapToSunday(addDays(kpiWeek,-7)))}>‹</button>
+                <span style={{flex:1,textAlign:"center",fontSize:12,fontWeight:700,color:"#888"}}>{fmtDate(kpiWeek)} – {fmtDate(addDays(kpiWeek,6))}</span>
+                <button className="btn sm sec" style={{padding:"6px 10px"}} onClick={()=>setKpiWeek(snapToSunday(addDays(kpiWeek,7)))}>›</button>
               </div>
+
               {/* Alerts */}
-              {alerts.map((a,i)=><div key={i} style={{background:a.type==="bh"?"#FEF3C7":"#EFF6FF",border:`1.5px solid ${a.type==="bh"?"#F59E0B":"#BFDBFE"}`,borderRadius:10,padding:"8px 12px",marginBottom:8,fontSize:13,color:a.type==="bh"?"#78350F":"#1E40AF"}}>
-                {a.type==="bh"?"⚠️":"📅"} {a.label}
-              </div>)}
-              {/* KPI cards */}
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-                {[
-                  {label:"Total Takings",value:`£${selected.totalTakings.toFixed(2)}`,color:"#E8620A"},
-                  {label:"Total Wages",value:`£${selected.totalWages.toFixed(2)}`,color:"#1A1A2E"},
-                  {label:"Labour %",value:`${selected.labourPct.toFixed(1)}%`,color:selected.labourPct>35?"#E05252":selected.labourPct>28?"#F59E0B":"#50DC78"},
-                  {label:"Tips Total",value:`£${selected.wTips.toFixed(2)}`,color:"#50DC78"},
-                ].map(kpi=><div key={kpi.label} style={{background:"#FFF5EF",borderRadius:13,padding:"14px 13px"}}>
-                  <div style={{fontSize:12,color:"#aaa",marginBottom:4}}>{kpi.label}</div>
-                  <div style={{fontSize:22,fontWeight:900,color:kpi.color}}>{kpi.value}</div>
-                </div>)}
+              {alerts.map((a,i)=><div key={i} style={{background:a.type==="bh"?"#FEF3C7":"#EFF6FF",border:`1.5px solid ${a.type==="bh"?"#F59E0B":"#BFDBFE"}`,borderRadius:9,padding:"7px 11px",marginBottom:6,fontSize:12,color:a.type==="bh"?"#78350F":"#1E40AF"}}>{a.type==="bh"?"⚠️":"📅"} {a.label}</div>)}
+
+              {/* KPI metric cards */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+                {Object.entries(METRIC_CFG).map(([k,cfg])=>{
+                  const v=selected[k];
+                  const s=stats(mainData,k);
+                  return(<div key={k} style={{background:kpiMetrics[k]?"#FFF5EF":"#F8F8F8",borderRadius:12,padding:"12px 11px",border:`1.5px solid ${kpiMetrics[k]?cfg.color:"#F0F0F0"}`,cursor:"pointer"}} onClick={()=>setKpiMetrics(p=>({...p,[k]:!p[k]}))}>
+                    <div style={{fontSize:11,color:"#aaa",marginBottom:2}}>{cfg.label} {kpiMetrics[k]?"✓":""}</div>
+                    <div style={{fontSize:20,fontWeight:900,color:k==="labour"?(v>35?"#E05252":v>28?"#F59E0B":"#50DC78"):cfg.color}}>{cfg.fmt(v)}</div>
+                    <div style={{fontSize:10,color:"#bbb",marginTop:2}}>avg {cfg.fmt(s.avg)} {s.trend}</div>
+                  </div>);
+                })}
               </div>
-              {/* 8-week trend */}
-              <div className="sec">8-Week Trend</div>
+
+              {/* Chart controls */}
+              <div style={{background:"#FFF5EF",borderRadius:12,padding:"11px 12px",marginBottom:12}}>
+                <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:8,flexWrap:"wrap"}}>
+                  <span style={{fontSize:11,fontWeight:700,color:"#888",marginRight:2}}>RANGE</span>
+                  {[["1","1wk"],["4","4wk"],["8","8wk"],["12","12wk"],["custom","Custom"]].map(([v,lbl])=>(
+                    <button key={v} className={`tgl${kpiRange===v?" on":""}`} style={{padding:"5px 9px",fontSize:11}} onClick={()=>setKpiRange(v)}>{lbl}</button>
+                  ))}
+                </div>
+                {kpiRange==="custom"&&<div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center"}}>
+                  <input type="date" className="inp sm" style={{flex:1}} value={kpiCustomStart} onChange={e=>setKpiCustomStart(snapToSunday(e.target.value))}/>
+                  <span style={{fontSize:12,color:"#888"}}>to</span>
+                  <input type="date" className="inp sm" style={{flex:1}} value={kpiCustomEnd} onChange={e=>setKpiCustomEnd(snapToSunday(e.target.value))}/>
+                </div>}
+                <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                  <span style={{fontSize:11,fontWeight:700,color:"#888",marginRight:2}}>COMPARE</span>
+                  {[["none","None"],["prevPeriod","Prev period"],["prevYear","Same wk last yr"],["thisMonthAvg","This mo. avg"],["prevMonthAvg","Prev mo. avg"]].map(([v,lbl])=>(
+                    <button key={v} className={`tgl${kpiCompare===v?" on":""}`} style={{padding:"5px 9px",fontSize:11}} onClick={()=>setKpiCompare(v)}>{lbl}</button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Line chart */}
+              {activeMetrics.length>0&&<div style={{background:"#fff",borderRadius:12,padding:"12px 10px",marginBottom:12,border:"1.5px solid #F0F0F0"}}>
+                <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:8}}>
+                  {activeMetrics.map(m=><div key={m} style={{display:"flex",alignItems:"center",gap:4}}>
+                    <div style={{width:16,height:3,background:METRIC_CFG[m].color,borderRadius:2}}/>
+                    <span style={{fontSize:11,color:"#888"}}>{METRIC_CFG[m].label}</span>
+                    {compareData&&<><div style={{width:12,height:2,background:METRIC_CFG[m].color,opacity:.5,borderRadius:2,marginLeft:4}}/><span style={{fontSize:10,color:"#ccc"}}>{kpiCompare==="prevPeriod"?"prev":kpiCompare==="prevYear"?"yr-1":"avg"}</span></>}
+                  </div>)}
+                </div>
+                <LineChart data={mainData} compareData={compareData} metrics={activeMetrics}/>
+              </div>}
+
+              {/* Stats bar */}
+              {activeMetrics.length>0&&<div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto"}}>
+                {activeMetrics.map(m=>{const s=stats(mainData,m);return(<div key={m} style={{background:"#FFF5EF",borderRadius:10,padding:"8px 11px",minWidth:90,flex:1}}>
+                  <div style={{fontSize:10,color:"#aaa",marginBottom:2}}>{METRIC_CFG[m].label}</div>
+                  <div style={{fontSize:11,color:"#888"}}>↑ {METRIC_CFG[m].fmt(s.max)}</div>
+                  <div style={{fontSize:11,color:"#888"}}>↓ {METRIC_CFG[m].fmt(s.min)}</div>
+                  <div style={{fontSize:12,fontWeight:800,color:METRIC_CFG[m].color}}>⌀ {METRIC_CFG[m].fmt(s.avg)} {s.trend}</div>
+                </div>);})}
+              </div>}
+
+              {/* Data table */}
+              <div className="sec" style={{fontSize:13}}>Weekly Breakdown</div>
               <div style={{overflowX:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                  <thead><tr style={{background:"#FFF5EF"}}>{["Week","Takings","Wages","Labour %","Tips"].map(h=><th key={h} style={{padding:"7px 8px",textAlign:"left",fontWeight:700,color:"#888",whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
-                  <tbody>{trend.map((w,i)=><tr key={i} style={{borderBottom:"1px solid #F0F0F0",background:w.ws===kpiWeek?"#FFF5EF":"transparent"}}>
-                    <td style={{padding:"7px 8px",whiteSpace:"nowrap",fontWeight:w.ws===kpiWeek?800:400}}>{fmtDate(w.ws).slice(0,5)}</td>
-                    <td style={{padding:"7px 8px"}}>£{w.totalTakings.toFixed(0)}</td>
-                    <td style={{padding:"7px 8px"}}>£{w.totalWages.toFixed(0)}</td>
-                    <td style={{padding:"7px 8px",color:w.labourPct>35?"#E05252":w.labourPct>28?"#F59E0B":"#50DC78",fontWeight:700}}>{w.labourPct.toFixed(1)}%</td>
-                    <td style={{padding:"7px 8px"}}>£{w.wTips.toFixed(0)}</td>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                  <thead><tr style={{background:"#FFF5EF"}}>{["Week",...activeMetrics.map(m=>METRIC_CFG[m].label)].map(h=><th key={h} style={{padding:"6px 7px",textAlign:"left",fontWeight:700,color:"#888",whiteSpace:"nowrap"}}>{h}</th>)}</tr></thead>
+                  <tbody>{mainData.map((w,i)=><tr key={i} style={{borderBottom:"1px solid #F0F0F0",background:w.ws===kpiWeek?"#FFF5EF":"transparent"}}>
+                    <td style={{padding:"6px 7px",whiteSpace:"nowrap",fontWeight:w.ws===kpiWeek?800:400}}>{w.label}</td>
+                    {activeMetrics.map(m=><td key={m} style={{padding:"6px 7px",color:m==="labour"?(w[m]>35?"#E05252":w[m]>28?"#F59E0B":"#50DC78"):METRIC_CFG[m].color,fontWeight:700}}>{METRIC_CFG[m].fmt(w[m])}</td>)}
                   </tr>)}</tbody>
                 </table>
               </div>
