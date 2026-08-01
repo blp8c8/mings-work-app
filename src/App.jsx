@@ -187,6 +187,8 @@ const parseHrs  = (i,o) => { if(!i||!o)return 0; const p=t=>{const[h,m]=t.split(
 // Rounds a clocked duration UP to the nearest 15-minute mark before converting to hours,
 // e.g. 3:00pm–5:12pm (2h12m) becomes 2h15m = 2.25h. Only matters for hourly-paid staff.
 const roundHrsUp = hrs => hrs<=0?0:Math.ceil(hrs*4-1e-9)/4;
+// Nearest 0.25hr rounding (for overtime/early-leave): 37min→0.5h, 43min→0.75h
+const roundHrs025 = hrs => hrs<=0?0:Math.round(hrs*4)/4;
 const jsToMon   = d => d===0?6:d-1;
 const weekDates = monISO => Array.from({length:7},(_,i)=>addDays(monISO,i));
 const kId       = id => `k_${id}`; // kitchen staff key prefix for payroll_extras
@@ -443,6 +445,10 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[breakTime,setBreakTime]=useState("0");
   const[lateModal,setLateModal]=useState(false);
   const[staffClockWeek,setStaffClockWeek]=useState(()=>snapToSunday(todayISO()));
+  const[checklistModal,setChecklistModal]=useState(false);
+  const[checklist,setChecklist]=useState({heating:false,asahi:false,stockroom:false,moneybox:false,backdoor:false,frontdoor:false});
+  const CHECKLIST_ITEMS=[{key:"heating",label:"Heating/AC/lights off"},  {key:"asahi",label:"Asahi light off"},{key:"stockroom",label:"Stock room locked"},{key:"moneybox",label:"Money box locked"},{key:"backdoor",label:"Back door locked"},{key:"frontdoor",label:"Front door double locked"}];
+  const checklistDone=Object.values(checklist).every(Boolean);
   const[logs,setLogs]=useState([]);const[rota,setRota]=useState([]);
   const[absences,setAbsences]=useState([]);const[rejections,setRejections]=useState([]);
   const[confirmations,setConfirmations]=useState([]);
@@ -484,41 +490,41 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     const{data}=await db.from("rota").select("*").eq("staff_id",user.id).eq("week_start",rotaMon);
     setRota(dates.map(dateISO=>{const jsDay=new Date(dateISO+"T12:00:00").getDay();const row=(data||[]).find(r=>r.day_index===jsDay);return{date:dateISO,jsDay,type:row?.shift_type||"Off",customIn:row?.custom_in||"",customOut:row?.custom_out||""};}));
   }
-  async function clockIn(){const time=nowTime();const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:time,note:""}).select().single();if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(time);t("✅ Clocked in at "+time);}else t("❌ "+error.message);}
+  async function clockIn(){
+    // Once-per-day restriction: block if already has a completed entry today
+    const todayDone=logs.find(l=>l.date===todayISO()&&l.time_in&&l.time_out);
+    if(todayDone)return t("⚠️ You've already clocked in and out today. Contact your manager if you need a correction.");
+    const time=nowTime();
+    const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:time,note:""}).select().single();
+    if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(time);t("✅ Clocked in at "+time);}
+    else t("❌ "+error.message);
+  }
   async function doClockOut(noteType){
     const active=logs.find(l=>l.date===todayISO()&&l.time_in&&!l.time_out);
     if(!active)return;
     const time=nowTime();
     const bt=parseFloat(breakTime||0);
-    // Try with break_time column; if it fails (column not yet added), retry without it
-    let result=await db.from("clock_logs").update({time_out:time,note:noteType||"",break_time:bt}).eq("id",active.id);
+    const finalNote=checklistDone&&assigned?("checklist_done"+(noteType?":"+noteType:"")):(noteType||"");
+    let result=await db.from("clock_logs").update({time_out:time,note:finalNote,break_time:bt}).eq("id",active.id);
     if(result.error&&(result.error.message?.includes("break_time")||result.error.code==="42703"||result.error.details?.includes("break_time"))){
-      // Column doesn't exist yet — save break time in note suffix instead
-      const noteWithBreak=noteType?(bt>0?`${noteType}|break:${bt}`:noteType):(bt>0?`break:${bt}`:"");
-      result=await db.from("clock_logs").update({time_out:time,note:noteWithBreak}).eq("id",active.id);
+      result=await db.from("clock_logs").update({time_out:time,note:finalNote}).eq("id",active.id);
     }
-    if(!result.error){
-      setLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time,note:noteType||"",break_time:bt}:l));
-      setClockedIn(false);setBreakTime("0");setLateModal(false);
-      t("👋 Clocked out at "+time+(bt>0?` (${bt}hr break deducted)`:""));
-    }else t("❌ "+result.error.message);
+    if(!result.error){setLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time,note:finalNote,break_time:bt}:l));setClockedIn(false);setBreakTime("0");setLateModal(false);t("👋 Clocked out at "+time+(bt>0?` (${bt}hr break)`:""));}
+    else t("❌ "+result.error.message);
   }
   function clockOut(){
-    // Check if hourly-only staff and if clocked out >15 min after rota end
+    // If takings-assigned, show checklist first
+    if(assigned){setChecklist({heating:false,asahi:false,stockroom:false,moneybox:false,backdoor:false,frontdoor:false});setChecklistModal(true);return;}
+    doActualClockOut();
+  }
+  function doActualClockOut(){
     const isHourlyOnly=parseFloat(user.shiftRate||0)===0&&parseFloat(user.nightRate||0)===0&&parseFloat(user.rate||0)>0;
     if(isHourlyOnly){
       const todayRota=rota.find(sh=>sh.date===todayISO());
-      if(todayRota&&todayRota.customOut){
+      if(todayRota&&todayRota.type==="Custom"&&todayRota.customOut){
         const[endH,endM]=todayRota.customOut.split(":").map(Number);
-        const now=new Date();
-        const endMins=endH*60+endM;
-        const nowMins=now.getHours()*60+now.getMinutes();
+        const now=new Date();const nowMins=now.getHours()*60+now.getMinutes();const endMins=endH*60+endM;
         if(nowMins-endMins>15){setLateModal(true);return;}
-      }else if(todayRota&&todayRota.type==="Full Day (11am–close)"){
-        // Full day ends at 23:00 — if clocking out after 23:15, flag
-        const now=new Date();if(now.getHours()*60+now.getMinutes()>23*60+15){setLateModal(true);return;}
-      }else if(todayRota&&todayRota.type==="Night (5:30pm–close)"){
-        const now=new Date();if(now.getHours()*60+now.getMinutes()>23*60+15){setLateModal(true);return;}
       }
     }
     doClockOut("");
@@ -613,7 +619,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
           <div className="clktime">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div>
           <div className="clkdate">{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div>
           <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:"● Not clocked in"}</div>
-          {clockedIn&&parseFloat(user.shiftRate||0)===0&&parseFloat(user.rate||0)>0&&(
+          {clockedIn&&parseFloat(user.rate||0)>0&&(
             <div style={{margin:"10px 0 0"}}>
               <div style={{fontSize:13,color:"rgba(255,255,255,.7)",marginBottom:6}}>Break time</div>
               <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
@@ -652,6 +658,16 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
           </div>);
         })}
         {lateModal&&<div className="overlay"><div className="sheet"><div className="stitle">⏰ Late Clock-Out</div><div className="ssub2">You're clocking out later than your scheduled end time. Which applies?</div><button className="btn" onClick={()=>doClockOut("forgot")}>🕐 I forgot to clock out earlier</button><button className="btn sec" onClick={()=>doClockOut("overtime")}>⏱ I was working extra time</button><button className="btn sec" onClick={()=>setLateModal(false)}>Cancel</button></div></div>}
+        {checklistModal&&<div className="overlay"><div className="sheet"><div className="stitle">🔒 End-of-Shift Checklist</div><div className="ssub2">Please check all items before clocking out.</div>
+          {CHECKLIST_ITEMS.map(item=><div key={item.key} onClick={()=>setChecklist(p=>({...p,[item.key]:!p[item.key]}))} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 0",borderBottom:"1px solid #F0F0F0",cursor:"pointer"}}>
+            <div style={{width:24,height:24,borderRadius:6,border:`2px solid ${checklist[item.key]?"#E8620A":"#E5E5E5"}`,background:checklist[item.key]?"#E8620A":"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+              {checklist[item.key]&&<span style={{color:"#fff",fontSize:14,fontWeight:900}}>✓</span>}
+            </div>
+            <span style={{fontSize:14,color:checklist[item.key]?"#1A1A2E":"#888"}}>{item.label}</span>
+          </div>)}
+          <button className="btn" style={{marginTop:14,opacity:checklistDone?1:.5}} disabled={!checklistDone} onClick={()=>{setChecklistModal(false);doActualClockOut();}}>Confirm & Clock Out</button>
+          <button className="btn sec" onClick={()=>setChecklistModal(false)}>Cancel</button>
+        </div></div>}
       </div>}
       {tab==="rota"&&<div className="body"><div className="sec">My Rota</div>
         <div style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:11,padding:"10px 13px",marginBottom:12,fontSize:12,color:"#1E40AF",lineHeight:1.7}}>
@@ -888,31 +904,77 @@ function ManagerApp({onLogout}){
     const ex=getExtras(s.id);
     const hasShiftRate=parseFloat(s.shiftRate||0)>0||parseFloat(s.nightRate||0)>0;
     const myRota=rota[s.id]||[];
-    // Shifts: if staff has a shift rate, auto-count from rota (override with manual)
-    const autoFull=myRota.filter(sh=>sh?.type==="Full Day (11am–close)").length;
-    const autoNight=myRota.filter(sh=>sh?.type==="Night (5:30pm–close)").length;
+    const logsInRange=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=weekRange.start&&l.date<=weekRange.end);
+
+    // ── Shift-paid staff ──
+    // Exclude shifts where clock log shows sick_leave for that day
+    const sickDates=new Set(logsInRange.filter(l=>l.note==="sick_leave").map(l=>l.date));
+    const autoFull=myRota.filter(sh=>sh?.type==="Full Day (11am–close)"&&!sickDates.has(sh.date)).length;
+    const autoNight=myRota.filter(sh=>sh?.type==="Night (5:30pm–close)"&&!sickDates.has(sh.date)).length;
     const full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):(hasShiftRate?autoFull:0);
     const night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):(hasShiftRate?autoNight:0);
-    // Hours: if hourly-only staff, auto-sum from clock logs (override with manual)
-    let autoHrs=0;
+
+    // ── Hourly-only staff ──
+    let autoHrs=0;let autoOvertimeHrs=0;let autoOvertimeLabel="";
     if(!hasShiftRate){
-      const logsInRange=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=weekRange.start&&l.date<=weekRange.end);
       const dailyRaw={};
       logsInRange.forEach(l=>{dailyRaw[l.date]=(dailyRaw[l.date]||0)+parseHrs(l.time_in,l.time_out);});
       autoHrs=Object.values(dailyRaw).reduce((a,dayHrs)=>a+roundHrsUp(dayHrs),0);
+      // Overtime: compute scheduled hours from rota, compare to clock hours
+      let scheduledHrs=0;
+      myRota.forEach(sh=>{
+        if(sh.date<weekRange.start||sh.date>weekRange.end)return;
+        if(sh.type==="Full Day (11am–close)")scheduledHrs+=12; // 11:00-23:00
+        else if(sh.type==="Night (5:30pm–close)")scheduledHrs+=5.5; // 17:30-23:00
+        else if(sh.type==="Custom"&&sh.customIn&&sh.customOut){scheduledHrs+=parseHrs(sh.customIn,sh.customOut);}
+      });
+      // Only mark overtime if a clock log note says overtime
+      const overtimeLogs=logsInRange.filter(l=>l.note==="overtime");
+      if(overtimeLogs.length>0&&scheduledHrs>0){
+        const overtimeRaw=Math.max(0,autoHrs-scheduledHrs);
+        autoOvertimeHrs=roundHrs025(overtimeRaw);
+        if(autoOvertimeHrs>0)autoOvertimeLabel=`Overtime: ${autoOvertimeHrs}h`;
+      }
     }
     const hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):autoHrs;
-    // Auto-calculate tips from takings total tips * staff tipsPct — only if ex.tips is blank
+
+    // ── Auto-deduction for shift-paid left_early / late ──
+    // For each shift day where clock log has left_early note, calculate deficit hours
+    let autoDeductions=[...(ex.deductions||[])];
+    if(hasShiftRate){
+      myRota.forEach(sh=>{
+        if(!sh.date||sh.date<weekRange.start||sh.date>weekRange.end)return;
+        const dayLog=logsInRange.find(l=>l.date===sh.date&&l.note==="left_early");
+        if(!dayLog||!dayLog.time_out)return;
+        // Get scheduled end time for this shift
+        let schedEnd=null;
+        if(sh.type==="Full Day (11am–close)")schedEnd="23:00";
+        else if(sh.type==="Night (5:30pm–close)")schedEnd="23:00";
+        else if(sh.type==="Custom"&&sh.customOut)schedEnd=sh.customOut;
+        if(!schedEnd)return;
+        const [eH,eM]=schedEnd.split(":").map(Number);
+        const [oH,oM]=dayLog.time_out.split(":").map(Number);
+        const diffMins=(eH*60+eM)-(oH*60+oM);
+        if(diffMins>0){
+          const dedHrs=roundHrs025(diffMins/60);
+          if(dedHrs>0){
+            const dedLabel=`Left early ${dispDate(sh.date)} (-${dedHrs}h)`;
+            // Only auto-add if not already in deductions
+            if(!autoDeductions.some(d=>d.label===dedLabel)){
+              autoDeductions=[...autoDeductions,{label:dedLabel,amount:String(r2(dedHrs*parseFloat(s.rate||0))),auto:true}];
+            }
+          }
+        }
+      });
+    }
+
     const weekTakings=takings.filter(tk=>tk.date>=weekRange.start&&tk.date<=weekRange.end);
-    const weekTipsCash=weekTakings.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0),0);
-    const weekTipsCard=weekTakings.reduce((a,tk)=>a+parseFloat(tk.tips_card||0),0);
-    const weekTipsTotal=weekTipsCash+weekTipsCard;
+    const weekTipsTotal=weekTakings.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0)+parseFloat(tk.tips_card||0),0);
     const autoTips=r2(weekTipsTotal*parseFloat(s.tipsPct||0)/100);
     const tips=ex.tips!==""&&ex.tips!=null?parseFloat(ex.tips||0):autoTips;
     const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
+    const dedT=autoDeductions.reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const base=hrs*parseFloat(s.rate||0)+full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
-    // Tips are SEPARATE — not included in salary total or in the cash/card split
     const salaryTotal=Math.max(0,base+addT-dedT);
     const cardMode=s.cardMode||"fixed";
     const{cardAmt:calcCard,cashAmt:calcCash,exceeds}=splitCard(cardMode,s.cardFixed,salaryTotal);
@@ -920,7 +982,7 @@ function ManagerApp({onLogout}){
     const salaryFinal=isOverride?parseFloat(ex.manualTotal):salaryTotal;
     const cardAmt=ex.manualCard&&ex.manualCard!==""?parseFloat(ex.manualCard):calcCard;
     const cashAmt=ex.manualCash&&ex.manualCash!==""?parseFloat(ex.manualCash):calcCash;
-    return{full,night,hrs:typeof hrs==="number"?hrs.toFixed(2):hrs,base:base.toFixed(2),tips:tips.toFixed(2),autoTips:autoTips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:salaryFinal.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride,grossTotal:salaryTotal,cardExceeds:!isOverride&&cardMode==="fixed"&&exceeds};
+    return{full,night,hrs:typeof hrs==="number"?hrs.toFixed(2):hrs,base:base.toFixed(2),tips:tips.toFixed(2),autoTips:autoTips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:salaryFinal.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride,grossTotal:salaryTotal,cardExceeds:!isOverride&&cardMode==="fixed"&&exceeds,autoOvertimeHrs,autoOvertimeLabel,sickDays:sickDates.size,autoDeductions};
   }
 
   function calcKitchenPay(k){
@@ -1463,7 +1525,7 @@ function ManagerApp({onLogout}){
 
   async function pushClockLog(date){
     if(!gsConfig.webAppUrl||!gsConfig.clockLogId)return;
-    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Note","Extra Time (hrs)"];
+    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Break (hrs)","Note","Extra Time (hrs)","Override At"];
     const rows=[hdr];
     const dayLogs=clockLogs.filter(l=>l.date===date);
     dayLogs.forEach(l=>{
@@ -1490,8 +1552,9 @@ function ManagerApp({onLogout}){
           extraTime=Math.min(extraTime,2); // cap at 2hrs
         }
       }
-      const noteLabel=l.note==="forgot"?"Forgot to clock out":l.note==="overtime"?"Working extra time":l.note||"";
-      rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",noteLabel,extraTime>0?extraTime:""]);
+      const noteLabel=l.note==="forgot"?"Forgot to clock out":l.note==="overtime"?"Working extra time":l.note==="sick_leave"?"Sick leave":l.note==="left_early"?"Left early/late":l.note?.startsWith("checklist_done")?"✅ End-of-shift checklist done":l.note||"";
+      const overrideLabel=l.override_at?new Date(l.override_at).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
+      rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?extraTime:"",overrideLabel]);
     });
     if(rows.length>1)await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",rows);
   }
@@ -1499,11 +1562,16 @@ function ManagerApp({onLogout}){
   const[lastClockPush,setLastClockPush]=useState(()=>localStorage.getItem("lastClockPush")||"");
   useEffect(()=>{
     if(!gsConfig.clockLogId||!gsConfig.webAppUrl)return;
-    const yesterday=addDays(todayISO(),-1);
-    if(lastClockPush!==yesterday){
-      pushClockLog(yesterday).then(()=>{localStorage.setItem("lastClockPush",yesterday);setLastClockPush(yesterday);});
+    function checkAndPush(){
+      const yesterday=addDays(todayISO(),-1);
+      if(lastClockPush!==yesterday){
+        pushClockLog(yesterday).then(()=>{localStorage.setItem("lastClockPush",yesterday);setLastClockPush(yesterday);});
+      }
     }
-  },[gsConfig.clockLogId]);
+    checkAndPush(); // run on load
+    const interval=setInterval(checkAndPush,60000); // check every minute for midnight cross
+    return()=>clearInterval(interval);
+  },[gsConfig.clockLogId,lastClockPush]);
   function buildRotaText(sId){
     const s=staff.find(x=>x.id===sId);if(!s)return"";
     const days=rota[sId]||[];
@@ -1638,6 +1706,8 @@ function ManagerApp({onLogout}){
             </div>
           </div>
           <div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{(parseFloat(p.hrs||0)*parseFloat(rate||0)).toFixed(2)}</span></div>
+          {!isKitchen&&p.autoOvertimeHrs>0&&<div className="row" style={{background:"#FEF3C7"}}><span>⏱ {p.autoOvertimeLabel}</span><span className="rowb" style={{color:"#78350F"}}>info only</span></div>}
+          {!isKitchen&&p.sickDays>0&&<div className="row" style={{background:"#FEE2E2"}}><span>🤒 Sick days excluded</span><span className="rowb" style={{color:"#7F1D1D"}}>{p.sickDays} shift(s)</span></div>}
           <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,tips:e.target.value}))}/></div>
@@ -2139,9 +2209,21 @@ function ManagerApp({onLogout}){
                 {sLogs.length===0&&<div style={{fontSize:12,color:"#ccc",fontStyle:"italic"}}>No records {clockShowAll?"yet":"for this date"}</div>}
                 {sLogs.map(l=>(
                   <div key={l.id} className="logentry">
-                    <div className="logtop"><span style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(l.date,true)}</span><span style={{fontSize:13,fontWeight:800,color:l.time_out?"#1A1A2E":"#50DC78"}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(2)+"h":"active"}</span></div>
-                    <div className="logedit"><span className="logelbl">In</span><input type="time" className="inp time" value={l.time_in||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v}:x));db.from("clock_logs").update({time_in:v}).eq("id",l.id);}}/><span className="logelbl">Out</span><input type="time" className="inp time" value={l.time_out||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v}:x));db.from("clock_logs").update({time_out:v}).eq("id",l.id);}}/></div>
-                    <select className="lognote" style={{marginBottom:4}} value={l.note||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:v}:x));db.from("clock_logs").update({note:v}).eq("id",l.id);}}>
+                    <div className="logtop">
+                      <span style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(l.date,true)}</span>
+                      <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                        <span style={{fontSize:13,fontWeight:800,color:l.time_out?"#1A1A2E":"#50DC78"}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(2)+"h":"active"}</span>
+                        <button onClick={async()=>{if(!window.confirm(`Delete this entry for ${s.name} on ${dispDate(l.date,true)}?`))return;const{error}=await db.from("clock_logs").delete().eq("id",l.id);if(!error){setClockLogs(p=>p.filter(x=>x.id!==l.id));t("🗑️ Entry deleted");}else t("❌ "+error.message);}} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#E05252",padding:"2px 4px"}}>🗑️</button>
+                      </div>
+                    </div>
+                    {l.override_at&&<div style={{fontSize:10,color:"#aaa",marginBottom:3}}>✏️ Edited by manager {new Date(l.override_at).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>}
+                    <div className="logedit">
+                      <span className="logelbl">In</span>
+                      <input type="time" className="inp time" value={l.time_in||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v}:x));}} onBlur={e=>{const v=e.target.value;const oa=new Date().toISOString();db.from("clock_logs").update({time_in:v,override_at:oa}).eq("id",l.id);setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v,override_at:oa}:x));}}/>
+                      <span className="logelbl">Out</span>
+                      <input type="time" className="inp time" value={l.time_out||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v}:x));}} onBlur={e=>{const v=e.target.value;const oa=new Date().toISOString();db.from("clock_logs").update({time_out:v,override_at:oa}).eq("id",l.id);setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v,override_at:oa}:x));}}/>
+                    </div>
+                    <select className="lognote" style={{marginBottom:4}} value={l.note||""} onChange={e=>{const v=e.target.value;const oa=new Date().toISOString();setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:v,override_at:oa}:x));db.from("clock_logs").update({note:v,override_at:oa}).eq("id",l.id);}}>
                       <option value="">— No note —</option>
                       <option value="forgot">Forgot to clock out</option>
                       <option value="left_early">Left early / came in late</option>
