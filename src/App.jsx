@@ -715,7 +715,8 @@ function ManagerApp({onLogout}){
   const[todayOverride,setTodayOverride]=useState(null);
   const[weekRange,setWeekRange]=useState(()=>payWeekOf(todayISO()));
   const[payrollMonth,setPayrollMonth]=useState(()=>todayISO().slice(0,7));
-  const[clearKey,setClearKey]=useState(0); // incremented after each payroll push to force PayrollCard reset // YYYY-MM
+  const[clearKey,setClearKey]=useState(0);
+  const[kpiWeek,setKpiWeek]=useState(()=>snapToSunday(todayISO())); // incremented after each payroll push to force PayrollCard reset // YYYY-MM
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const[cashPopup,setCashPopup]=useState(false);
   const[pinModal,setPinModal]=useState(false);
@@ -840,7 +841,7 @@ function ManagerApp({onLogout}){
   function staffAssignedDays(staffId){return Object.entries(takingDefaults).filter(([,sid])=>sid===staffId).map(([dow])=>parseInt(dow));}
 
   // ── Payroll extras ──
-  function getExtras(sid){return extras[sid]||{tips:"",additions:[],deductions:[],notes:[],manualFull:"",manualNight:"",manualHrs:"",manualCash:"",manualCard:"",manualTotal:"",extraTime:"",id:null,ws:null};}
+  function getExtras(sid){return extras[sid]||{tips:"",additions:[],deductions:[],notes:[],manualFull:"",manualNight:"",manualHrs:"",manualCash:"",manualCard:"",manualTotal:"",extraTime:"",tipsPaid:false,id:null,ws:null};}
   // State-only update — called from PayrollCard inputs so calcPay recomputes immediately.
   // Does NOT write to DB. DB write only happens in exportPayroll flush.
   function setExtrasState(sid,fn){
@@ -1538,19 +1539,35 @@ function ManagerApp({onLogout}){
     });
   }
 
-  // ── AddDeductRow ──
-  function AddDeductRow({sid,type}){
-    const ex=getExtras(sid);const key=type==="add"?"additions":"deductions";const items=ex[key]||[];const labels=type==="add"?ADD_LBLS:DED_LBLS;
-    const[amount,setAmount]=useState("");const[label,setLabel]=useState(labels[0]);const[custom,setCustom]=useState("");
+  // ── AdjustmentsRow (merged add/deduct) ──
+  function AdjustmentsRow({sid}){
+    const ex=getExtras(sid);
+    const addItems=(ex.additions||[]).map(a=>({...a,signed:parseFloat(a.amount)}));
+    const dedItems=(ex.deductions||[]).map(d=>({...d,signed:-parseFloat(d.amount)}));
+    const allItems=[...addItems,...dedItems];
+    const[amount,setAmount]=useState("");const[reason,setReason]=useState("Bonus");const[custom,setCustom]=useState("");
+    const REASONS=["Bonus","Overpayment correction","Absence deduction","Transport allowance","Meal allowance","Note only (no £ change)","Custom"];
     return(
       <div>
-        {items.map((item,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",borderBottom:"1px dashed #F0F0F0"}}><span style={{fontSize:12,color:"#555"}}>{item.label}: £{item.amount}</span><button onClick={()=>updateExtras(sid,ex=>({...ex,[key]:items.filter((_,j)=>j!==i)}))} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#ccc"}}>✕</button></div>)}
+        {allItems.map((item,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px dashed #F0F0F0"}}>
+          <span style={{fontSize:12,color:"#555"}}>{item.label}{item.signed!==0&&<span style={{fontWeight:700,color:item.signed>0?"#065F46":"#E05252",marginLeft:6}}>{item.signed>0?"+":""}£{Math.abs(item.signed).toFixed(2)}</span>}</span>
+          <button onClick={()=>{
+            if(i<addItems.length)setExtrasState(sid,ex=>({...ex,additions:(ex.additions||[]).filter((_,j)=>j!==i)}));
+            else setExtrasState(sid,ex=>({...ex,deductions:(ex.deductions||[]).filter((_,j)=>j!==i-addItems.length)}));
+          }} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#ccc"}}>✕</button>
+        </div>)}
         <div className="addrow">
-          <select className="addinp" style={{flex:"none",width:"auto",padding:"6px 7px",fontSize:11}} value={label} onChange={e=>setLabel(e.target.value)}>{labels.map(l=><option key={l}>{l}</option>)}</select>
-          <input className="addinp" type="number" min="0" placeholder="£0" value={amount} onChange={e=>setAmount(e.target.value)} style={{width:62}}/>
-          <button className={`addbtn${type==="ded"?" r":""}`} onClick={()=>{if(!amount)return;const fl=label==="Other"&&custom?custom:label;updateExtras(sid,ex=>({...ex,[key]:[...(ex[key]||[]),{label:fl,amount}]}));setAmount("");setCustom("");}}>+ Add</button>
+          <select className="addinp" style={{flex:"none",padding:"6px 7px",fontSize:11}} value={reason} onChange={e=>setReason(e.target.value)}>{REASONS.map(r=><option key={r}>{r}</option>)}</select>
+          {reason!=="Note only (no £ change)"&&<input className="addinp" type="number" placeholder="+ or - £" value={amount} onChange={e=>setAmount(e.target.value)} style={{width:80}}/>}
+          <button className="addbtn" onClick={()=>{
+            const label=reason==="Custom"&&custom?custom:reason;const amt=parseFloat(amount)||0;
+            if(reason==="Note only (no £ change)"){setExtrasState(sid,ex=>({...ex,notes:[...(ex.notes||[]),label]}));}
+            else if(amt>0)setExtrasState(sid,ex=>({...ex,additions:[...(ex.additions||[]),{label,amount:String(amt)}]}));
+            else if(amt<0)setExtrasState(sid,ex=>({...ex,deductions:[...(ex.deductions||[]),{label,amount:String(Math.abs(amt))}]}));
+            setAmount("");setCustom("");
+          }}>+ Add</button>
         </div>
-        {label==="Other"&&<input className="addinp" style={{marginTop:5,width:"100%"}} placeholder="Custom label…" value={custom} onChange={e=>setCustom(e.target.value)}/>}
+        {reason==="Custom"&&<input className="addinp" style={{marginTop:5,width:"100%"}} placeholder="Custom reason…" value={custom} onChange={e=>setCustom(e.target.value)}/>}
       </div>
     );
   }
@@ -1602,8 +1619,7 @@ function ManagerApp({onLogout}){
           <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,tips:e.target.value}))}/></div>
-          <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#50DC78",marginBottom:4}}>ADDITIONS</div><AddDeductRow sid={sid} type="add"/></div>
-          <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#E05252",marginBottom:4}}>DEDUCTIONS</div><AddDeductRow sid={sid} type="ded"/></div>
+          <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS <span style={{fontWeight:400}}>(+ add / - deduct / note only)</span></div><AdjustmentsRow sid={sid}/></div>
           {/* Notes */}
           <div style={{marginTop:8}}>
             <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>NOTES</div>
@@ -2108,12 +2124,79 @@ function ManagerApp({onLogout}){
                   <div key={l.id} className="logentry">
                     <div className="logtop"><span style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(l.date,true)}</span><span style={{fontSize:13,fontWeight:800,color:l.time_out?"#1A1A2E":"#50DC78"}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(2)+"h":"active"}</span></div>
                     <div className="logedit"><span className="logelbl">In</span><input type="time" className="inp time" value={l.time_in||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v}:x));db.from("clock_logs").update({time_in:v}).eq("id",l.id);}}/><span className="logelbl">Out</span><input type="time" className="inp time" value={l.time_out||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v}:x));db.from("clock_logs").update({time_out:v}).eq("id",l.id);}}/></div>
-                    <textarea className="lognote" rows={2} placeholder="Note…" value={l.note||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:v}:x));db.from("clock_logs").update({note:v}).eq("id",l.id);}}/>
+                    <select className="lognote" style={{marginBottom:4}} value={l.note||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:v}:x));db.from("clock_logs").update({note:v}).eq("id",l.id);}}>
+                      <option value="">— No note —</option>
+                      <option value="forgot">Forgot to clock out</option>
+                      <option value="left_early">Left early / came in late</option>
+                      <option value="overtime">Working extra time</option>
+                      <option value="sick_leave">Sick leave (full shift)</option>
+                      <option value="back-stamped">Back-stamped (forgot to clock in)</option>
+                      <option value="custom">Custom…</option>
+                    </select>
+                    {l.note==="custom"&&<textarea className="lognote" rows={1} placeholder="Custom note…" value={l.customNote||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,customNote:v}:x));db.from("clock_logs").update({note:"custom:"+v}).eq("id",l.id);}}/> }
                   </div>
                 ))}
                 <button className="btn sm" style={{marginTop:9,background:"#E8620A"}} onClick={async()=>{const dateForEntry=clockShowAll?todayISO():clockDate;const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:""}).select().single();if(!error)setClockLogs(p=>[data,...p]);else t("❌ "+error.message);}}>+ Add Entry {clockShowAll?"":`for ${dispDate(clockDate)}`}</button>
               </div>
             );})}
+
+            {/* ── Weekly Clock Summary ── */}
+            <div style={{marginTop:16}}>
+              <div className="sec">📊 Weekly Clock Summary</div>
+              <div style={{fontSize:12,color:"#888",marginBottom:10}}>Week of {fmtDate(snapToSunday(clockDate))} – {fmtDate(addDays(snapToSunday(clockDate),6))}</div>
+              {staff.map(s=>{
+                const ws=snapToSunday(clockDate);const we=addDays(ws,6);
+                const sLogs=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=ws&&l.date<=we);
+                const hasOvertime=sLogs.some(l=>l.note==="overtime");
+                const hasSick=sLogs.some(l=>l.note==="sick_leave");
+                const hasLate=sLogs.some(l=>{
+                  const dayRota=(rota[s.id]||[]).find(d=>d.date===l.date);
+                  if(!dayRota||!dayRota.customIn)return false;
+                  const[sH,sM]=dayRota.customIn.split(":").map(Number);
+                  const[lH,lM]=(l.time_in||"00:00").split(":").map(Number);
+                  return(lH*60+lM)-(sH*60+sM)>10;
+                });
+                const hasFlag=hasOvertime||hasSick||hasLate;
+                const dailyRaw={};
+                sLogs.forEach(l=>{dailyRaw[l.date]=(dailyRaw[l.date]||0)+parseHrs(l.time_in,l.time_out);});
+                const clockHrs=r2(Object.values(dailyRaw).reduce((a,h)=>a+roundHrsUp(h),0));
+                const autoFull=(rota[s.id]||[]).filter(sh=>sh?.type==="Full Day (11am–close)"&&sh.date>=ws&&sh.date<=we).length;
+                const autoNight=(rota[s.id]||[]).filter(sh=>sh?.type==="Night (5:30pm–close)"&&sh.date>=ws&&sh.date<=we).length;
+                const dots=[-3,-2,-1,0].map(wOffset=>{
+                  const w=addDays(ws,wOffset*7);const wE=addDays(w,6);
+                  const wLogs=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=w&&l.date<=wE);
+                  if(!wLogs.length)return"⬜";
+                  const anyLate=wLogs.some(l=>{const dr=(rota[s.id]||[]).find(d=>d.date===l.date);if(!dr||!dr.customIn)return false;const[sh,sm]=dr.customIn.split(":").map(Number);const[lh,lm]=(l.time_in||"00:00").split(":").map(Number);return(lh*60+lm)-(sh*60+sm)>20;});
+                  const slight=wLogs.some(l=>{const dr=(rota[s.id]||[]).find(d=>d.date===l.date);if(!dr||!dr.customIn)return false;const[sh,sm]=dr.customIn.split(":").map(Number);const[lh,lm]=(l.time_in||"00:00").split(":").map(Number);const d=(lh*60+lm)-(sh*60+sm);return d>10&&d<=20;});
+                  return anyLate?"🔴":slight?"🟡":"🟢";
+                });
+                return(
+                  <div key={s.id} style={{background:"#FFF5EF",borderRadius:12,padding:"11px 13px",marginBottom:8}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                      <div style={{fontSize:14,fontWeight:800,color:"#1A1A2E"}}>{s.name}{hasFlag&&" ⚠️"}</div>
+                      <div style={{fontSize:12}}>{dots.join(" ")}</div>
+                    </div>
+                    <div style={{fontSize:12,color:"#555",marginBottom:6}}>
+                      {hasOvertime&&<span style={{background:"#FEF3C7",color:"#78350F",padding:"2px 7px",borderRadius:20,marginRight:5,fontSize:11}}>Overtime</span>}
+                      {hasSick&&<span style={{background:"#FEE2E2",color:"#7F1D1D",padding:"2px 7px",borderRadius:20,marginRight:5,fontSize:11}}>Sick</span>}
+                      {hasLate&&<span style={{background:"#FEE2E2",color:"#7F1D1D",padding:"2px 7px",borderRadius:20,fontSize:11}}>Late</span>}
+                    </div>
+                    <div style={{fontSize:12,color:"#888",marginBottom:8}}>Clock hours: <strong>{clockHrs}h</strong>{autoFull>0&&<span> · Rota: <strong>{autoFull}F {autoNight}N shifts</strong></span>}</div>
+                    <button className="btn sm" style={{background:"#E8620A",color:"#fff"}} onClick={()=>{
+                      const hasShiftRate=parseFloat(s.shiftRate||0)>0;
+                      setExtras(p=>{
+                        const ex=p[s.id]||getExtras(s.id);
+                        const updated={...ex};
+                        if(!hasShiftRate){if(!ex.manualHrs||ex.manualHrs==="")updated.manualHrs=String(clockHrs);}
+                        else{if(!ex.manualFull||ex.manualFull==="")updated.manualFull=String(autoFull);if(!ex.manualNight||ex.manualNight==="")updated.manualNight=String(autoNight);}
+                        return{...p,[s.id]:updated};
+                      });
+                      t(`✅ ${s.name.split(" ")[0]} authorised → check payroll card`);
+                    }}>✓ Authorise → Payroll</button>
+                  </div>
+                );
+              })}
+            </div>
           </>
         )}
 
@@ -2157,6 +2240,10 @@ function ManagerApp({onLogout}){
               <div className="psumrow"><span>💳 Total Card</span><span className="psumamt">£{totCard}</span></div>
               <div className="psumrow"><span>💳 FH Tips (card)</span><span className="psumamt">£{payTotals().fhTips}</span></div>
               <div className="psumrow"><span>Grand Total (salary)</span><span className="psumamt">£{totGross}</span></div>
+              <div className="psumrow" style={{borderTop:"1px dashed #ddd",paddingTop:8,marginTop:4}}>
+                <span>✅ Tips physically paid out?</span>
+                <input type="checkbox" style={{width:20,height:20,cursor:"pointer"}} checked={!!(getExtras("__tipsPaid__"+weekRange.start).tipsPaid)} onChange={e=>setExtrasState("__tipsPaid__"+weekRange.start,ex=>({...ex,tipsPaid:e.target.checked}))}/>
+              </div>
             </div>
             <div className="expsec">
               <div className="exptitle">📤 Export Payroll</div>
@@ -2236,10 +2323,7 @@ function ManagerApp({onLogout}){
       {shareModal&&<div className="overlay" onClick={()=>setShareModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">📤 Share Rota</div><div className="ssub2">{staff.find(s=>s.id===shareModal)?.name}</div><textarea className="lognote" rows={12} readOnly style={{fontFamily:"monospace",fontSize:12,background:"#FFF5EF"}} value={buildRotaText(shareModal)}/><button className="btn" style={{marginTop:12}} onClick={()=>{navigator.clipboard.writeText(buildRotaText(shareModal)).then(()=>t("📋 Copied!"));setShareModal(null);}}>📋 Copy</button><button className="btn sec" onClick={()=>setShareModal(null)}>Close</button></div></div>}
         {/* ══ KPI ══ */}
         {tab==="kpi"&&(()=>{
-          const[kpiWeek,setKpiWeek]=React.useState(()=>snapToSunday(todayISO()));
-          // Build last 8 weeks for trend
-          const weeks=[];for(let i=7;i>=0;i--){const s=snapToSunday(addDays(todayISO(),-i*7));weeks.push(s);}
-          // For each week compute KPIs
+          // kpiWeek and setKpiWeek are defined at ManagerApp top level
           function weekKPI(ws){
             const we=addDays(ws,6);
             const wTakings=takings.filter(t=>t.date>=ws&&t.date<=we);
@@ -2252,6 +2336,7 @@ function ManagerApp({onLogout}){
             const wTips=wTakings.reduce((a,t)=>a+parseFloat(t.tips_cash||0)+parseFloat(t.tips_card||0),0);
             return{ws,we,totalTakings:r2(totalTakings),totalWages:r2(totalWages),labourPct,wTips:r2(wTips)};
           }
+          const weeks=[];for(let i=7;i>=0;i--){const s=snapToSunday(addDays(todayISO(),-i*7));weeks.push(s);}
           const trend=weeks.map(weekKPI);
           const selected=weekKPI(kpiWeek);
           const alerts=getWeekAlerts(kpiWeek);
@@ -2598,7 +2683,7 @@ export default function App(){
   useEffect(()=>{
     if(screen==="staffLogin"){
       setLoadingStaff(true);
-      db.from("staff").select("id,name,code").order("name").then(({data})=>{setAllStaff(data||[]);setLoadingStaff(false);});
+      db.from("staff").select("id,name,code,rate,shift_rate,night_rate,card_mode,card_fixed,tips_pct").order("name").then(({data})=>{setAllStaff((data||[]).map(s=>({...s,rate:s.rate||"0",shiftRate:s.shift_rate||"0",nightRate:s.night_rate||"0",cardMode:s.card_mode||"fixed",cardFixed:s.card_fixed||"0",tipsPct:s.tips_pct||"0"})));setLoadingStaff(false);});
     }
   },[screen]);
 
