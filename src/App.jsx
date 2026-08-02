@@ -442,6 +442,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[showTour,setShowTour]=useState(false);
   const[tourStep,setTourStep]=useState(0);
   const[tourDone,setTourDone]=useState(false);
+  const[tourMode,setTourMode]=useState("general"); // "general" | "takings"
   const[clockedIn,setClockedIn]=useState(false);const[clockInTime,setClockInTime]=useState(null);
   const[breakTime,setBreakTime]=useState("0");
   const[lateModal,setLateModal]=useState(false);
@@ -490,8 +491,10 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   }
   async function loadRota(){
     const dates=weekDates(rotaMon);
-    const{data}=await db.from("rota").select("*").eq("staff_id",user.id).eq("week_start",rotaMon);
-    setRota(dates.map(dateISO=>{const jsDay=new Date(dateISO+"T12:00:00").getDay();const row=(data||[]).find(r=>r.day_index===jsDay);return{date:dateISO,jsDay,type:row?.shift_type||"Off",customIn:row?.custom_in||"",customOut:row?.custom_out||""};}));
+    // Query both Sunday-based (new) and Monday-based (old) week_start for backward compatibility
+    const monStart=addDays(rotaMon,1); // Monday of the same week
+    const{data}=await db.from("rota").select("*").eq("staff_id",user.id).in("week_start",[rotaMon,monStart]);
+    setRota(dates.map(dateISO=>{const jsDay=new Date(dateISO+"T12:00:00").getDay();const row=(data||[]).find(r=>r.day_index===jsDay);return{date:dateISO,jsDay,type:row?.shift_type||"Off",customIn:row?.custom_in||"",customOut:row?.custom_out||"",rowId:row?.id};}));
   }
   async function clockIn(){
     // Once-per-day restriction
@@ -601,7 +604,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   return(
     <div className="app">
       <Toast msg={msg}/>
-      <div className="hdr"><div><div className="hdr-greet">Good {now.getHours()<12?"morning":now.getHours()<18?"afternoon":"evening"},</div><div className="hdr-name">{user.name.split(" ")[0]} 👋</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{background:"#FFF5EF",border:"1.5px solid #E8620A",borderRadius:"50%",width:32,height:32,fontSize:14,cursor:"pointer",fontWeight:800,color:"#E8620A"}} onClick={()=>{setTourStep(0);setShowTour(true);}}>?</button><button style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}} onClick={onLogout}>🚪</button></div></div>
+      <div className="hdr"><div><div className="hdr-greet">Good {now.getHours()<12?"morning":now.getHours()<18?"afternoon":"evening"},</div><div className="hdr-name">{user.name.split(" ")[0]} 👋</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{background:"#FFF5EF",border:"1.5px solid #E8620A",borderRadius:"50%",width:32,height:32,fontSize:14,cursor:"pointer",fontWeight:800,color:"#E8620A"}} onClick={()=>{setTourMode("general");setTourStep(0);setShowTour(true);}}>?</button><button style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}} onClick={onLogout}>🚪</button></div></div>
       {tab==="home"&&<div className="body">
         {/* Welcome message banner */}
         {user.welcomeMsg&&<div style={{background:"linear-gradient(135deg,#E8620A,#FF8C42)",borderRadius:14,padding:"14px 16px",marginBottom:14,color:"#fff"}}>
@@ -728,11 +731,15 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
       </div>}
       {tab==="rota"&&<div className="body"><div className="sec">My Rota</div>
         <div style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:11,padding:"10px 13px",marginBottom:12,fontSize:12,color:"#1E40AF",lineHeight:1.7}}>
-          📅 <strong>Check your rota every Wednesday</strong> and accept or reject by <strong>Friday</strong>. Also report any absences for next week by Wednesday. For any emergency, contact the manager directly.
+          📅 <strong>Check your rota every Wednesday</strong> and accept or reject by <strong>Friday</strong>. Also don't forget to report any absence or block the days you cannot work. For any emergency, contact the manager directly.
         </div>
         <div className="wnav"><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button><div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button></div><RotaList/></div>}
       {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={todayISO()} onChange={e=>setAbsDate(e.target.value)}/>{absBeforeNextWed&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Too soon to report online</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is before the next rota is assigned (Wednesday {fmtDate(nextWed)}). Please <strong>call the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod||absBeforeNextWed}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</>}</div>}
-      {tab==="takings"&&<div className="body"><div className="sec">📊 Daily Takings</div>
+      {tab==="takings"&&<div className="body">
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+          <div className="sec" style={{margin:0}}>📊 Daily Takings</div>
+          <button style={{background:"#FFF5EF",border:"1.5px solid #E8620A",borderRadius:"50%",width:28,height:28,fontSize:12,cursor:"pointer",fontWeight:800,color:"#E8620A"}} onClick={()=>{setTourMode("takings");setTourStep(0);setShowTour(true);}}>?</button>
+        </div>
         {!assigned?<div className="empty"><div className="emptyicon">🔒</div><div className="emptytxt">Not assigned today</div></div>
         :submitted&&!showCorrect?(
           <div>
@@ -764,15 +771,23 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
       <div className="bnav">{navItems.map(n=><button key={n.id} className={`nbtn${tab===n.id?" on":""}`} onClick={()=>setTab(n.id)}>{n.badge&&<span className="nbadge">!</span>}<span className="ni">{n.icon}</span><span className="nl">{n.label}</span></button>)}</div>
       <div style={{textAlign:"center",fontSize:11,color:"#bbb",padding:"3px 0 2px"}}>💡 Tap <strong style={{color:"#E8620A"}}>?</strong> in the header for a quick guide</div>
       {showTour&&(()=>{
-        const TOUR_STEPS=[
+        const TOUR_STEPS_GENERAL=[
           {title:"👋 Welcome to Ming's Staff App!",body:"This app lets you clock in/out, view your rota, report absences, and submit takings. Let's take a quick tour so you know how everything works.",icon:"🏠"},
           {title:"⏰ Clock In & Out",body:"Tap the ⏰ Clock tab to clock in when you arrive and clock out when you leave. If you're paid hourly, select your break time before clocking out. You'll get a prompt if you're clocking out late or early.",icon:"⏰"},
-          {title:"📋 Rota — Confirm Your Shifts",body:"Check the 📋 Rota tab every Wednesday. Tap ✓ OK to accept a shift or ✕ Can't if you can't work. You must confirm your shift before you can clock in. Accept/reject by Friday.",icon:"📋"},
+          {title:"📋 Rota — Confirm Your Shifts",body:"Check the 📋 Rota tab every Wednesday. Tap ✓ OK to accept a shift or ✕ Can't if you can't work. You must confirm your shift before you can clock in. Accept/reject by Friday.\n\nAlso don't forget to report any absence or block the days you cannot work.",icon:"📋"},
           {title:"📅 Reporting Absence",body:"Tap the 📅 Absence tab to report an absence. Important: absences before next Wednesday must be reported by calling the manager directly — the app can only be used for future dates.",icon:"📅"},
-          {title:"📊 Takings",body:"If you're the designated takings person today, you'll see a notification on your Home tab. Complete the takings form before clocking out — you won't be able to clock out until it's done.",icon:"📊"},
+          {title:"📊 Takings",body:"If you're the designated takings person today, you'll see a notification on your Home tab. Complete the takings form before clocking out — you won't be able to clock out until it's done.\n\nTap ? on the Takings tab for a detailed takings guide.",icon:"📊"},
           {title:"📱 Save to Your Home Screen",body:"You can access this app anytime like a regular app — no app store needed!\n\n📱 iPhone (Safari):\n1. Tap the Share button (□↑) at the bottom\n2. Scroll down and tap 'Add to Home Screen'\n3. Tap 'Add' — done!\n\n🤖 Android (Chrome):\n1. Tap the three dots (⋮) menu at top right\n2. Tap 'Add to Home screen'\n3. Tap 'Add' — done!",icon:"📱"},
           {title:"✅ You're all set!",body:"You've completed the tour. Tap the ? button in the header anytime to see this guide again.\n\nTap 'I understand — let's go!' to confirm you've read this guide.",icon:"🎉",final:true},
         ];
+        const TOUR_STEPS_TAKINGS=[
+          {title:"📊 Takings Guide",body:"This guide walks you through completing today's takings. You only see this tab if the manager has assigned you as today's takings person.",icon:"📊"},
+          {title:"📝 Step 1 — Fill in the amounts",body:"Enter the amount for each channel: Deliveroo, Uber Eats, Cash, Card, and Online.\n\nFor Deposit Receipt and Voucher Purchase, also select whether it was paid in cash or by card.\n\nTips Cash and Tips Card are informational only — enter them if received.",icon:"💵"},
+          {title:"✅ Step 2 — Submit",body:"Once all fields are filled, tap Submit. You can only submit once. If you made a mistake, you can submit a correction — but only one correction is allowed.\n\nYou cannot clock out until takings are submitted.",icon:"✅"},
+          {title:"🔒 Step 3 — End-of-shift checklist",body:"When you clock out, a checklist will appear. Tick all items before confirming:\n\n• Heating/AC/lights off\n• Asahi light off\n• Stock room locked\n• Money box locked\n• Back door locked\n• Front door double locked",icon:"🔒"},
+          {title:"📊 Takings — all done!",body:"That's everything for takings. If you have any questions or the amounts look wrong, contact the manager before submitting.",icon:"🎉",final:true},
+        ];
+        const TOUR_STEPS=tourMode==="takings"?TOUR_STEPS_TAKINGS:TOUR_STEPS_GENERAL;
         const step=TOUR_STEPS[tourStep];
         const isLast=tourStep===TOUR_STEPS.length-1;
         return(
@@ -907,7 +922,8 @@ function ManagerApp({onLogout}){
 
   async function loadRota(){
     if(!staff.length)return;
-    const{data}=await db.from("rota").select("*").eq("week_start",rotaMon);
+    const monStart=addDays(rotaMon,1);
+    const{data}=await db.from("rota").select("*").in("week_start",[rotaMon,monStart]);
     const rm={};
     staff.forEach(s=>{rm[s.id]=weekDates(rotaMon).map(dateISO=>{const jsDay=new Date(dateISO+"T12:00:00").getDay();const row=(data||[]).find(r=>r.staff_id===s.id&&r.day_index===jsDay);return{date:dateISO,jsDay,type:row?.shift_type||"Off",customIn:row?.custom_in||"",customOut:row?.custom_out||"",rowId:row?.id};});});
     setRota(rm);
