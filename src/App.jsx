@@ -504,7 +504,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     const todayRota=rota.find(sh=>sh.date===todayISO());
     if(todayRota&&todayRota.type!=="Off"){
       const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
-      const currentWeekSun=snapToSunday(todayISO());const todayWeekKey=todayDayName+"|"+currentWeekSun;const isConfirmed=confirmations.some(r=>r.day===todayWeekKey||r.day===todayDayName);
+      const currentWeekSun=snapToSunday(todayISO());const todayWeekKey=todayDayName+"|"+currentWeekSun;const isConfirmed=confirmations.some(r=>r.day===todayWeekKey);
       if(!isConfirmed)return t("⚠️ Please confirm your rota shift first (Rota tab → ✓ OK).");
     }
     const time=nowTime();
@@ -584,8 +584,27 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   }
   const nextWed=nextWednesday();
   const absBeforeNextWed=absDate&&absDate<nextWed;
-  async function confirmShift(idx){const weekKey=DAYS_MON[idx]+"|"+rotaMon;const{data,error}=await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:weekKey}).select().single();if(!error){setConfirmations(p=>[...p,data]);t("✅ Confirmed!");}else t("❌ "+error.message);}
-  async function rejectShift(){const weekKey=DAYS_MON[rejectModal]+"|"+rotaMon;const{data,error}=await db.from("rejections").insert({staff_id:user.id,staff_name:user.name,day:weekKey,reason:rejectReason}).select().single();if(!error){setRejections(p=>[...p,data]);setRejectModal(null);t("Rejection sent");}else t("❌ "+error.message);}
+  async function confirmShift(idx){
+    const weekKey=DAYS_MON[idx]+"|"+rotaMon;
+    // Optimistic update immediately so UI responds on first tap
+    const optimistic={id:"opt_"+Date.now(),staff_id:user.id,staff_name:user.name,day:weekKey};
+    setConfirmations(p=>[...p.filter(r=>r.day!==weekKey),optimistic]);
+    // Upsert to DB (handles duplicates gracefully)
+    const{error}=await db.from("confirmations").upsert({staff_id:user.id,staff_name:user.name,day:weekKey},{onConflict:"staff_id,day"});
+    if(error){
+      // Fallback: plain insert if upsert fails (no unique constraint)
+      await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:weekKey});
+    }
+    t("✅ Shift confirmed!");
+  }
+  async function rejectShift(){
+    const weekKey=DAYS_MON[rejectModal]+"|"+rotaMon;
+    const optimistic={id:"opt_"+Date.now(),staff_id:user.id,staff_name:user.name,day:weekKey,reason:rejectReason};
+    setRejections(p=>[...p.filter(r=>r.day!==weekKey),optimistic]);
+    setRejectModal(null);
+    await db.from("rejections").insert({staff_id:user.id,staff_name:user.name,day:weekKey,reason:rejectReason});
+    t("Rejection sent");
+  }
   async function submitTakings(){const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(tVals[f.key]||0);if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});const{error}=await db.from("takings").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),...vals,note:tNote,is_new:true,is_corrected:false});if(!error){setTVals({});setTCC({});setTNote("");setSubmitted(true);t("📊 Submitted!");setTab("home");}else t("❌ "+error.message);}
   async function correctTakings(){
     const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(tVals[f.key]||0);if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});
@@ -598,7 +617,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
 
   if(loading)return<Loading text="Loading your data…"/>;
 
-  function RotaList(){return rota.map((sh,idx)=>{const isToday=sh.date===todayISO();const dayName=DAYS_MON[idx];const weekKey=dayName+"|"+rotaMon;const rejected=rejections.some(r=>r.day===weekKey||r.day===dayName);const confirmed=confirmations.some(r=>r.day===weekKey||r.day===dayName);const isOff=sh.type==="Off";return(<div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}`}><div className="rdaylbl"><div className="rdayname">{dayName}</div><div className="rdaydate">{dispDate(sh.date)}</div>{isToday&&<div className="rdayflag">TODAY</div>}</div><div className="rdayshift">{shiftLabel(sh)}</div>{!isOff&&!rejected&&!confirmed&&<div className="rdaybtns"><button className="okbtn" onClick={()=>confirmShift(idx)}>✓ OK</button><button className="nobtn" onClick={()=>{setRejectModal(idx);setRejectReason("");}}>✕ Can't</button></div>}{confirmed&&<span className="chip g">✓ OK</span>}{rejected&&!isOff&&<span className="chip r">Rejected</span>}</div>);});}
+  function RotaList(){return rota.map((sh,idx)=>{const isToday=sh.date===todayISO();const dayName=DAYS_MON[idx];const weekKey=dayName+"|"+rotaMon;const rejected=rejections.some(r=>r.day===weekKey||r.day===dayName);const confirmed=confirmations.some(r=>r.day===weekKey);const isOff=sh.type==="Off";return(<div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}`}><div className="rdaylbl"><div className="rdayname">{dayName}</div><div className="rdaydate">{dispDate(sh.date)}</div>{isToday&&<div className="rdayflag">TODAY</div>}</div><div className="rdayshift">{shiftLabel(sh)}</div>{!isOff&&!rejected&&!confirmed&&<div className="rdaybtns"><button className="okbtn" onClick={()=>confirmShift(idx)}>✓ OK</button><button className="nobtn" onClick={()=>{setRejectModal(idx);setRejectReason("");}}>✕ Can't</button></div>}{confirmed&&<span className="chip g">✓ OK</span>}{rejected&&!isOff&&<span className="chip r">Rejected</span>}</div>);});}
 
   const navItems=[{id:"home",icon:"🏠",label:"Home"},{id:"clock",icon:"⏰",label:"Clock"},{id:"rota",icon:"📋",label:"Rota"},{id:"absence",icon:"📅",label:"Absence"},...(assigned?[{id:"takings",icon:"📊",label:"Takings",badge:!submitted}]:[])];
   return(
