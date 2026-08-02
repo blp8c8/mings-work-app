@@ -189,7 +189,7 @@ const parseHrs  = (i,o) => { if(!i||!o)return 0; const p=t=>{const[h,m]=t.split(
 const roundHrsUp = hrs => hrs<=0?0:Math.ceil(hrs*4-1e-9)/4;
 // Nearest 0.25hr rounding (for overtime/early-leave): 37min→0.5h, 43min→0.75h
 const roundHrs025 = hrs => hrs<=0?0:Math.round(hrs*4)/4;
-const jsToMon   = d => d===0?6:d-1;
+const jsToMon   = d => d; // DAYS_MON is Sun-based ["Sun","Mon",...,"Sat"] so jsDay IS the direct index
 const weekDates = monISO => Array.from({length:7},(_,i)=>addDays(monISO,i));
 const kId       = id => `k_${id}`; // kitchen staff key prefix for payroll_extras
 
@@ -1415,7 +1415,15 @@ function ManagerApp({onLogout}){
       try{
         const flushOps=Object.entries(extras).map(([sid,ex])=>{
           const payload={staff_id:sid,week_start:ws,tips:ex.tips||"0",additions:ex.additions||[],deductions:ex.deductions||[],notes:ex.notes||[],manual_full:ex.manualFull||null,manual_night:ex.manualNight||null,manual_hrs:ex.manualHrs||null,manual_cash:ex.manualCash||null,manual_card:ex.manualCard||null,manual_total:ex.manualTotal||null,extra_time:ex.extraTime||null};
-          return db.from("payroll_extras").upsert(payload,{onConflict:"staff_id,week_start"});
+          // Try with extra_time; if column missing, retry without it
+          return db.from("payroll_extras").upsert(payload,{onConflict:"staff_id,week_start"})
+            .then(r=>{
+              if(r.error&&(r.error.message?.includes("extra_time")||r.error.code==="42703")){
+                const{extra_time,...payloadNoET}=payload;
+                return db.from("payroll_extras").upsert(payloadNoET,{onConflict:"staff_id,week_start"});
+              }
+              return r;
+            });
         });
         const results=await Promise.all(flushOps);
         const errs=results.filter(r=>r.error).map(r=>r.error.message);
@@ -1801,6 +1809,7 @@ function ManagerApp({onLogout}){
           <div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{(parseFloat(p.hrs||0)*parseFloat(rate||0)).toFixed(2)}</span></div>
           {!isKitchen&&p.autoOvertimeHrs>0&&<div className="row" style={{background:"#FEF3C7"}}><span>⏱ {p.autoOvertimeLabel}</span><span className="rowb" style={{color:"#78350F"}}>info only</span></div>}
           {!isKitchen&&p.sickDays>0&&<div className="row" style={{background:"#FEE2E2"}}><span>🤒 Sick days excluded</span><span className="rowb" style={{color:"#7F1D1D"}}>{p.sickDays} shift(s)</span></div>}
+          {p.autoDeductions&&p.autoDeductions.filter(d=>d.auto).map((d,i)=><div key={"ad"+i} className="row" style={{background:"#FEE2E2"}}><span style={{fontSize:11}}>📉 {d.label}</span><span className="rowb" style={{color:"#7F1D1D"}}>-£{parseFloat(d.amount).toFixed(2)}</span></div>)}
           <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,tips:e.target.value}))}/></div>
@@ -2216,7 +2225,7 @@ function ManagerApp({onLogout}){
               // Set that shift to Off in the rota
               const dayIdx=DAYS_MON.indexOf(r.day);
               if(dayIdx>=0){
-                const jsDay=dayIdx===6?0:dayIdx+1;
+                const jsDay=dayIdx; // DAYS_MON is Sun-based, indexOf directly = jsDay (0=Sun,1=Mon,...,6=Sat)
                 const rotaEntry=(rota[r.staff_id]||[]).find(d=>d.jsDay===jsDay);
                 if(rotaEntry&&rotaEntry.rowId){
                   await db.from("rota").update({shift_type:"Off"}).eq("id",rotaEntry.rowId);
@@ -2428,10 +2437,6 @@ function ManagerApp({onLogout}){
               <div className="psumrow"><span>💳 Total Card</span><span className="psumamt">£{totCard}</span></div>
               <div className="psumrow"><span>💳 FH Tips (card)</span><span className="psumamt">£{payTotals().fhTips}</span></div>
               <div className="psumrow"><span>Grand Total (salary)</span><span className="psumamt">£{totGross}</span></div>
-              <div className="psumrow" style={{borderTop:"1px dashed #ddd",paddingTop:8,marginTop:4}}>
-                <span>✅ Tips physically paid out?</span>
-                <input type="checkbox" style={{width:20,height:20,cursor:"pointer"}} checked={!!(getExtras("__tipsPaid__"+weekRange.start).tipsPaid)} onChange={e=>setExtrasState("__tipsPaid__"+weekRange.start,ex=>({...ex,tipsPaid:e.target.checked}))}/>
-              </div>
             </div>
             <div className="expsec">
               <div className="exptitle">📤 Export Payroll</div>
