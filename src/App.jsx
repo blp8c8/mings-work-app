@@ -502,7 +502,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     const todayRota=rota.find(sh=>sh.date===todayISO());
     if(todayRota&&todayRota.type!=="Off"){
       const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
-      const isConfirmed=confirmations.some(r=>r.day===todayDayName);
+      const todayWeekKey=todayDayName+"|"+rotaMon;const isConfirmed=confirmations.some(r=>r.day===todayWeekKey);
       if(!isConfirmed)return t("⚠️ Please confirm your rota shift first (Rota tab → ✓ OK).");
     }
     const time=nowTime();
@@ -582,8 +582,8 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   }
   const nextWed=nextWednesday();
   const absBeforeNextWed=absDate&&absDate<nextWed;
-  async function confirmShift(idx){const{data,error}=await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:DAYS_MON[idx]}).select().single();if(!error){setConfirmations(p=>[...p,data]);t("✅ Confirmed!");}else t("❌ "+error.message);}
-  async function rejectShift(){const{data,error}=await db.from("rejections").insert({staff_id:user.id,staff_name:user.name,day:DAYS_MON[rejectModal],reason:rejectReason}).select().single();if(!error){setRejections(p=>[...p,data]);setRejectModal(null);t("Rejection sent");}else t("❌ "+error.message);}
+  async function confirmShift(idx){const weekKey=DAYS_MON[idx]+"|"+rotaMon;const{data,error}=await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:weekKey}).select().single();if(!error){setConfirmations(p=>[...p,data]);t("✅ Confirmed!");}else t("❌ "+error.message);}
+  async function rejectShift(){const weekKey=DAYS_MON[rejectModal]+"|"+rotaMon;const{data,error}=await db.from("rejections").insert({staff_id:user.id,staff_name:user.name,day:weekKey,reason:rejectReason}).select().single();if(!error){setRejections(p=>[...p,data]);setRejectModal(null);t("Rejection sent");}else t("❌ "+error.message);}
   async function submitTakings(){const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(tVals[f.key]||0);if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});const{error}=await db.from("takings").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),...vals,note:tNote,is_new:true,is_corrected:false});if(!error){setTVals({});setTCC({});setTNote("");setSubmitted(true);t("📊 Submitted!");setTab("home");}else t("❌ "+error.message);}
   async function correctTakings(){
     const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(tVals[f.key]||0);if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});
@@ -596,7 +596,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
 
   if(loading)return<Loading text="Loading your data…"/>;
 
-  function RotaList(){return rota.map((sh,idx)=>{const isToday=sh.date===todayISO();const dayName=DAYS_MON[idx];const rejected=rejections.some(r=>r.day===dayName);const confirmed=confirmations.some(r=>r.day===dayName);const isOff=sh.type==="Off";return(<div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}`}><div className="rdaylbl"><div className="rdayname">{dayName}</div><div className="rdaydate">{dispDate(sh.date)}</div>{isToday&&<div className="rdayflag">TODAY</div>}</div><div className="rdayshift">{shiftLabel(sh)}</div>{!isOff&&!rejected&&!confirmed&&<div className="rdaybtns"><button className="okbtn" onClick={()=>confirmShift(idx)}>✓ OK</button><button className="nobtn" onClick={()=>{setRejectModal(idx);setRejectReason("");}}>✕ Can't</button></div>}{confirmed&&<span className="chip g">✓ OK</span>}{rejected&&!isOff&&<span className="chip r">Rejected</span>}</div>);});}
+  function RotaList(){return rota.map((sh,idx)=>{const isToday=sh.date===todayISO();const dayName=DAYS_MON[idx];const weekKey=dayName+"|"+rotaMon;const rejected=rejections.some(r=>r.day===weekKey);const confirmed=confirmations.some(r=>r.day===weekKey);const isOff=sh.type==="Off";return(<div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}`}><div className="rdaylbl"><div className="rdayname">{dayName}</div><div className="rdaydate">{dispDate(sh.date)}</div>{isToday&&<div className="rdayflag">TODAY</div>}</div><div className="rdayshift">{shiftLabel(sh)}</div>{!isOff&&!rejected&&!confirmed&&<div className="rdaybtns"><button className="okbtn" onClick={()=>confirmShift(idx)}>✓ OK</button><button className="nobtn" onClick={()=>{setRejectModal(idx);setRejectReason("");}}>✕ Can't</button></div>}{confirmed&&<span className="chip g">✓ OK</span>}{rejected&&!isOff&&<span className="chip r">Rejected</span>}</div>);});}
 
   const navItems=[{id:"home",icon:"🏠",label:"Home"},{id:"clock",icon:"⏰",label:"Clock"},{id:"rota",icon:"📋",label:"Rota"},{id:"absence",icon:"📅",label:"Absence"},...(assigned?[{id:"takings",icon:"📊",label:"Takings",badge:!submitted}]:[])];
   return(
@@ -610,8 +610,8 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
           <div style={{fontSize:14,lineHeight:1.6}}>{user.welcomeMsg}</div>
         </div>}
         {assigned&&!submitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-t">📊 You're today's Takings Person!</div><div className="notif-s">Tap to record today's takings →</div></div>}
-        {/* Forgot to clock in banner */}
-        {!clockedIn&&(()=>{
+        {/* Forgot to clock in banner - hide if any clock entry exists today */}
+        {!logs.some(l=>l.date===todayISO()&&l.time_in)&&(()=>{
           const todayRota=rota.find(sh=>sh.date===todayISO());
           if(!todayRota||todayRota.type==="Off")return null;
           const now=new Date();
@@ -1446,7 +1446,7 @@ function ManagerApp({onLogout}){
     });
 
     // ── Build Payroll tab: one row per staff per week, ALL weeks ──
-    const payrollHdr=["Date Range","Name","Type","Full Shifts","Night Shifts","Hours","Rate/Hour (£)","Rate/Full Shift (£)","Rate/Night Shift (£)","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes","Extra Time","Override?"];
+    const payrollHdr=["Date Range","Name","Type","Full Shifts","Night Shifts","Hours","Rate/Hour (£)","Rate/Full Shift (£)","Rate/Night Shift (£)","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes","Extra Time (hrs)","Lost Hours (hrs)","Override?"];
     const payrollRows=[payrollHdr];
     // Group extras by week_start
     const weekStarts=[...new Set(allEx.map(e=>e.week_start).filter(Boolean))].sort();
@@ -1473,7 +1473,27 @@ function ManagerApp({onLogout}){
         const weekTipsTotal=weekTakingsForWs.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0)+parseFloat(tk.tips_card||0),0);
         const autoTips=r2(weekTipsTotal*parseFloat(s.tipsPct||0)/100);
         const tips=storedTips>0?storedTips:autoTips;
-        payrollRows.push([wRange,s.name,"FOH",full,night,r2(hrs).toFixed(2),s.rate||"0",s.shiftRate||"0",s.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),ex.extra_time||"",ex.manual_total?"MANUAL":""]);
+        // Compute overtime and lost hours from clock logs for this week
+        const fohLogs=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=ws&&l.date<=addDays(ws,6));
+        let fohOvertimeHrs=0,fohLostHrs=0;
+        const fohRota=rota[s.id]||[];
+        fohRota.filter(sh=>sh.date>=ws&&sh.date<=addDays(ws,6)).forEach(sh=>{
+          const dayLog=fohLogs.find(l=>l.date===sh.date);
+          if(!dayLog||!dayLog.time_out)return;
+          let schedEnd=null;
+          if(sh.type==="Full Day (11am–close)")schedEnd="23:00";
+          else if(sh.type==="Night (5:30pm–close)")schedEnd="23:00";
+          else if(sh.type==="Custom"&&sh.customOut)schedEnd=sh.customOut;
+          if(!schedEnd)return;
+          const[eH,eM]=schedEnd.split(":").map(Number);
+          const[oH,oM]=dayLog.time_out.split(":").map(Number);
+          const diffMins=(oH*60+oM)-(eH*60+eM);
+          if(diffMins>15&&(dayLog.note||"").includes("overtime"))fohOvertimeHrs+=roundHrs025(diffMins/60);
+          if(diffMins<0&&(dayLog.note||"").includes("left_early"))fohLostHrs+=roundHrs025(Math.abs(diffMins)/60);
+        });
+        const extraTimeVal=ex.extra_time||(fohOvertimeHrs>0?String(fohOvertimeHrs):"");
+        const lostHrsVal=fohLostHrs>0?String(fohLostHrs):"";
+        payrollRows.push([wRange,s.name,"FOH",full,night,r2(hrs).toFixed(2),s.rate||"0",s.shiftRate||"0",s.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),extraTimeVal,lostHrsVal,ex.manual_total?"MANUAL":""]);
       });
       // Kitchen staff
       kitchenStaff.forEach(k=>{
@@ -1491,7 +1511,7 @@ function ManagerApp({onLogout}){
         const{cardAmt,cashAmt}=splitCard(k.cardMode||"fixed",k.cardFixed,salaryTotal);
         const cash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
         const card=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
-        payrollRows.push([wRange,k.name,"Kitchen",full,night,r2(hrs).toFixed(2),k.rate||"0",k.shiftRate||"0",k.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),"",ex.manual_total?"MANUAL":""]);
+        payrollRows.push([wRange,k.name,"Kitchen",full,night,r2(hrs).toFixed(2),k.rate||"0",k.shiftRate||"0",k.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),"","",ex.manual_total?"MANUAL":""]);
       });
     });
 
@@ -1646,15 +1666,16 @@ function ManagerApp({onLogout}){
         const diffMins=(oH*60+oM)-(eH*60+eM);
         if(diffMins>15){
           const rawHrs=diffMins/60;
-          extraTime=Math.floor(rawHrs*2)/2; // round down to nearest 0.5
-          extraTime=Math.min(extraTime,2); // cap at 2hrs
+          extraTime=roundHrs025(rawHrs); // nearest 0.25h
         }
       }
       const rawHrs=parseHrs(l.time_in,l.time_out);
       const breakHrs=parseFloat(l.break_time||0);
       const netHrs=rawHrs>0?r2(Math.max(0,rawHrs-breakHrs)):"";
-      const noteLabel=l.note==="forgot"?"Forgot to clock out":l.note==="overtime"?"Working extra time":l.note==="sick_leave"?"Sick leave":l.note==="left_early"?"Left early/late":l.note?.startsWith("checklist_done")?"✅ End-of-shift checklist done":l.note||"";
-      const overrideLabel=l.override_at?new Date(l.override_at).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
+      const NOTE_MAP={"forgot":"Forgot to clock out","overtime":"Working extra time","sick_leave":"Sick leave","left_early":"Left early/late","back-stamped":"Back-stamped"};
+      const noteLabel=(l.note||"").split("|").map(n=>n.startsWith("checklist_done")?"✅ End-of-shift checklist done":(NOTE_MAP[n]||n)).filter(Boolean).join(" + ");
+      const overrideDate=l.override_at?new Date(l.override_at):null;
+      const overrideLabel=(overrideDate&&overrideDate.getFullYear()>2020)?overrideDate.toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
       rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?extraTime:"",overrideLabel]);
     });
     if(rows.length>1)await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",rows);
@@ -2338,8 +2359,8 @@ function ManagerApp({onLogout}){
               {staff.map(s=>{
                 const ws=snapToSunday(clockDate);const we=addDays(ws,6);
                 const sLogs=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=ws&&l.date<=we);
-                const hasOvertime=sLogs.some(l=>l.note==="overtime");
-                const hasSick=sLogs.some(l=>l.note==="sick_leave");
+                const hasOvertime=sLogs.some(l=>l.note==="overtime"||(l.note||"").includes("overtime"));
+                const hasSick=sLogs.some(l=>l.note==="sick_leave"||(l.note||"").includes("sick_leave"));
                 const hasLate=sLogs.some(l=>{
                   const dayRota=(rota[s.id]||[]).find(d=>d.date===l.date);
                   if(!dayRota||!dayRota.customIn)return false;
@@ -2347,7 +2368,23 @@ function ManagerApp({onLogout}){
                   const[lH,lM]=(l.time_in||"00:00").split(":").map(Number);
                   return(lH*60+lM)-(sH*60+sM)>10;
                 });
-                const hasFlag=hasOvertime||hasSick||hasLate;
+                const leftEarlyLogs=sLogs.filter(l=>l.note==="left_early"||(l.note||"").includes("left_early"));
+                const hasLeftEarly=leftEarlyLogs.length>0;
+                // Calculate total lost hours for left_early entries
+                const lostHrs=r2(leftEarlyLogs.reduce((acc,l)=>{
+                  const dayRota=(rota[s.id]||[]).find(d=>d.date===l.date);
+                  if(!dayRota||!l.time_out)return acc;
+                  let schedEnd=null;
+                  if(dayRota.type==="Full Day (11am–close)")schedEnd="23:00";
+                  else if(dayRota.type==="Night (5:30pm–close)")schedEnd="23:00";
+                  else if(dayRota.type==="Custom"&&dayRota.customOut)schedEnd=dayRota.customOut;
+                  if(!schedEnd)return acc;
+                  const[eH,eM]=schedEnd.split(":").map(Number);
+                  const[oH,oM]=l.time_out.split(":").map(Number);
+                  const diffMins=(eH*60+eM)-(oH*60+oM);
+                  return acc+(diffMins>0?roundHrs025(diffMins/60):0);
+                },0));
+                const hasFlag=hasOvertime||hasSick||hasLate||hasLeftEarly;
                 const dailyRaw={};
                 sLogs.forEach(l=>{dailyRaw[l.date]=(dailyRaw[l.date]||0)+parseHrs(l.time_in,l.time_out);});
                 const clockHrs=r2(Object.values(dailyRaw).reduce((a,h)=>a+roundHrsUp(h),0));
@@ -2370,7 +2407,8 @@ function ManagerApp({onLogout}){
                     <div style={{fontSize:12,color:"#555",marginBottom:6}}>
                       {hasOvertime&&<span style={{background:"#FEF3C7",color:"#78350F",padding:"2px 7px",borderRadius:20,marginRight:5,fontSize:11}}>Overtime</span>}
                       {hasSick&&<span style={{background:"#FEE2E2",color:"#7F1D1D",padding:"2px 7px",borderRadius:20,marginRight:5,fontSize:11}}>Sick</span>}
-                      {hasLate&&<span style={{background:"#FEE2E2",color:"#7F1D1D",padding:"2px 7px",borderRadius:20,fontSize:11}}>Late</span>}
+                      {hasLate&&<span style={{background:"#FEE2E2",color:"#7F1D1D",padding:"2px 7px",borderRadius:20,marginRight:5,fontSize:11}}>Late</span>}
+                      {hasLeftEarly&&<span style={{background:"#DBEAFE",color:"#1E40AF",padding:"2px 7px",borderRadius:20,marginLeft:5,fontSize:11}}>Left Early{lostHrs>0?` (-${lostHrs}h)`:""}</span>}
                     </div>
                     <div style={{fontSize:12,color:"#888",marginBottom:8}}>Clock hours: <strong>{clockHrs}h</strong>{autoFull>0&&<span> · Rota: <strong>{autoFull}F {autoNight}N shifts</strong></span>}</div>
                     <button className="btn sm" style={{background:"#E8620A",color:"#fff"}} onClick={()=>{
@@ -2527,7 +2565,13 @@ function ManagerApp({onLogout}){
             totalWages=r2(totalWages);
             const labourPct=totalTakings>0?r2(totalWages/totalTakings*100):0;
             const wTips=r2(wTakings.reduce((a,t2)=>a+parseFloat(t2.tips_cash||0)+parseFloat(t2.tips_card||0),0));
-            return{ws,we,takings:totalTakings,wages:totalWages,labour:labourPct,tips:wTips};
+            const wDeliveroo=r2(wTakings.reduce((a,t2)=>a+parseFloat(t2.deliveroo||0),0));
+            const wUber=r2(wTakings.reduce((a,t2)=>a+parseFloat(t2.uber||0),0));
+            const wCash=r2(wTakings.reduce((a,t2)=>a+parseFloat(t2.cash||0),0));
+            const wCard=r2(wTakings.reduce((a,t2)=>a+parseFloat(t2.card||0),0));
+            const wOnline=r2(wTakings.reduce((a,t2)=>a+parseFloat(t2.online||0),0));
+            const wShopExp=r2(wTakings.reduce((a,t2)=>a+parseFloat(t2.shop_expense||0),0));
+            return{ws,we,takings:totalTakings,wages:totalWages,labour:labourPct,tips:wTips,deliveroo:wDeliveroo,uber:wUber,cash:wCash,card:wCard,online:wOnline,shopExp:wShopExp};
           }
           // Build weeks array based on range setting
           function buildWeeks(){
@@ -2686,6 +2730,35 @@ function ManagerApp({onLogout}){
                 </div>
                 <LineChart data={mainData} compareData={compareData} metrics={activeMetrics}/>
               </div>}
+
+              {/* Channel Breakdown */}
+              {(()=>{
+                const tot=selected.takings;
+                if(tot<=0)return null;
+                const channels=[
+                  {label:"Deliveroo",val:selected.deliveroo,color:"#00A6A6"},
+                  {label:"Uber Eats",val:selected.uber,color:"#06C167"},
+                  {label:"Cash",val:selected.cash,color:"#50DC78"},
+                  {label:"Card",val:selected.card,color:"#3B82F6"},
+                  {label:"Online",val:selected.online,color:"#8B5CF6"},
+                  {label:"Shop Expenses",val:selected.shopExp,color:"#E05252",deduct:true},
+                ];
+                return(<div style={{background:"#FFF5EF",borderRadius:12,padding:"12px 13px",marginBottom:12}}>
+                  <div style={{fontSize:12,fontWeight:800,color:"#888",marginBottom:10}}>📊 Revenue Channels — week of {fmtDate(kpiWeek)}</div>
+                  {channels.filter(c=>c.val>0).map(c=>{
+                    const pct=r2(c.val/tot*100);
+                    return(<div key={c.label} style={{marginBottom:7}}>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
+                        <span style={{fontWeight:700,color:c.deduct?"#E05252":"#555"}}>{c.label}{c.deduct?" (deducted)":""}</span>
+                        <span style={{fontWeight:800,color:c.color}}>£{c.val} — {pct}%</span>
+                      </div>
+                      <div style={{background:"#F0F0F0",borderRadius:4,height:8,overflow:"hidden"}}>
+                        <div style={{width:pct+"%",background:c.color,height:"100%",borderRadius:4,transition:"width .3s"}}/>
+                      </div>
+                    </div>);
+                  })}
+                </div>);
+              })()}
 
               {/* Stats bar */}
               {activeMetrics.length>0&&<div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto"}}>
