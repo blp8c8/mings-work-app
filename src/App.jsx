@@ -118,7 +118,7 @@ function copyTSV(rows, toast) {
 
 // ─── Constants ───────────────────────────────────────────────────────
 const DAYS_SUN = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-const DAYS_MON = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const DAYS_MON = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const SHIFTS   = ["Off","Full Day (11am–close)","Night (5:30pm–close)","Custom"];
 const ADD_LBLS = ["Bank Holiday","Red Day","Other"];
 const DED_LBLS = ["Left Early","Sick Leave","Other"];
@@ -200,10 +200,8 @@ function payWeekOf(iso) {
   return{start:sun.toISOString().split("T")[0],end:sat.toISOString().split("T")[0]};
 }
 function rotaWeekOf(iso) {
-  const d=new Date(iso+"T12:00:00"),dow=d.getDay();
-  const mon=new Date(d); mon.setDate(d.getDate()-(dow===0?6:dow-1));
-  const sun=new Date(mon); sun.setDate(mon.getDate()+6);
-  return{start:mon.toISOString().split("T")[0],end:sun.toISOString().split("T")[0]};
+  // Business week: Sunday to Saturday
+  return{start:snapToSunday(iso),end:addDays(snapToSunday(iso),6)};
 }
 
 // ─── CSS ─────────────────────────────────────────────────────────────
@@ -441,6 +439,9 @@ function StaffRegister({onBack,onRegister}){
 // ═══════════════════════════════════════════════════════════════════
 function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[tab,setTab]=useState("home");const[msg,setMsg]=useState("");
+  const[showTour,setShowTour]=useState(false);
+  const[tourStep,setTourStep]=useState(0);
+  const[tourDone,setTourDone]=useState(false);
   const[clockedIn,setClockedIn]=useState(false);const[clockInTime,setClockInTime]=useState(null);
   const[breakTime,setBreakTime]=useState("0");
   const[lateModal,setLateModal]=useState(false);
@@ -485,6 +486,8 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     const active=(logR.data||[]).find(l=>l.date===todayISO()&&l.time_in&&!l.time_out);
     if(active){setClockedIn(true);setClockInTime(active.time_in);}
     await loadRota();setLoading(false);
+    // Launch tour if not completed before
+    if(!localStorage.getItem("tourDone_"+user.id)){setShowTour(true);setTourStep(0);}
   }
   async function loadRota(){
     const dates=weekDates(rotaMon);
@@ -492,9 +495,16 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     setRota(dates.map(dateISO=>{const jsDay=new Date(dateISO+"T12:00:00").getDay();const row=(data||[]).find(r=>r.day_index===jsDay);return{date:dateISO,jsDay,type:row?.shift_type||"Off",customIn:row?.custom_in||"",customOut:row?.custom_out||""};}));
   }
   async function clockIn(){
-    // Once-per-day restriction: block if already has a completed entry today
+    // Once-per-day restriction
     const todayDone=logs.find(l=>l.date===todayISO()&&l.time_in&&l.time_out);
     if(todayDone)return t("⚠️ You've already clocked in and out today. Contact your manager if you need a correction.");
+    // Must have confirmed today's rota shift
+    const todayRota=rota.find(sh=>sh.date===todayISO());
+    if(todayRota&&todayRota.type!=="Off"){
+      const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
+      const isConfirmed=confirmations.some(r=>r.day===todayDayName);
+      if(!isConfirmed)return t("⚠️ Please confirm your rota shift first (Rota tab → ✓ OK).");
+    }
     const time=nowTime();
     const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:time,note:""}).select().single();
     if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(time);t("✅ Clocked in at "+time);}
@@ -514,28 +524,43 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     else t("❌ "+result.error.message);
   }
   function clockOut(){
-    // If takings-assigned, show checklist first
-    if(assigned){setChecklist({heating:false,asahi:false,stockroom:false,moneybox:false,backdoor:false,frontdoor:false});setChecklistModal(true);return;}
+    // Takings-assigned staff must complete takings before clocking out
+    if(assigned&&!submitted)return t("⚠️ Please complete today's takings before clocking out (Takings tab).");
+    // If takings-assigned and done, show checklist
+    if(assigned&&submitted){setChecklist({heating:false,asahi:false,stockroom:false,moneybox:false,backdoor:false,frontdoor:false});setChecklistModal(true);return;}
     doActualClockOut();
   }
   function doActualClockOut(){
     const todayRota=rota.find(sh=>sh.date===todayISO());
-    // Get scheduled end time from rota
-    let schedEnd=null;
-    if(todayRota){
+    const isHourlyOnly=parseFloat(user.shiftRate||0)===0&&parseFloat(user.nightRate||0)===0&&parseFloat(user.rate||0)>0;
+    // Only check time restrictions for hourly-only staff
+    if(isHourlyOnly&&todayRota){
+      let schedEnd=null;
       if(todayRota.type==="Full Day (11am–close)")schedEnd="23:00";
       else if(todayRota.type==="Night (5:30pm–close)")schedEnd="23:00";
       else if(todayRota.type==="Custom"&&todayRota.customOut)schedEnd=todayRota.customOut;
-    }
-    if(schedEnd){
-      const[eH,eM]=schedEnd.split(":").map(Number);
-      const now=new Date();
-      const nowMins=now.getHours()*60+now.getMinutes();
-      const endMins=eH*60+eM;
-      const diffMins=nowMins-endMins; // positive = late, negative = early
-      if(diffMins>15){setLateModal(true);return;} // late >15min
-      if(diffMins<-60){setEarlyModal("blocked");return;} // early >1hr → blocked
-      if(diffMins<-10){setEarlyModal("confirm");return;} // early <1hr → confirm
+      if(schedEnd){
+        const[eH,eM]=schedEnd.split(":").map(Number);
+        const now=new Date();
+        const nowMins=now.getHours()*60+now.getMinutes();
+        const endMins=eH*60+eM;
+        const diffMins=nowMins-endMins;
+        if(diffMins>15){setLateModal(true);return;}
+        if(diffMins<-60){setEarlyModal("blocked");return;}
+        if(diffMins<-10){setEarlyModal("confirm");return;}
+      }
+    }else if(!isHourlyOnly&&todayRota){
+      // Shift-paid: only check late (forgot/overtime), no early restriction
+      let schedEnd=null;
+      if(todayRota.type==="Full Day (11am–close)")schedEnd="23:00";
+      else if(todayRota.type==="Night (5:30pm–close)")schedEnd="23:00";
+      else if(todayRota.type==="Custom"&&todayRota.customOut)schedEnd=todayRota.customOut;
+      if(schedEnd){
+        const[eH,eM]=schedEnd.split(":").map(Number);
+        const now=new Date();
+        const diffMins=now.getHours()*60+now.getMinutes()-eH*60-eM;
+        if(diffMins>15){setLateModal(true);return;}
+      }
     }
     doClockOut("");
   }
@@ -568,6 +593,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     if(!error){setTVals({});setTCC({});setTNote("");setCorrected(true);setShowCorrect(false);t("✅ Correction submitted!");setTab("home");}else t("❌ "+error.message);
   }
   function shiftLabel(sh){if(!sh||sh.type==="Off")return"Day off";if(sh.type==="Full Day (11am–close)")return"Full Day 11am–close";if(sh.type==="Night (5:30pm–close)")return"Night 5:30pm–close";if(sh.type==="Custom")return`${sh.customIn||"?"}–${sh.customOut||"?"}`;return sh.type;}
+
   if(loading)return<Loading text="Loading your data…"/>;
 
   function RotaList(){return rota.map((sh,idx)=>{const isToday=sh.date===todayISO();const dayName=DAYS_MON[idx];const rejected=rejections.some(r=>r.day===dayName);const confirmed=confirmations.some(r=>r.day===dayName);const isOff=sh.type==="Off";return(<div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}`}><div className="rdaylbl"><div className="rdayname">{dayName}</div><div className="rdaydate">{dispDate(sh.date)}</div>{isToday&&<div className="rdayflag">TODAY</div>}</div><div className="rdayshift">{shiftLabel(sh)}</div>{!isOff&&!rejected&&!confirmed&&<div className="rdaybtns"><button className="okbtn" onClick={()=>confirmShift(idx)}>✓ OK</button><button className="nobtn" onClick={()=>{setRejectModal(idx);setRejectReason("");}}>✕ Can't</button></div>}{confirmed&&<span className="chip g">✓ OK</span>}{rejected&&!isOff&&<span className="chip r">Rejected</span>}</div>);});}
@@ -576,7 +602,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   return(
     <div className="app">
       <Toast msg={msg}/>
-      <div className="hdr"><div><div className="hdr-greet">Good {now.getHours()<12?"morning":now.getHours()<18?"afternoon":"evening"},</div><div className="hdr-name">{user.name.split(" ")[0]} 👋</div></div><button style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}} onClick={onLogout}>🚪</button></div>
+      <div className="hdr"><div><div className="hdr-greet">Good {now.getHours()<12?"morning":now.getHours()<18?"afternoon":"evening"},</div><div className="hdr-name">{user.name.split(" ")[0]} 👋</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{background:"#FFF5EF",border:"1.5px solid #E8620A",borderRadius:"50%",width:32,height:32,fontSize:14,cursor:"pointer",fontWeight:800,color:"#E8620A"}} onClick={()=>{setTourStep(0);setShowTour(true);}}>?</button><button style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}} onClick={onLogout}>🚪</button></div></div>
       {tab==="home"&&<div className="body">
         {/* Welcome message banner */}
         {user.welcomeMsg&&<div style={{background:"linear-gradient(135deg,#E8620A,#FF8C42)",borderRadius:14,padding:"14px 16px",marginBottom:14,color:"#fff"}}>
@@ -737,6 +763,37 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
         )}
       </div>}
       <div className="bnav">{navItems.map(n=><button key={n.id} className={`nbtn${tab===n.id?" on":""}`} onClick={()=>setTab(n.id)}>{n.badge&&<span className="nbadge">!</span>}<span className="ni">{n.icon}</span><span className="nl">{n.label}</span></button>)}</div>
+      {showTour&&(()=>{
+        const TOUR_STEPS=[
+          {title:"👋 Welcome to Ming's Staff App!",body:"This app lets you clock in/out, view your rota, report absences, and submit takings. Let's take a quick tour so you know how everything works.",icon:"🏠"},
+          {title:"⏰ Clock In & Out",body:"Tap the ⏰ Clock tab to clock in when you arrive and clock out when you leave. If you're paid hourly, select your break time before clocking out. You'll get a prompt if you're clocking out late or early.",icon:"⏰"},
+          {title:"📋 Rota — Confirm Your Shifts",body:"Check the 📋 Rota tab every Wednesday. Tap ✓ OK to accept a shift or ✕ Can't if you can't work. You must confirm your shift before you can clock in. Accept/reject by Friday.",icon:"📋"},
+          {title:"📅 Reporting Absence",body:"Tap the 📅 Absence tab to report an absence. Important: absences before next Wednesday must be reported by calling the manager directly — the app can only be used for future dates.",icon:"📅"},
+          {title:"📊 Takings",body:"If you're the designated takings person today, you'll see a notification on your Home tab. Complete the takings form before clocking out — you won't be able to clock out until it's done.",icon:"📊"},
+          {title:"📱 Save to Your Home Screen",body:"You can access this app anytime like a regular app — no app store needed!\n\n📱 iPhone (Safari):\n1. Tap the Share button (□↑) at the bottom\n2. Scroll down and tap 'Add to Home Screen'\n3. Tap 'Add' — done!\n\n🤖 Android (Chrome):\n1. Tap the three dots (⋮) menu at top right\n2. Tap 'Add to Home screen'\n3. Tap 'Add' — done!",icon:"📱"},
+          {title:"✅ You're all set!",body:"You've completed the tour. Tap the ? button in the header anytime to see this guide again.\n\nTap 'I understand — let's go!' to confirm you've read this guide.",icon:"🎉",final:true},
+        ];
+        const step=TOUR_STEPS[tourStep];
+        const isLast=tourStep===TOUR_STEPS.length-1;
+        return(
+          <div className="overlay" style={{zIndex:9999}}>
+            <div className="sheet" style={{maxHeight:"85vh",overflowY:"auto"}}>
+              <div style={{textAlign:"center",fontSize:40,marginBottom:8}}>{step.icon}</div>
+              <div className="stitle" style={{textAlign:"center"}}>{step.title}</div>
+              <div style={{fontSize:14,color:"#555",lineHeight:1.8,marginBottom:20,whiteSpace:"pre-line"}}>{step.body}</div>
+              <div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:16}}>
+                {TOUR_STEPS.map((_,i)=><div key={i} style={{width:i===tourStep?20:6,height:6,borderRadius:3,background:i===tourStep?"#E8620A":i<tourStep?"#FBB49A":"#E5E5E5",transition:"width .2s"}}/>)}
+              </div>
+              {isLast
+                ?<button className="btn" style={{background:"#E8620A"}} onClick={()=>{localStorage.setItem("tourDone_"+user.id,"1");setTourDone(true);setShowTour(false);t("✅ Tour completed!");db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:"__tour_done__"}).then(()=>{});}}>🎉 I understand — let's go!</button>
+                :<button className="btn" style={{background:"#E8620A"}} onClick={()=>setTourStep(s=>s+1)}>Next →</button>
+              }
+              <button className="btn sec" style={{marginTop:8}} onClick={()=>setShowTour(false)}>Skip tour</button>
+              {tourStep>0&&<button className="btn sec" style={{marginTop:4}} onClick={()=>setTourStep(s=>s-1)}>← Back</button>}
+            </div>
+          </div>
+        );
+      })()}
       {rejectModal!==null&&<div className="overlay" onClick={()=>setRejectModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">Can't work {DAYS_MON[rejectModal]}?</div><div className="ssub2">Tell the manager why (optional)</div><textarea className="lognote" rows={3} placeholder="e.g. Doctor appointment…" value={rejectReason} onChange={e=>setRejectReason(e.target.value)}/><button className="btn danger" style={{marginTop:12}} onClick={rejectShift}>Send Rejection</button><button className="btn sec" onClick={()=>setRejectModal(null)}>Cancel</button></div></div>}
     </div>
   );
@@ -774,11 +831,12 @@ function ManagerApp({onLogout}){
   const[payrollMonth,setPayrollMonth]=useState(()=>todayISO().slice(0,7));
   const[clearKey,setClearKey]=useState(0);
   const[kpiWeek,setKpiWeek]=useState(()=>snapToSunday(todayISO()));
-  const[kpiRange,setKpiRange]=useState(8); // number of weeks to show: 1,4,8,12,custom
+  const[kpiRange,setKpiRange]=useState(8);
   const[kpiCustomStart,setKpiCustomStart]=useState(()=>snapToSunday(addDays(todayISO(),-55)));
   const[kpiCustomEnd,setKpiCustomEnd]=useState(()=>snapToSunday(todayISO()));
   const[kpiMetrics,setKpiMetrics]=useState({takings:true,wages:true,labour:true,tips:false});
-  const[kpiCompare,setKpiCompare]=useState("none"); // none|prevPeriod|prevYear|thisMonthAvg|prevMonthAvg
+  const[kpiCompare,setKpiCompare]=useState("none");
+  const[payrollLoaded,setPayrollLoaded]=useState(false); // gates auto-count display until Load pressed
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const[cashPopup,setCashPopup]=useState(false);
   const[pinModal,setPinModal]=useState(false);
@@ -943,8 +1001,8 @@ function ManagerApp({onLogout}){
     const sickDates=new Set(logsInRange.filter(l=>l.note==="sick_leave").map(l=>l.date));
     const autoFull=myRota.filter(sh=>sh?.type==="Full Day (11am–close)"&&!sickDates.has(sh.date)).length;
     const autoNight=myRota.filter(sh=>sh?.type==="Night (5:30pm–close)"&&!sickDates.has(sh.date)).length;
-    const full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):(hasShiftRate?autoFull:0);
-    const night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):(hasShiftRate?autoNight:0);
+    const full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):(hasShiftRate&&payrollLoaded?autoFull:0);
+    const night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):(hasShiftRate&&payrollLoaded?autoNight:0);
 
     // ── Hourly-only staff ──
     let autoHrs=0;let autoOvertimeHrs=0;let autoOvertimeLabel="";
@@ -1356,7 +1414,7 @@ function ManagerApp({onLogout}){
       t("⏳ Saving current week data…");
       try{
         const flushOps=Object.entries(extras).map(([sid,ex])=>{
-          const payload={staff_id:sid,week_start:ws,tips:ex.tips||"0",additions:ex.additions||[],deductions:ex.deductions||[],notes:ex.notes||[],manual_full:ex.manualFull||null,manual_night:ex.manualNight||null,manual_hrs:ex.manualHrs||null,manual_cash:ex.manualCash||null,manual_card:ex.manualCard||null,manual_total:ex.manualTotal||null};
+          const payload={staff_id:sid,week_start:ws,tips:ex.tips||"0",additions:ex.additions||[],deductions:ex.deductions||[],notes:ex.notes||[],manual_full:ex.manualFull||null,manual_night:ex.manualNight||null,manual_hrs:ex.manualHrs||null,manual_cash:ex.manualCash||null,manual_card:ex.manualCard||null,manual_total:ex.manualTotal||null,extra_time:ex.extraTime||null};
           return db.from("payroll_extras").upsert(payload,{onConflict:"staff_id,week_start"});
         });
         const results=await Promise.all(flushOps);
@@ -1779,7 +1837,6 @@ function ManagerApp({onLogout}){
           <div className="row"><span>💳 Card</span><span className="rowb">£{p.cardAmt}</span></div>
           <div className="row"><span style={{fontWeight:800}}>Salary Total</span><span style={{fontWeight:900,color:"#E8620A",fontSize:15}}>£{p.total}</span></div>
           {!isKitchen&&<div className="row" style={{borderTop:"1px dashed #E5E5E5",marginTop:4,paddingTop:4}}><span>💳 Tips (card) {p.autoTips!=="0.00"&&!ex.tips&&<span style={{fontSize:10,color:"#aaa"}}>(auto from takings)</span>}</span><span className="rowb" style={{color:"#50DC78"}}>£{p.tips}</span></div>}
-          {!isKitchen&&<div className="row"><span>⏱ Extra Time</span><select className="mini" value={lExtraTime} onChange={e=>{setLExtraTime(e.target.value);setExtrasState(sid,ex=>({...ex,extraTime:e.target.value}));}}><option value="">None</option><option value="0.5">0.5 hr</option><option value="1">1 hr</option><option value="1.5">1.5 hr</option><option value="2">2 hr</option></select></div>}
           {/* Manual override — overrides ALL exported values including shifts/hours */}
           <button style={{marginTop:8,background:showOverride?"#FEF3C7":"#F0F0F0",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",width:"100%",color:showOverride?"#78350F":"#555"}} onClick={()=>setShowOverride(v=>!v)}>
             {showOverride?"▲ Hide Override":"✏️ Override Exported Values (shifts, hours, cash, card, total)"}
@@ -2336,7 +2393,7 @@ function ManagerApp({onLogout}){
             <div className="sec">Payroll</div>
             <div className="ssub">Private — staff never see salaries</div>
             <div style={{display:"flex",gap:6,marginBottom:6,alignItems:"center"}}>
-              <input type="date" className="inp sm" style={{flex:1}} value={weekRange.start} onChange={e=>{const s=snapToSunday(e.target.value);setWeekRange({start:s,end:addDays(s,6)});}}/>
+              <input type="date" className="inp sm" style={{flex:1}} value={weekRange.start} onChange={e=>{const s=snapToSunday(e.target.value);setWeekRange({start:s,end:addDays(s,6)});setPayrollLoaded(false);}}/>
               <span style={{fontSize:12,color:"#aaa"}}>→</span>
               <input type="date" className="inp sm" style={{flex:1}} value={weekRange.end} onChange={e=>setWeekRange(p=>({...p,end:e.target.value}))}/>
               <button className="btn sm navy" onClick={async()=>{
@@ -2351,6 +2408,7 @@ function ManagerApp({onLogout}){
                   setExtras({});
                   t("No saved data for this week — cards cleared");
                 }
+                setPayrollLoaded(true);
               }}>Load</button>
             </div>
             <div style={{fontSize:11,color:"#888",marginBottom:8}}>Pick the week start (Sunday), tap Load to fill cards, make edits, then Push.</div>
@@ -2784,7 +2842,7 @@ function TakingsEditForm({takings,upsertTakings,toast,autoPushDay,gsReady}){
   function loadForDate(d){
     // Load any taking for this date (staff or manager logged) — manager can edit either
     const existing=takings.find(s=>s.date===d);
-    if(existing){const v={};TKFIELDS.forEach(f=>{v[f.key]=String(existing[f.db]||"");});const c={};TKFIELDS.filter(f=>f.ccDb).forEach(f=>{c[f.key]=existing[f.ccDb]||"cash";});setValues(v);setCC(c);setNote(existing.note||"");}
+    if(existing){const v={};TKFIELDS.forEach(f=>{const raw=parseFloat(existing[f.db]||0);v[f.key]=raw>0?String(r2(raw)):"";});const c={};TKFIELDS.filter(f=>f.ccDb).forEach(f=>{c[f.key]=existing[f.ccDb]||"cash";});setValues(v);setCC(c);setNote(existing.note||"");}
     else{setValues({});setCC({});setNote("");}
     setLoaded(true);
   }
