@@ -444,6 +444,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[clockedIn,setClockedIn]=useState(false);const[clockInTime,setClockInTime]=useState(null);
   const[breakTime,setBreakTime]=useState("0");
   const[lateModal,setLateModal]=useState(false);
+  const[earlyModal,setEarlyModal]=useState(null); // null | "confirm" | "blocked"
   const[staffClockWeek,setStaffClockWeek]=useState(()=>snapToSunday(todayISO()));
   const[checklistModal,setChecklistModal]=useState(false);
   const[checklist,setChecklist]=useState({heating:false,asahi:false,stockroom:false,moneybox:false,backdoor:false,frontdoor:false});
@@ -509,7 +510,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     if(result.error&&(result.error.message?.includes("break_time")||result.error.code==="42703"||result.error.details?.includes("break_time"))){
       result=await db.from("clock_logs").update({time_out:time,note:finalNote}).eq("id",active.id);
     }
-    if(!result.error){setLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time,note:finalNote,break_time:bt}:l));setClockedIn(false);setBreakTime("0");setLateModal(false);t("👋 Clocked out at "+time+(bt>0?` (${bt}hr break)`:""));}
+    if(!result.error){setLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time,note:finalNote,break_time:bt}:l));setClockedIn(false);setBreakTime("0");setLateModal(false);setEarlyModal(null);t("👋 Clocked out at "+time+(bt>0?` (${bt}hr break)`:""));}
     else t("❌ "+result.error.message);
   }
   function clockOut(){
@@ -518,14 +519,23 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     doActualClockOut();
   }
   function doActualClockOut(){
-    const isHourlyOnly=parseFloat(user.shiftRate||0)===0&&parseFloat(user.nightRate||0)===0&&parseFloat(user.rate||0)>0;
-    if(isHourlyOnly){
-      const todayRota=rota.find(sh=>sh.date===todayISO());
-      if(todayRota&&todayRota.type==="Custom"&&todayRota.customOut){
-        const[endH,endM]=todayRota.customOut.split(":").map(Number);
-        const now=new Date();const nowMins=now.getHours()*60+now.getMinutes();const endMins=endH*60+endM;
-        if(nowMins-endMins>15){setLateModal(true);return;}
-      }
+    const todayRota=rota.find(sh=>sh.date===todayISO());
+    // Get scheduled end time from rota
+    let schedEnd=null;
+    if(todayRota){
+      if(todayRota.type==="Full Day (11am–close)")schedEnd="23:00";
+      else if(todayRota.type==="Night (5:30pm–close)")schedEnd="23:00";
+      else if(todayRota.type==="Custom"&&todayRota.customOut)schedEnd=todayRota.customOut;
+    }
+    if(schedEnd){
+      const[eH,eM]=schedEnd.split(":").map(Number);
+      const now=new Date();
+      const nowMins=now.getHours()*60+now.getMinutes();
+      const endMins=eH*60+eM;
+      const diffMins=nowMins-endMins; // positive = late, negative = early
+      if(diffMins>15){setLateModal(true);return;} // late >15min
+      if(diffMins<-60){setEarlyModal("blocked");return;} // early >1hr → blocked
+      if(diffMins<-10){setEarlyModal("confirm");return;} // early <1hr → confirm
     }
     doClockOut("");
   }
@@ -628,8 +638,13 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
             </div>
           )}
           <div className="clkbtns" style={{marginTop:14}}>
-            <button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button>
-            <button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button>
+            {(()=>{
+              const todayRota=rota.find(sh=>sh.date===todayISO());
+              const isOff=!todayRota||todayRota.type==="Off";
+              return isOff&&!clockedIn
+                ?<div style={{fontSize:13,color:"rgba(255,255,255,.7)",textAlign:"center",padding:"10px 0"}}>📅 Not scheduled today — contact your manager if this is incorrect.</div>
+                :<><button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button><button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button></>;
+            })()}
           </div>
         </div>
         {/* 7-day log */}
@@ -657,7 +672,24 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
             }
           </div>);
         })}
-        {lateModal&&<div className="overlay"><div className="sheet"><div className="stitle">⏰ Late Clock-Out</div><div className="ssub2">You're clocking out later than your scheduled end time. Which applies?</div><button className="btn" onClick={()=>doClockOut("forgot")}>🕐 I forgot to clock out earlier</button><button className="btn sec" onClick={()=>doClockOut("overtime")}>⏱ I was working extra time</button><button className="btn sec" onClick={()=>setLateModal(false)}>Cancel</button></div></div>}
+        {lateModal&&<div className="overlay"><div className="sheet">
+          <div className="stitle">⏰ Late Clock-Out</div>
+          <div className="ssub2">You're clocking out later than your scheduled end time. Which applies?</div>
+          <button className="btn" onClick={()=>doClockOut("forgot")}>🕐 I forgot to clock out earlier</button>
+          <button className="btn sec" onClick={()=>doClockOut("overtime")}>⏱ I was working extra time</button>
+          <button className="btn sec" onClick={()=>setLateModal(false)}>Cancel</button>
+        </div></div>}
+        {earlyModal==="confirm"&&<div className="overlay"><div className="sheet">
+          <div className="stitle">🌙 Finishing Early?</div>
+          <div className="ssub2">You're clocking out before your scheduled end time. Is it quiet and your manager is happy for you to finish now?</div>
+          <button className="btn" onClick={()=>{setEarlyModal(null);doClockOut("left_early");}}>Yes, finishing early</button>
+          <button className="btn sec" onClick={()=>setEarlyModal(null)}>Cancel — stay clocked in</button>
+        </div></div>}
+        {earlyModal==="blocked"&&<div className="overlay"><div className="sheet">
+          <div className="stitle">⚠️ Cannot Clock Out</div>
+          <div className="ssub2">You're trying to clock out more than 1 hour early. If you're unwell and need to leave, please <strong>call the manager</strong> — they will clock you out and record a sick leave note.</div>
+          <button className="btn sec" onClick={()=>setEarlyModal(null)}>OK</button>
+        </div></div>}
         {checklistModal&&<div className="overlay"><div className="sheet"><div className="stitle">🔒 End-of-Shift Checklist</div><div className="ssub2">Please check all items before clocking out.</div>
           {CHECKLIST_ITEMS.map(item=><div key={item.key} onClick={()=>setChecklist(p=>({...p,[item.key]:!p[item.key]}))} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 0",borderBottom:"1px solid #F0F0F0",cursor:"pointer"}}>
             <div style={{width:24,height:24,borderRadius:6,border:`2px solid ${checklist[item.key]?"#E8620A":"#E5E5E5"}`,background:checklist[item.key]?"#E8620A":"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
@@ -1525,7 +1557,7 @@ function ManagerApp({onLogout}){
 
   async function pushClockLog(date){
     if(!gsConfig.webAppUrl||!gsConfig.clockLogId)return;
-    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Break (hrs)","Note","Extra Time (hrs)","Override At"];
+    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Override At"];
     const rows=[hdr];
     const dayLogs=clockLogs.filter(l=>l.date===date);
     dayLogs.forEach(l=>{
@@ -1552,9 +1584,12 @@ function ManagerApp({onLogout}){
           extraTime=Math.min(extraTime,2); // cap at 2hrs
         }
       }
+      const rawHrs=parseHrs(l.time_in,l.time_out);
+      const breakHrs=parseFloat(l.break_time||0);
+      const netHrs=rawHrs>0?r2(Math.max(0,rawHrs-breakHrs)):"";
       const noteLabel=l.note==="forgot"?"Forgot to clock out":l.note==="overtime"?"Working extra time":l.note==="sick_leave"?"Sick leave":l.note==="left_early"?"Left early/late":l.note?.startsWith("checklist_done")?"✅ End-of-shift checklist done":l.note||"";
       const overrideLabel=l.override_at?new Date(l.override_at).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
-      rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?extraTime:"",overrideLabel]);
+      rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?extraTime:"",overrideLabel]);
     });
     if(rows.length>1)await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",rows);
   }
@@ -1712,15 +1747,6 @@ function ManagerApp({onLogout}){
           <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,tips:e.target.value}))}/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS <span style={{fontWeight:400}}>(+ add / - deduct / note only)</span></div><AdjustmentsRow sid={sid}/></div>
-          {/* Notes */}
-          <div style={{marginTop:8}}>
-            <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>NOTES</div>
-            {(ex.notes||[]).map((n,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"2px 0"}}><span style={{fontSize:12,color:"#555"}}>📌 {n}</span><button onClick={()=>updateExtras(sid,ex=>({...ex,notes:ex.notes.filter((_,j)=>j!==i)}))} style={{background:"none",border:"none",cursor:"pointer",fontSize:12,color:"#ccc"}}>✕</button></div>)}
-            <div className="addrow" style={{marginTop:5}}>
-              <select className="addinp" style={{fontSize:11,padding:"5px 7px"}} id={`ns-${sid}`}>{["Bank Holiday","Red Day","No extra pay — day off","Custom"].map(l=><option key={l}>{l}</option>)}</select>
-              <button className="addbtn" onClick={()=>{const sel=document.getElementById(`ns-${sid}`);if(sel.value==="Custom"){const cn=window.prompt("Enter custom note:");if(cn)updateExtras(sid,ex=>({...ex,notes:[...(ex.notes||[]),cn]}));}else updateExtras(sid,ex=>({...ex,notes:[...(ex.notes||[]),sel.value]}));}}>+ Note</button>
-            </div>
-          </div>
           <div className="divider"/>
           {/* Card payment mode — editable directly in payroll, same for FOH and kitchen */}
           {p.cardExceeds&&countsEdited&&(
@@ -2282,6 +2308,11 @@ function ManagerApp({onLogout}){
                     </div>
                     <div style={{fontSize:12,color:"#888",marginBottom:8}}>Clock hours: <strong>{clockHrs}h</strong>{autoFull>0&&<span> · Rota: <strong>{autoFull}F {autoNight}N shifts</strong></span>}</div>
                     <button className="btn sm" style={{background:"#E8620A",color:"#fff"}} onClick={()=>{
+                      // Only authorise if the clock summary week matches the payroll page week range
+                      if(ws!==weekRange.start){
+                        t(`⚠️ Payroll is set to week of ${fmtDate(weekRange.start)} but you're viewing clock data for ${fmtDate(ws)}. Switch payroll to the same week first.`);
+                        return;
+                      }
                       const hasShiftRate=parseFloat(s.shiftRate||0)>0;
                       setExtras(p=>{
                         const ex=p[s.id]||getExtras(s.id);
@@ -2290,7 +2321,7 @@ function ManagerApp({onLogout}){
                         else{if(!ex.manualFull||ex.manualFull==="")updated.manualFull=String(autoFull);if(!ex.manualNight||ex.manualNight==="")updated.manualNight=String(autoNight);}
                         return{...p,[s.id]:updated};
                       });
-                      t(`✅ ${s.name.split(" ")[0]} authorised → check payroll card`);
+                      t(`✅ ${s.name.split(" ")[0]} authorised for week of ${fmtDate(ws)} → check payroll card`);
                     }}>✓ Authorise → Payroll</button>
                   </div>
                 );
