@@ -601,13 +601,13 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const absLessThan7Days=absDate&&Math.floor((new Date(absDate+"T12:00:00")-new Date(todayISO()+"T12:00:00"))/(1000*60*60*24))<7;
   async function confirmShift(idx){
     const dayName=DAYS_MON[idx];
-    const{data,error}=await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:dayName}).select().single();
-    if(!error){setConfirmations(p=>[...p,data]);t("✅ Confirmed!");}
-    else if(error.code==="23505"){
-      // Duplicate key — already confirmed in DB, just update local state
-      setConfirmations(p=>p.some(r=>r.day===dayName)?p:[...p,{id:"dup",staff_id:user.id,staff_name:user.name,day:dayName}]);
-      t("✅ Confirmed!");
-    }else t("❌ "+error.message);
+    // Optimistic update FIRST — state changes before DB call, no stale closure
+    confirmedKeysRef.current.add(dayName);
+    setConfirmations(p=>p.some(r=>r.day===dayName)?p:[...p,{id:"opt_"+Date.now(),staff_id:user.id,staff_name:user.name,day:dayName}]);
+    t("✅ Confirmed!");
+    // DB write after — fire and forget, chip already showing
+    const{error}=await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:dayName});
+    if(error&&error.code!=="23505")t("⚠️ Saved locally but DB error: "+error.message);
   }
   async function rejectShift(){
     const dayName=DAYS_MON[rejectModal];
