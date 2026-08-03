@@ -315,9 +315,9 @@ body{font-family:'Inter',sans-serif;background:#FFF5EF;-webkit-tap-highlight-col
 .exptitle{font-size:13px;font-weight:800;color:#1A1A2E;margin-bottom:9px;}
 .expbtn{width:100%;padding:13px;border:none;border-radius:11px;font-size:13px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;margin-bottom:7px;}
 .expbtn:last-child{margin-bottom:0;}.expbtn.p{background:#1A1A2E;color:#fff;}.expbtn.s{background:#E8F0E9;color:#1A1A2E;}
-.tfield{margin-bottom:9px;}
-.tlbl{font-size:12px;font-weight:700;color:#555;margin-bottom:3px;display:flex;justify-content:space-between;align-items:center;}
-.thint{font-size:10px;color:#aaa;margin-top:2px;font-style:italic;}
+.tfield{margin-bottom:12px;}
+.tlbl{font-size:16px;font-weight:700;color:#555;margin-bottom:5px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;}
+.thint{font-size:13px;color:#aaa;margin-top:3px;font-style:italic;line-height:1.5;}
 .tmsg{background:#D1FAE5;border:1.5px solid #50DC78;border-radius:13px;padding:12px 14px;margin-bottom:10px;}
 .tmsg-h{font-size:13px;font-weight:800;color:#065F46;margin-bottom:3px;}
 .tmsg-d{font-size:12px;color:#047857;}
@@ -382,10 +382,10 @@ function StaffLogin({staff,onLogin,onBack,onRegister}){
     <div className="auth">
       <button className="back" onClick={()=>{setStep("pick");setErr("");}}>←</button>
       <div className="atitle">Hi {sel.name.split(" ")[0]}! 👋</div>
-      <div className="asub">Enter your 8-digit code</div>
-      <input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={code} autoFocus onChange={e=>{setCode(e.target.value);setErr("");}}/>
+      <div className="asub">Enter your 4-digit code</div>
+      <input className="inp code" type="password" inputMode="numeric" maxLength={4} placeholder="••••" value={code} autoFocus onChange={e=>{setCode(e.target.value);setErr("");}}/>
       {err&&<div className="err">{err}</div>}
-      <button className="btn" disabled={code.length!==8} onClick={()=>{if(code===sel.code)onLogin(sel);else{setErr("Wrong code — try again");setCode("");}}}>Sign In</button>
+      <button className="btn" disabled={code.length!==4} onClick={()=>{if(code===sel.code)onLogin(sel);else{setErr("Wrong code — try again");setCode("");}}}>Sign In</button>
     </div>
   );
   return(
@@ -411,7 +411,7 @@ function StaffRegister({onBack,onRegister}){
   async function handle(){
     setErr("");
     if(!name.trim())return setErr("Please type your name");
-    if(!/^\d{8}$/.test(code))return setErr("Code must be exactly 8 digits");
+    if(!/^\d{4}$/.test(code))return setErr("Code must be exactly 4 digits");
     if(code!==confirm)return setErr("Codes don't match");
     setSaving(true);
     const{error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:"hourly",rate:"0",shift_rate:"0",night_rate:"0",card_fixed:"0",card_mode:"fixed"});
@@ -422,13 +422,13 @@ function StaffRegister({onBack,onRegister}){
     <div className="auth">
       <button className="back" onClick={onBack}>←</button>
       <div className="atitle">Create Account 🎉</div>
-      <div className="asub">Pick 8 numbers you'll remember — like your birthday: 01051990</div>
+      <div className="asub">Pick 4 numbers you'll remember — like your birth year: 1990</div>
       <label className="lbl">Your Full Name</label>
       <input className="inp" placeholder="e.g. Amy Chen" value={name} onChange={e=>setName(e.target.value)}/>
-      <label className="lbl">Choose 8-Digit Code</label>
-      <input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={code} onChange={e=>setCode(e.target.value)}/>
+      <label className="lbl">Choose 4-Digit Code</label>
+      <input className="inp code" type="password" inputMode="numeric" maxLength={4} placeholder="••••" value={code} onChange={e=>setCode(e.target.value)}/>
       <label className="lbl">Confirm Code</label>
-      <input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={confirm} onChange={e=>setConfirm(e.target.value)}/>
+      <input className="inp code" type="password" inputMode="numeric" maxLength={4} placeholder="••••" value={confirm} onChange={e=>setConfirm(e.target.value)}/>
       {err&&<div className="err">{err}</div>}
       <button className="btn" onClick={handle} disabled={saving}>{saving?"Creating…":"Create Account"}</button>
     </div>
@@ -641,30 +641,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
           <div style={{fontSize:14,lineHeight:1.6}}>{user.welcomeMsg}</div>
         </div>}
         {assigned&&!submitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-t">📊 You're today's Takings Person!</div><div className="notif-s">Tap to record today's takings →</div></div>}
-        {/* Emergency sick leave — shown if scheduled today and not yet clocked in */}
-        {!clockedIn&&!logs.some(l=>l.date===todayISO()&&l.note==="sick_leave")&&(()=>{
-          const todayRota=rota.find(sh=>sh.date===todayISO());
-          if(!todayRota||todayRota.type==="Off")return null;
-          return(
-            <div style={{background:"#FEE2E2",border:"2px solid #E05252",borderRadius:13,padding:"13px 15px",marginBottom:12}}>
-              <div style={{fontSize:14,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>🤒 Emergency — Can't come in today?</div>
-              <div style={{fontSize:12,color:"#991B1B",marginBottom:10,lineHeight:1.6}}>Tap below to notify the manager immediately. This will record your absence as sick leave and update your payroll automatically.</div>
-              <button className="btn danger" style={{marginTop:0}} onClick={async()=>{
-                if(!window.confirm("Report emergency sick leave for today? The manager will be notified."))return;
-                const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:"",time_out:"",note:"sick_leave"}).select().single();
-                if(!error){setLogs(p=>[data,...p]);t("🤒 Sick leave reported — manager notified");}
-                else t("❌ "+error.message);
-              }}>🤒 Report Sick Leave for Today</button>
-            </div>
-          );
-        })()}
-        {/* Already reported sick today */}
-        {logs.some(l=>l.date===todayISO()&&l.note==="sick_leave")&&(
-          <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:13,padding:"12px 15px",marginBottom:12}}>
-            <div style={{fontSize:13,fontWeight:800,color:"#7F1D1D"}}>🤒 Sick leave reported for today</div>
-            <div style={{fontSize:12,color:"#991B1B",marginTop:3}}>The manager has been notified. Get well soon!</div>
-          </div>
-        )}
+        {/* Forgot to clock in banner */}
         {!logs.some(l=>l.date===todayISO()&&l.time_in)&&(()=>{
           const todayRota=rota.find(sh=>sh.date===todayISO());
           if(!todayRota||todayRota.type==="Off")return null;
@@ -786,7 +763,11 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
           📅 <strong>Check your rota every Wednesday</strong> and accept or reject by <strong>Friday</strong>. Also don't forget to report any absence or block the days you cannot work. For any emergency, contact the manager directly.
         </div>
         <div className="wnav"><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button><div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button></div>{RotaList()}</div>}
-      {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work. Dates 7+ days away can be reported here.</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={addDays(todayISO(),1)} onChange={e=>setAbsDate(e.target.value)}/>{absLessThan7Days&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 7 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is within the next 7 days. Please <strong>call or message the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</> }</div>}
+      {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div>
+        <div style={{background:"#FEF3C7",border:"1.5px solid #F59E0B",borderRadius:11,padding:"11px 13px",marginBottom:12,fontSize:13,color:"#78350F",lineHeight:1.7}}>
+          ⚠️ <strong>Need to report an absence within the next 7 days?</strong> Please call or message the manager directly — do not use this form for urgent absences.
+        </div>
+        <div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work. Dates 7+ days away can be reported here.</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={addDays(todayISO(),1)} onChange={e=>setAbsDate(e.target.value)}/>{absLessThan7Days&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 7 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is within the next 7 days. Please <strong>call or message the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</> }</div>}
       {tab==="takings"&&<div className="body">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
           <div className="sec" style={{margin:0}}>📊 Daily Takings</div>
@@ -812,7 +793,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
         ):(
           <>{submitted&&showCorrect&&<div style={{background:"#FFF8EC",border:"1.5px solid #E8620A",borderRadius:11,padding:"10px 13px",marginBottom:12}}><div style={{fontSize:12,fontWeight:800,color:"#92400E"}}>✏️ Correcting today's submission — this is your one chance to fix a mistake.</div></div>}
           <div style={{fontSize:12,color:"#888",marginBottom:14}}>For {dispDate(todayISO(),true)}. <strong>Enter all amounts as positive numbers.</strong></div>
-          {TKFIELDS.filter(f=>!f.managerOnly).map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.8)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(tCC[f.key]||"cash")===c?" on":""}`} onClick={()=>setTCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp sm" style={{display:"block",width:"100%",marginTop:4}} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" onKeyDown={e=>{if(["e","E","+","-"].includes(e.key))e.preventDefault();}} value={tVals[f.key]||""} onChange={e=>setTVals(p=>({...p,[f.key]:e.target.value}))}/></div>)}
+          {TKFIELDS.filter(f=>!f.managerOnly).map(f=><div key={f.key} className="tfield"><div className="tlbl"><span>{f.label}</span>{f.cc&&<div className="toggle" style={{transform:"scale(.9)",transformOrigin:"right"}}>{["cash","card"].map(c=><button key={c} className={`tgl${(tCC[f.key]||"cash")===c?" on":""}`} onClick={()=>setTCC(p=>({...p,[f.key]:c}))}>{c}</button>)}</div>}</div>{f.hint&&<div className="thint">{f.hint}</div>}<input className="inp" style={{display:"block",width:"100%",marginTop:4,fontSize:18,padding:"13px 14px"}} type="number" inputMode="decimal" min="0" step="0.01" placeholder="0.00" onKeyDown={e=>{if(["e","E","+","-"].includes(e.key))e.preventDefault();}} value={tVals[f.key]||""} onChange={e=>setTVals(p=>({...p,[f.key]:e.target.value}))}/></div>)}
           <label className="lbl" style={{marginTop:10}}>Note (optional)</label><textarea className="lognote" rows={3} style={{marginBottom:12}} placeholder="Any notes…" value={tNote} onChange={e=>setTNote(e.target.value)}/>
           {showCorrect
             ?<><button className="btn" onClick={correctTakings}>Submit Correction ✓</button><button className="btn sec" onClick={()=>setShowCorrect(false)}>Cancel</button></>
@@ -903,7 +884,8 @@ function ManagerApp({onLogout}){
   const[kpiCustomEnd,setKpiCustomEnd]=useState(()=>snapToSunday(todayISO()));
   const[kpiMetrics,setKpiMetrics]=useState({takings:true,wages:true,labour:true,tips:false});
   const[kpiCompare,setKpiCompare]=useState("none");
-  const[payrollLoaded,setPayrollLoaded]=useState(false); // gates auto-count display until Load pressed
+  const[payrollLoaded,setPayrollLoaded]=useState(false);
+  const[expandedSummaryStaff,setExpandedSummaryStaff]=useState(new Set()); // gates auto-count display until Load pressed
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const[cashPopup,setCashPopup]=useState(false);
   const[pinModal,setPinModal]=useState(false);
@@ -1003,6 +985,12 @@ function ManagerApp({onLogout}){
     const payload={staff_id:sId,day_index:day.jsDay,week_start:rotaMon,shift_type:field==="type"?val:day.type,custom_in:field==="customIn"?val:day.customIn,custom_out:field==="customOut"?val:day.customOut};
     if(day.rowId){await db.from("rota").update(payload).eq("id",day.rowId);}
     else{const{data}=await db.from("rota").insert(payload).select().single();if(data)setRota(p=>({...p,[sId]:p[sId].map((d,i)=>i===dayIdx?{...updated,rowId:data.id}:d)}));}
+    // If shift type changed, delete that day's confirmation so staff must re-confirm
+    if(field==="type"){
+      const dayName=DAYS_MON[day.jsDay];
+      await db.from("confirmations").delete().eq("staff_id",sId).eq("day",dayName);
+      t(`✅ ${DAYS_MON[day.jsDay]} updated — staff must re-confirm`);
+    }
   }
 
   // ── Takings defaults ──
@@ -1667,7 +1655,15 @@ function ManagerApp({onLogout}){
     }
     setExtras({});
     setClearKey(k=>k+1);
-    t(`✅ All pushed — ${payrollRows.length-1} staff-weeks, ${wklyRows.length-1} weekly rows, ${monthlyRows.length-1} monthly rows — page cleared!`);
+    // Push clock log for the full payroll week (all 7 days, sorted by date)
+    if(gsConfig.clockLogId){
+      t("⏳ Pushing Clock Log for week…");
+      const wr4=await pushClockLogWeek(ws);
+      if(!wr4.ok)t(`✅ Payroll pushed — but Clock Log failed: ${wr4.err}`);
+      else t(`✅ All pushed — ${payrollRows.length-1} staff-weeks · ${wklyRows.length-1} weekly rows · ${wr4.written||0} clock log rows — page cleared!`);
+    }else{
+      t(`✅ All pushed — ${payrollRows.length-1} staff-weeks, ${wklyRows.length-1} weekly rows, ${monthlyRows.length-1} monthly rows — page cleared!`);
+    }
   }
   async function exportPayrollMonthly(){
     if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
@@ -1764,7 +1760,45 @@ function ManagerApp({onLogout}){
     });
     if(rows.length>1)await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",rows);
   }
-  // Check daily auto-push (runs on load, fires if today's log not yet pushed)
+  // Push a full week of clock logs (all 7 days) sorted by date — called after payroll push
+  async function pushClockLogWeek(weekStart){
+    if(!gsConfig.webAppUrl||!gsConfig.clockLogId)return{ok:false,err:"Clock log sheet not configured"};
+    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Override At"];
+    const rows=[hdr];
+    const dates=weekDates(weekStart); // 7 ISO dates Sun-Sat
+    dates.forEach(date=>{
+      const dayLogs=clockLogs.filter(l=>l.date===date).sort((a,b)=>a.staff_name.localeCompare(b.staff_name));
+      dayLogs.forEach(l=>{
+        const staffRota=rota[l.staff_id]||[];
+        const jsDay=new Date(date+"T12:00:00").getDay();
+        const rotaEntry=staffRota.find(d=>d.jsDay===jsDay);
+        let rotaType="";
+        if(rotaEntry){
+          if(rotaEntry.type==="Full Day (11am–close)")rotaType="Full Day";
+          else if(rotaEntry.type==="Night (5:30pm–close)")rotaType="Night Shift";
+          else if(rotaEntry.type==="Custom")rotaType=`Custom ${rotaEntry.customIn||""}–${rotaEntry.customOut||""}`;
+          else rotaType=rotaEntry.type;
+        }
+        let extraTime=0;
+        if(l.time_out&&rotaEntry&&rotaEntry.customOut){
+          const[eH,eM]=rotaEntry.customOut.split(":").map(Number);
+          const[oH,oM]=l.time_out.split(":").map(Number);
+          const diffMins=(oH*60+oM)-(eH*60+eM);
+          if(diffMins>15)extraTime=roundHrs025(diffMins/60);
+        }
+        const rawHrs=parseHrs(l.time_in,l.time_out);
+        const breakHrs=parseFloat(l.break_time||0);
+        const netHrs=rawHrs>0?r2(Math.max(0,rawHrs-breakHrs)):"";
+        const NOTE_MAP={"forgot":"Forgot to clock out","overtime":"Working extra time","sick_leave":"Sick leave","left_early":"Left early/late","back-stamped":"Back-stamped"};
+        const noteLabel=(l.note||"").split("|").map(n=>n.startsWith("checklist_done")?"✅ End-of-shift checklist done":(NOTE_MAP[n]||n)).filter(Boolean).join(" + ");
+        const overrideDate=l.override_at?new Date(l.override_at):null;
+        const overrideLabel=(overrideDate&&overrideDate.getFullYear()>2020)?overrideDate.toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
+        rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",overrideLabel]);
+      });
+    });
+    if(rows.length<=1)return{ok:true,written:0}; // no clock data for this week
+    return await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",rows);
+  }
   const[lastClockPush,setLastClockPush]=useState(()=>localStorage.getItem("lastClockPush")||"");
   useEffect(()=>{
     if(!gsConfig.clockLogId||!gsConfig.webAppUrl)return;
@@ -1980,7 +2014,7 @@ function ManagerApp({onLogout}){
       setErr("");if(!name.trim())return setErr("Enter a name");
       setSaving(true);
       if(type==="foh"){
-        if(!/^\d{8}$/.test(code)){setSaving(false);return setErr("Code must be 8 digits");}
+        if(!/^\d{4}$/.test(code)){setSaving(false);return setErr("Code must be 4 digits");}
         const{data:newStaff,error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:"hourly",rate:rate||"0",shift_rate:shiftRate||"0",night_rate:nightRate||"0",card_fixed:cardFixed||"0",card_mode:"fixed"}).select().single();
         if(error){setSaving(false);return setErr(error.code==="23505"?"Code already taken":error.message);}
         setStaff(p=>[...p,{...newStaff,payType:"hourly",rate:rate||"0",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardFixed:cardFixed||"0",cardMode:"fixed",tipsPct:"0"}].sort((a,b)=>a.name.localeCompare(b.name)));
@@ -2004,8 +2038,8 @@ function ManagerApp({onLogout}){
         <label className="lbl">Full Name</label>
         <input className="inp" placeholder={type==="foh"?"e.g. Amy Chen":"e.g. Marco"} value={name} onChange={e=>setName(e.target.value)}/>
         {type==="foh"&&<>
-          <label className="lbl">8-Digit Login Code</label>
-          <input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={code} onChange={e=>setCode(e.target.value)}/>
+          <label className="lbl">4-Digit Login Code</label>
+          <input className="inp code" type="password" inputMode="numeric" maxLength={4} placeholder="••••" value={code} onChange={e=>setCode(e.target.value)}/>
         </>}
         <div style={{display:"flex",gap:8}}>
           <div style={{flex:1}}><label className="lbl">£/HR</label><input className="inp" type="number" placeholder="0.00" value={rate} onChange={e=>setRate(e.target.value)}/></div>
@@ -2387,10 +2421,12 @@ function ManagerApp({onLogout}){
           <>
             <div className="sec">Clock Logs</div>
             <div style={{display:"flex",gap:6,marginBottom:14,alignItems:"center"}}>
+              <button className="btn sm sec" style={{padding:"6px 10px",flexShrink:0}} onClick={()=>{setClockDate(addDays(clockDate,-1));setClockShowAll(false);}} disabled={clockShowAll}>‹</button>
               <input type="date" className="inp sm" style={{flex:1}} value={clockDate} onChange={e=>{setClockDate(e.target.value);setClockShowAll(false);}} disabled={clockShowAll}/>
+              <button className="btn sm sec" style={{padding:"6px 10px",flexShrink:0}} onClick={()=>{setClockDate(addDays(clockDate,1));setClockShowAll(false);}} disabled={clockShowAll}>›</button>
               <button className="btn sm sec" onClick={()=>{setClockDate(todayISO());setClockShowAll(false);}}>Today</button>
-              {gsConfig.clockLogId&&<button className="btn sm navy" onClick={()=>{pushClockLog(clockDate);t("⏳ Pushing clock log…");}}>📤 Push Clock Log</button>}
-              <button className={`btn sm${clockShowAll?" navy":" sec"}`} onClick={()=>setClockShowAll(v=>!v)}>{clockShowAll?"✓ All Dates":"All Dates"}</button>
+              {gsConfig.clockLogId&&<button className="btn sm navy" onClick={()=>{pushClockLog(clockDate);t("⏳ Pushing clock log…");}}>📤 Push</button>}
+              <button className={`btn sm${clockShowAll?" navy":" sec"}`} onClick={()=>setClockShowAll(v=>!v)}>{clockShowAll?"✓ All":"All"}</button>
             </div>
             {staff.map(s=>{
               const sLogsAll=clockLogs.filter(l=>l.staff_id===s.id);
@@ -2406,6 +2442,7 @@ function ManagerApp({onLogout}){
                       <span style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(l.date,true)}</span>
                       <div style={{display:"flex",gap:6,alignItems:"center"}}>
                         <span style={{fontSize:13,fontWeight:800,color:l.time_out?"#1A1A2E":"#50DC78"}}>{l.time_out?parseHrs(l.time_in,l.time_out).toFixed(2)+"h":"active"}</span>
+                        {l.time_out&&parseFloat(l.break_time||0)>0&&<span style={{fontSize:11,color:"#aaa"}}>(-{l.break_time}hr break)</span>}
                         <button onClick={async()=>{if(!window.confirm(`Delete this entry for ${s.name} on ${dispDate(l.date,true)}?`))return;const{error}=await db.from("clock_logs").delete().eq("id",l.id);if(!error){setClockLogs(p=>p.filter(x=>x.id!==l.id));t("🗑️ Entry deleted");}else t("❌ "+error.message);}} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#E05252",padding:"2px 4px"}}>🗑️</button>
                       </div>
                     </div>
@@ -2416,7 +2453,8 @@ function ManagerApp({onLogout}){
                       <span className="logelbl">Out</span>
                       <input type="time" className="inp time" value={l.time_out||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v}:x));}} onBlur={e=>{const v=e.target.value;const oa=new Date().toISOString();db.from("clock_logs").update({time_out:v,override_at:oa}).eq("id",l.id);setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v,override_at:oa}:x));}}/>
                     </div>
-                    <select className="lognote" style={{marginBottom:4}} value={l.note||""} onChange={e=>{const v=e.target.value;const oa=new Date().toISOString();setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:v,override_at:oa}:x));db.from("clock_logs").update({note:v,override_at:oa}).eq("id",l.id);}}>
+                    <select className="lognote" style={{marginBottom:4}} value={(l.note||"").split("|").find(n=>["forgot","left_early","overtime","sick_leave","back-stamped","custom",""].includes(n))||""} onChange={e=>{const v=e.target.value;const oa=new Date().toISOString();// Preserve non-status parts (e.g. back-stamped) and replace status part
+const existing=(l.note||"").split("|").filter(n=>n&&!["forgot","left_early","overtime","sick_leave","custom"].includes(n)&&!n.startsWith("custom:"));const newParts=v?[...existing,v]:existing;const combined=newParts.join("|");setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:combined,override_at:oa}:x));db.from("clock_logs").update({note:combined,override_at:oa}).eq("id",l.id);}}>
                       <option value="">— No note —</option>
                       <option value="forgot">Forgot to clock out</option>
                       <option value="left_early">Left early / came in late</option>
@@ -2429,6 +2467,7 @@ function ManagerApp({onLogout}){
                   </div>
                 ))}
                 <button className="btn sm" style={{marginTop:9,background:"#E8620A"}} onClick={async()=>{const dateForEntry=clockShowAll?todayISO():clockDate;const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:""}).select().single();if(!error)setClockLogs(p=>[data,...p]);else t("❌ "+error.message);}}>+ Add Entry {clockShowAll?"":`for ${dispDate(clockDate)}`}</button>
+                <button className="btn sm" style={{marginTop:6,background:"#FEE2E2",color:"#7F1D1D"}} onClick={async()=>{const dateForEntry=clockShowAll?todayISO():clockDate;if(!window.confirm(`Mark ${s.name} as sick leave on ${dispDate(dateForEntry,true)}?`))return;const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:"sick_leave"}).select().single();if(!error){setClockLogs(p=>[data,...p]);t(`🤒 ${s.name} marked as sick leave for ${dispDate(dateForEntry,true)}`);}else t("❌ "+error.message);}}>🤒 Mark Sick Leave {clockShowAll?"":`for ${dispDate(clockDate)}`}</button>
               </div>
             );})}
 
@@ -2507,6 +2546,30 @@ function ManagerApp({onLogout}){
                       });
                       t(`✅ ${s.name.split(" ")[0]} authorised for week of ${fmtDate(ws)} → check payroll card`);
                     }}>✓ Authorise → Payroll</button>
+                    <button className="btn sm sec" style={{marginTop:5}} onClick={()=>setExpandedSummaryStaff(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;})}>
+                      {expandedSummaryStaff.has(s.id)?"▲ Hide details":"▼ View week details"}
+                    </button>
+                    {expandedSummaryStaff.has(s.id)&&<div style={{marginTop:8,borderTop:"1px dashed #E5E5E5",paddingTop:8}}>
+                      {weekDates(ws).map(dateISO=>{
+                        const dayLogs=sLogs.filter(l=>l.date===dateISO);
+                        const jsDay=new Date(dateISO+"T12:00:00").getDay();
+                        const dn=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][jsDay];
+                        const dayHrs=dayLogs.reduce((a,l)=>a+Math.max(0,parseHrs(l.time_in,l.time_out)-parseFloat(l.break_time||0)),0);
+                        const NM={"forgot":"Forgot","overtime":"Overtime","sick_leave":"🤒 Sick","left_early":"Left early","back-stamped":"Back-stamp"};
+                        return(<div key={dateISO} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 0",borderBottom:"1px dashed #F5F5F5",fontSize:12}}>
+                          <span style={{minWidth:28,fontWeight:700,color:"#888"}}>{dn}</span>
+                          <span style={{minWidth:44,color:"#aaa"}}>{fmtDate(dateISO).slice(0,5)}</span>
+                          {dayLogs.length>0
+                            ?<><span style={{color:"#1A1A2E"}}>{dayLogs[0].time_in||"—"}→{dayLogs[0].time_out||"active"}</span>
+                               {dayHrs>0&&<span style={{fontWeight:800,color:"#E8620A",marginLeft:4}}>{roundHrsUp(dayHrs).toFixed(2)}h</span>}
+                               {parseFloat(dayLogs[0].break_time||0)>0&&<span style={{color:"#aaa",fontSize:11}}>(-{dayLogs[0].break_time}h)</span>}
+                               {dayLogs[0].note&&<span style={{background:"#F0F0F0",borderRadius:10,padding:"1px 6px",fontSize:10,color:"#555",marginLeft:4}}>{(dayLogs[0].note||"").split("|").map(n=>NM[n]||n).join(" + ")}</span>}
+                            </>
+                            :<span style={{color:"#ccc",fontStyle:"italic"}}>No entry</span>
+                          }
+                        </div>);
+                      })}
+                    </div>}
                   </div>
                 );
               })}
@@ -2564,8 +2627,6 @@ function ManagerApp({onLogout}){
                 To reload saved data for a week: change the start date — the cards will auto-fill from what's stored.
               </div>
               <button className="expbtn p" onClick={exportPayroll}>🔗 Push to Payroll Sheet (Staff + Weekly tabs)</button>
-              <button className="expbtn s" onClick={()=>copyTSV(buildPayroll(),t)}>📋 Copy Staff Data</button>
-              <button className="expbtn s" onClick={()=>copyTSV(buildPayrollWeekly(),t)}>📋 Copy Weekly Summary</button>
               <button className="expbtn s" onClick={()=>setCashPopup(true)}>💵 View Cash Payments</button>
               <div style={{borderTop:"1px dashed #E5E5E5",marginTop:10,paddingTop:10}}>
                 <div style={{fontSize:12,fontWeight:700,color:"#1A1A2E",marginBottom:6}}>📅 Monthly Payroll</div>
@@ -2814,29 +2875,52 @@ function ManagerApp({onLogout}){
               {/* Channel Breakdown */}
               {(()=>{
                 const tot=selected.takings;
-                if(tot<=0)return null;
                 const channels=[
-                  {label:"Deliveroo",val:selected.deliveroo,color:"#00A6A6"},
-                  {label:"Uber Eats",val:selected.uber,color:"#06C167"},
-                  {label:"Cash",val:selected.cash,color:"#50DC78"},
-                  {label:"Card",val:selected.card,color:"#3B82F6"},
-                  {label:"Online",val:selected.online,color:"#8B5CF6"},
-                  {label:"Shop Expenses",val:selected.shopExp,color:"#E05252",deduct:true},
+                  {label:"Deliveroo",key:"deliveroo",color:"#00A6A6"},
+                  {label:"Uber Eats",key:"uber",color:"#06C167"},
+                  {label:"Cash",key:"cash",color:"#50DC78"},
+                  {label:"Card",key:"card",color:"#3B82F6"},
+                  {label:"Online",key:"online",color:"#8B5CF6"},
+                  {label:"Shop Exp",key:"shopExp",color:"#E05252",deduct:true},
                 ];
                 return(<div style={{background:"#FFF5EF",borderRadius:12,padding:"12px 13px",marginBottom:12}}>
-                  <div style={{fontSize:12,fontWeight:800,color:"#888",marginBottom:10}}>📊 Revenue Channels — week of {fmtDate(kpiWeek)}</div>
-                  {channels.filter(c=>c.val>0).map(c=>{
-                    const pct=r2(c.val/tot*100);
-                    return(<div key={c.label} style={{marginBottom:7}}>
-                      <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
-                        <span style={{fontWeight:700,color:c.deduct?"#E05252":"#555"}}>{c.label}{c.deduct?" (deducted)":""}</span>
-                        <span style={{fontWeight:800,color:c.color}}>£{c.val} — {pct}%</span>
-                      </div>
-                      <div style={{background:"#F0F0F0",borderRadius:4,height:8,overflow:"hidden"}}>
-                        <div style={{width:pct+"%",background:c.color,height:"100%",borderRadius:4,transition:"width .3s"}}/>
-                      </div>
-                    </div>);
-                  })}
+                  <div style={{fontSize:13,fontWeight:800,color:"#1A1A2E",marginBottom:10}}>📊 Channel Breakdown — week of {fmtDate(kpiWeek)}</div>
+                  {tot>0
+                    ? channels.filter(c=>selected[c.key]>0).map(c=>{
+                        const pct=r2(selected[c.key]/tot*100);
+                        return(<div key={c.key} style={{marginBottom:8}}>
+                          <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:3}}>
+                            <span style={{fontWeight:700,color:c.deduct?"#E05252":"#555"}}>{c.label}{c.deduct?" (deducted)":""}</span>
+                            <span style={{fontWeight:800,color:c.color}}>£{selected[c.key]} &nbsp; {pct}%</span>
+                          </div>
+                          <div style={{background:"#F0F0F0",borderRadius:4,height:10,overflow:"hidden"}}>
+                            <div style={{width:pct+"%",background:c.color,height:"100%",borderRadius:4,transition:"width .3s"}}/>
+                          </div>
+                        </div>);
+                      })
+                    : <div style={{fontSize:12,color:"#bbb"}}>No takings data for this week</div>
+                  }
+                  {/* Multi-week channel table */}
+                  {mainData.some(w=>w.takings>0)&&<>
+                    <div style={{fontSize:12,fontWeight:800,color:"#888",marginTop:14,marginBottom:8}}>Channel % across {mainData.length} weeks</div>
+                    <div style={{overflowX:"auto"}}>
+                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
+                        <thead><tr style={{background:"#FFF5EF"}}>
+                          <th style={{padding:"5px 6px",textAlign:"left",color:"#aaa",fontWeight:700}}>Week</th>
+                          {channels.map(c=><th key={c.key} style={{padding:"5px 4px",textAlign:"right",color:c.color,fontWeight:700,whiteSpace:"nowrap"}}>{c.label}</th>)}
+                        </tr></thead>
+                        <tbody>{mainData.filter(w=>w.takings>0).map((w,i)=>(
+                          <tr key={i} style={{borderBottom:"1px solid #F0F0F0",background:w.ws===kpiWeek?"#FFF0E6":"transparent"}}>
+                            <td style={{padding:"5px 6px",fontWeight:w.ws===kpiWeek?800:400,whiteSpace:"nowrap"}}>{w.label}</td>
+                            {channels.map(c=>{
+                              const pct=w.takings>0?r2(w[c.key]/w.takings*100):0;
+                              return(<td key={c.key} style={{padding:"5px 4px",textAlign:"right",color:pct>0?c.color:"#ddd",fontWeight:pct>0?700:400}}>{pct>0?pct+"%":"—"}</td>);
+                            })}
+                          </tr>
+                        ))}</tbody>
+                      </table>
+                    </div>
+                  </>}
                 </div>);
               })()}
 
@@ -2922,25 +3006,45 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
       {/* Assignment */}
       <div className="card">
         <div className="cname" style={{marginBottom:4}}>📅 Who Records Takings</div>
-        <div style={{fontSize:12,color:"#888",marginBottom:12}}>Assign up to 2 staff. Each day can only have one person.</div>
-        {staff.slice(0,2).map(s=>{
-          const myDays=staffAssignedDays(s.id);
-          return(
-            <div key={s.id} style={{marginBottom:14,paddingBottom:14,borderBottom:"1px dashed #E5E5E5"}}>
-              <div style={{fontSize:13,fontWeight:800,color:"#1A1A2E",marginBottom:8}}>👤 {s.name}</div>
-              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                {DAYS_MON.map((dayName,monIdx)=>{
-                  const dow=monIdx===6?0:monIdx+1;
-                  const isOn=takingDefaults[dow]===s.id;
-                  const takenByOther=takingDefaults[dow]&&takingDefaults[dow]!==s.id;
-                  return(<button key={dow} className={`day-tog${isOn?" on":""}`} disabled={takenByOther} title={takenByOther?`Assigned to ${staff.find(x=>x.id===takingDefaults[dow])?.name}`:""}
-                    onClick={()=>saveTakingDefault(s.id,dow,!isOn)}>{dayName}</button>);
-                })}
-              </div>
-              {myDays.length>0&&<div style={{fontSize:11,color:"#888",marginTop:6}}>Assigned: {myDays.map(dow=>DAYS_SUN[dow]).join(", ")}</div>}
+        <div style={{fontSize:12,color:"#888",marginBottom:12}}>Assign one staff per day. Only one person can do takings on any given day — but the same person can cover the whole week if needed.</div>
+        {/* Two subsections — Slot A and Slot B — each a full week of dropdowns */}
+        {[0,1].map(slot=>(
+          <div key={slot} style={{marginBottom:16,paddingBottom:16,borderBottom:"1px dashed #E5E5E5"}}>
+            <div style={{fontSize:12,fontWeight:800,color:"#E8620A",marginBottom:8}}>📋 {slot===0?"Primary":"Backup"} Assignment</div>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {DAYS_MON.map((dayName,monIdx)=>{
+                // DAYS_MON is Sun-based: monIdx=0→Sun(dow=0), monIdx=1→Mon(dow=1)...
+                const dow=monIdx;
+                const currentStaff=takingDefaults[dow]||"";
+                // For slot 1 (backup), find who's already in slot 0 for this day
+                // For slot 0, just show current assignment
+                // The restriction: only one person per day, enforced by saveTakingDefault
+                return(
+                  <div key={dow} style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{minWidth:34,fontSize:12,fontWeight:700,color:"#888"}}>{dayName}</div>
+                    <select className="inp sm" style={{flex:1,fontSize:12}} value={slot===0?currentStaff:""} onChange={e=>{
+                      const newStaff=e.target.value;
+                      if(slot===0){
+                        // Clear this day and reassign
+                        if(currentStaff&&currentStaff!==newStaff)saveTakingDefault(currentStaff,dow,false);
+                        if(newStaff)saveTakingDefault(newStaff,dow,true);
+                        else if(currentStaff)saveTakingDefault(currentStaff,dow,false);
+                      }
+                    }}>
+                      <option value="">— Not assigned —</option>
+                      {staff.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                  </div>
+                );
+              })}
             </div>
-          );
-        })}
+          </div>
+        ))}
+        <div style={{fontSize:11,color:"#888",marginTop:-8}}>
+          Current week: {Object.entries(takingDefaults).length>0
+            ? DAYS_MON.map((d,i)=>takingDefaults[i]?`${d}: ${staff.find(s=>s.id===takingDefaults[i])?.name||"?"}`:null).filter(Boolean).join(" · ")
+            : "No assignments yet"}
+        </div>
       </div>
 
       {/* Today override */}
