@@ -484,8 +484,8 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
       db.from("takings").select("id,is_corrected").eq("staff_id",user.id).eq("date",todayISO()),
     ]);
     setLogs(logR.data||[]);setAbsences(absR.data||[]);setRejections(rejR.data||[]);setConfirmations(confR.data||[]);
-    // Seed the ref-backed Set from DB so old confirmations work on reload
-    (confR.data||[]).forEach(r=>{if(r.day)confirmedKeysRef.current.add(r.day);});
+    // Seed ref with plain day names for instant chip display
+    (confR.data||[]).forEach(r=>{if(r.day&&!r.day.includes("|"))confirmedKeysRef.current.add(r.day);});
     const todaySub=(subR.data||[])[0]||null;
     setSubmitted(!!todaySub);
     setCorrected(!!(todaySub?.is_corrected));
@@ -496,10 +496,25 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   }
   async function loadRota(){
     const dates=weekDates(rotaMon);
-    // Query both Sunday-based (new) and Monday-based (old) week_start for backward compatibility
-    const monStart=addDays(rotaMon,1); // Monday of the same week
-    const{data}=await db.from("rota").select("*").eq("staff_id",user.id).in("week_start",[rotaMon,monStart]);
-    setRota(dates.map(dateISO=>{const jsDay=new Date(dateISO+"T12:00:00").getDay();const row=(data||[]).find(r=>r.day_index===jsDay);return{date:dateISO,jsDay,type:row?.shift_type||"Off",customIn:row?.custom_in||"",customOut:row?.custom_out||"",rowId:row?.id};}));
+    const dateStart=dates[0];const dateEnd=dates[6];
+    // Query ALL rota rows for this staff — filter client-side by matching jsDay to week dates
+    // This bypasses week_start format mismatches entirely (old Mon-based vs new Sun-based)
+    const{data}=await db.from("rota").select("*").eq("staff_id",user.id);
+    const rows=data||[];
+    setRota(dates.map(dateISO=>{
+      const jsDay=new Date(dateISO+"T12:00:00").getDay();
+      // Find the most recent row for this day_index whose week_start is within 14 days of rotaMon
+      const candidates=rows.filter(r=>{
+        if(r.day_index!==jsDay)return false;
+        // Accept row if its week_start is within 2 weeks of rotaMon (handles old+new formats)
+        const diff=Math.abs(new Date(r.week_start+"T12:00:00")-new Date(rotaMon+"T12:00:00"))/(1000*60*60*24);
+        return diff<=7;
+      });
+      // Prefer exact week_start match, else take closest
+      const exact=candidates.find(r=>r.week_start===rotaMon||r.week_start===addDays(rotaMon,1));
+      const row=exact||candidates[0];
+      return{date:dateISO,jsDay,type:row?.shift_type||"Off",customIn:row?.custom_in||"",customOut:row?.custom_out||"",rowId:row?.id};
+    }));
   }
   async function clockIn(){
     // Once-per-day restriction
@@ -509,7 +524,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     const todayRota=rota.find(sh=>sh.date===todayISO());
     if(todayRota&&todayRota.type!=="Off"){
       const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
-      const currentWeekSun=snapToSunday(todayISO());const todayWeekKey=todayDayName+"|"+currentWeekSun;const isConfirmed=confirmedKeysRef.current.has(todayWeekKey)||confirmations.some(r=>r.day===todayWeekKey);
+      const currentWeekSun=snapToSunday(todayISO());const todayWeekKey=todayDayName+"|"+currentWeekSun;const isConfirmed=confirmedKeysRef.current.has(todayDayName)||confirmations.some(r=>r.day===todayDayName);
       if(!isConfirmed)return t("⚠️ Please confirm your rota shift first (Rota tab → ✓ OK).");
     }
     const time=nowTime();
@@ -577,7 +592,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   async function reportAbsence(){
     if(!absDate||!absPeriod)return t("Please pick a date and period");
     const daysNotice=Math.floor((new Date(absDate+"T12:00:00")-new Date(todayISO()+"T12:00:00"))/(1000*60*60*24));
-    if(daysNotice<7)return; // blocked — UI shows warning instead
+    if(daysNotice<7){t("⚠️ Less than 7 days notice — please contact the manager directly.");return;}
     const{data,error}=await db.from("absences").insert({staff_id:user.id,staff_name:user.name,date:absDate,period:absPeriod}).select().single();
     if(!error){setAbsences(p=>[...p,data]);setAbsDate("");setAbsPeriod("");t("📅 Absence sent!");}else t("❌ "+error.message);
   }
@@ -585,22 +600,20 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   // so any absence before next Wednesday must be called in directly
   const absLessThan7Days=absDate&&Math.floor((new Date(absDate+"T12:00:00")-new Date(todayISO()+"T12:00:00"))/(1000*60*60*24))<7;
   async function confirmShift(idx){
-    const weekKey=DAYS_MON[idx]+"|"+rotaMon;
-    // Add to ref immediately — this NEVER gets wiped by re-renders
-    confirmedKeysRef.current.add(weekKey);
-    // Also add to state to trigger re-render showing chip
-    setConfirmations(p=>[...p.filter(r=>r.day!==weekKey),{id:"local_"+Date.now(),staff_id:user.id,staff_name:user.name,day:weekKey}]);
-    t("✅ Shift confirmed!");
-    // DB write in background — never blocks UI
-    try{ await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:weekKey}); }catch(_){}
+    const dayName=DAYS_MON[idx];
+    const{data,error}=await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:dayName}).select().single();
+    if(!error){setConfirmations(p=>[...p,data]);t("✅ Confirmed!");}
+    else if(error.code==="23505"){
+      // Duplicate key — already confirmed in DB, just update local state
+      setConfirmations(p=>p.some(r=>r.day===dayName)?p:[...p,{id:"dup",staff_id:user.id,staff_name:user.name,day:dayName}]);
+      t("✅ Confirmed!");
+    }else t("❌ "+error.message);
   }
   async function rejectShift(){
-    const weekKey=DAYS_MON[rejectModal]+"|"+rotaMon;
-    const optimistic={id:"opt_"+Date.now(),staff_id:user.id,staff_name:user.name,day:weekKey,reason:rejectReason};
-    setRejections(p=>[...p.filter(r=>r.day!==weekKey),optimistic]);
-    setRejectModal(null);
-    await db.from("rejections").insert({staff_id:user.id,staff_name:user.name,day:weekKey,reason:rejectReason});
-    t("Rejection sent");
+    const dayName=DAYS_MON[rejectModal];
+    const{data,error}=await db.from("rejections").insert({staff_id:user.id,staff_name:user.name,day:dayName,reason:rejectReason}).select().single();
+    if(!error){setRejections(p=>[...p,data]);setRejectModal(null);t("Rejection sent");}
+    else t("❌ "+error.message);
   }
   async function submitTakings(){const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(tVals[f.key]||0);if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});const{error}=await db.from("takings").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),...vals,note:tNote,is_new:true,is_corrected:false});if(!error){setTVals({});setTCC({});setTNote("");setSubmitted(true);t("📊 Submitted!");setTab("home");}else t("❌ "+error.message);}
   async function correctTakings(){
@@ -614,7 +627,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
 
   if(loading)return<Loading text="Loading your data…"/>;
 
-  function RotaList(){return rota.map((sh,idx)=>{const isToday=sh.date===todayISO();const dayName=DAYS_MON[idx];const weekKey=dayName+"|"+rotaMon;const rejected=rejections.some(r=>r.day===weekKey||r.day===dayName);const confirmed=confirmedKeysRef.current.has(weekKey)||confirmations.some(r=>r.day===weekKey);const isOff=sh.type==="Off";return(<div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}`}><div className="rdaylbl"><div className="rdayname">{dayName}</div><div className="rdaydate">{dispDate(sh.date)}</div>{isToday&&<div className="rdayflag">TODAY</div>}</div><div className="rdayshift">{shiftLabel(sh)}</div>{!isOff&&!rejected&&!confirmed&&<div className="rdaybtns"><button className="okbtn" onClick={()=>confirmShift(idx)}>✓ OK</button><button className="nobtn" onClick={()=>{setRejectModal(idx);setRejectReason("");}}>✕ Can't</button></div>}{confirmed&&<span className="chip g">✓ OK</span>}{rejected&&!isOff&&<span className="chip r">Rejected</span>}</div>);});}
+  function RotaList(){return rota.map((sh,idx)=>{const isToday=sh.date===todayISO();const dayName=DAYS_MON[idx];const rejected=rejections.some(r=>r.day===dayName);const confirmed=confirmedKeysRef.current.has(dayName)||confirmations.some(r=>r.day===dayName);const isOff=sh.type==="Off";return(<div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}`}><div className="rdaylbl"><div className="rdayname">{dayName}</div><div className="rdaydate">{dispDate(sh.date)}</div>{isToday&&<div className="rdayflag">TODAY</div>}</div><div className="rdayshift">{shiftLabel(sh)}</div>{!isOff&&!rejected&&!confirmed&&<div className="rdaybtns"><button className="okbtn" onClick={()=>confirmShift(idx)}>✓ OK</button><button className="nobtn" onClick={()=>{setRejectModal(idx);setRejectReason("");}}>✕ Can't</button></div>}{confirmed&&<span className="chip g">✓ OK</span>}{rejected&&!isOff&&<span className="chip r">Rejected</span>}</div>);});}
 
   const navItems=[{id:"home",icon:"🏠",label:"Home"},{id:"clock",icon:"⏰",label:"Clock"},{id:"rota",icon:"📋",label:"Rota"},{id:"absence",icon:"📅",label:"Absence"},...(assigned?[{id:"takings",icon:"📊",label:"Takings",badge:!submitted}]:[])];
   return(
@@ -750,7 +763,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
           📅 <strong>Check your rota every Wednesday</strong> and accept or reject by <strong>Friday</strong>. Also don't forget to report any absence or block the days you cannot work. For any emergency, contact the manager directly.
         </div>
         <div className="wnav"><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button><div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button></div><RotaList/></div>}
-      {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={todayISO()} onChange={e=>setAbsDate(e.target.value)}/>{absLessThan7Days&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 7 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is within the next 7 days. Please <strong>call or message the manager directly</strong> as soon as possible — do not rely on this form for urgent absences.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod||absLessThan7Days}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</> }</div>}
+      {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work. Dates 7+ days away can be reported here.</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={addDays(todayISO(),1)} onChange={e=>setAbsDate(e.target.value)}/>{absLessThan7Days&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 7 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is within the next 7 days. Please <strong>call or message the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</> }</div>}
       {tab==="takings"&&<div className="body">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
           <div className="sec" style={{margin:0}}>📊 Daily Takings</div>
@@ -2350,11 +2363,6 @@ function ManagerApp({onLogout}){
         {tab==="clock"&&(
           <>
             <div className="sec">Clock Logs</div>
-            <div className="wnav">
-              <button className="wnavbtn" onClick={()=>setClockDate(addDays(clockDate,-1))} disabled={clockShowAll}>‹</button>
-              <div className="wnavlbl">{clockShowAll?"Showing all history":dispDate(clockDate,true)}</div>
-              <button className="wnavbtn" onClick={()=>setClockDate(addDays(clockDate,1))} disabled={clockShowAll}>›</button>
-            </div>
             <div style={{display:"flex",gap:6,marginBottom:14,alignItems:"center"}}>
               <input type="date" className="inp sm" style={{flex:1}} value={clockDate} onChange={e=>{setClockDate(e.target.value);setClockShowAll(false);}} disabled={clockShowAll}/>
               <button className="btn sm sec" onClick={()=>{setClockDate(todayISO());setClockShowAll(false);}}>Today</button>
