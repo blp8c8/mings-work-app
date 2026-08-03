@@ -1053,10 +1053,11 @@ function ManagerApp({onLogout}){
     const logsInRange=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=weekRange.start&&l.date<=weekRange.end);
 
     // ── Shift-paid staff ──
-    // Exclude shifts where clock log shows sick_leave for that day
+    // Only count shifts where staff actually clocked in AND out (not just rota-scheduled)
     const sickDates=new Set(logsInRange.filter(l=>l.note==="sick_leave").map(l=>l.date));
-    const autoFull=myRota.filter(sh=>sh?.type==="Full Day (11am–close)"&&!sickDates.has(sh.date)).length;
-    const autoNight=myRota.filter(sh=>sh?.type==="Night (5:30pm–close)"&&!sickDates.has(sh.date)).length;
+    const clockedDates=new Set(logsInRange.filter(l=>l.time_in&&l.time_out).map(l=>l.date));
+    const autoFull=myRota.filter(sh=>sh?.type==="Full Day (11am–close)"&&!sickDates.has(sh.date)&&clockedDates.has(sh.date)).length;
+    const autoNight=myRota.filter(sh=>sh?.type==="Night (5:30pm–close)"&&!sickDates.has(sh.date)&&clockedDates.has(sh.date)).length;
     const full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):(hasShiftRate&&payrollLoaded?autoFull:0);
     const night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):(hasShiftRate&&payrollLoaded?autoNight:0);
 
@@ -1079,7 +1080,7 @@ function ManagerApp({onLogout}){
             if(iH*60+iM<sH*60+sM)effectiveIn=schedStart; // clamp to scheduled start
           }
         }
-        dailyRaw[l.date]=(dailyRaw[l.date]||0)+parseHrs(effectiveIn,l.time_out);
+        dailyRaw[l.date]=(dailyRaw[l.date]||0)+Math.max(0,parseHrs(effectiveIn,l.time_out)-parseFloat(l.break_time||0));
       });
       autoHrs=Object.values(dailyRaw).reduce((a,dayHrs)=>a+roundHrsUp(dayHrs),0);
       // Overtime: compute scheduled hours from rota, compare to clock hours
@@ -2505,7 +2506,7 @@ const existing=(l.note||"").split("|").filter(n=>n&&!["forgot","left_early","ove
                 },0));
                 const hasFlag=hasOvertime||hasSick||hasLate||hasLeftEarly;
                 const dailyRaw={};
-                sLogs.forEach(l=>{dailyRaw[l.date]=(dailyRaw[l.date]||0)+parseHrs(l.time_in,l.time_out);});
+                sLogs.forEach(l=>{dailyRaw[l.date]=(dailyRaw[l.date]||0)+Math.max(0,parseHrs(l.time_in,l.time_out)-parseFloat(l.break_time||0));});
                 const clockHrs=r2(Object.values(dailyRaw).reduce((a,h)=>a+roundHrsUp(h),0));
                 const autoFull=(rota[s.id]||[]).filter(sh=>sh?.type==="Full Day (11am–close)"&&sh.date>=ws&&sh.date<=we).length;
                 const autoNight=(rota[s.id]||[]).filter(sh=>sh?.type==="Night (5:30pm–close)"&&sh.date>=ws&&sh.date<=we).length;
