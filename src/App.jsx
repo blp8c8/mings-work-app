@@ -208,6 +208,7 @@ function rotaWeekOf(iso) {
 const CSS=`
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;}
+button,a{touch-action:manipulation;}
 body{font-family:'Inter',sans-serif;background:#FFF5EF;-webkit-tap-highlight-color:transparent;overscroll-behavior:none;}
 .app{max-width:430px;margin:0 auto;min-height:100vh;background:#fff;position:relative;overflow-x:hidden;}
 .role-screen{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px;background:linear-gradient(160deg,#1A1A2E,#3D2010);}
@@ -260,14 +261,14 @@ body{font-family:'Inter',sans-serif;background:#FFF5EF;-webkit-tap-highlight-col
 .rdaydate{font-size:10px;color:#aaa;}.rdayflag{font-size:9px;font-weight:700;color:#E8620A;}
 .rdayshift{flex:1;font-size:13px;font-weight:700;color:#1A1A2E;}
 .rdaybtns{display:flex;gap:5px;}
-.okbtn{border:none;background:#D1FAE5;color:#065F46;border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;}
-.nobtn{border:none;background:#FEE2E2;color:#E05252;border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;}
+.okbtn{border:none;background:#D1FAE5;color:#065F46;border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;touch-action:manipulation;user-select:none;}
+.nobtn{border:none;background:#FEE2E2;color:#E05252;border-radius:8px;padding:5px 9px;font-size:11px;font-weight:700;cursor:pointer;touch-action:manipulation;user-select:none;}
 .abscard{background:#FFF8EC;border:2px solid #E8620A;border-radius:16px;padding:16px;margin-bottom:14px;}
 .peribtns{display:flex;gap:6px;margin-bottom:12px;}
 .pbtn{flex:1;padding:10px 4px;border:2px solid #E5E5E5;border-radius:10px;background:#fff;font-size:12px;font-weight:700;color:#1A1A2E;cursor:pointer;text-align:center;}
 .pbtn.sel{border-color:#E8620A;background:#FFF8EC;}
-.toast{position:fixed;top:24px;left:50%;transform:translateX(-50%);background:#E8620A;color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;font-weight:700;z-index:999;white-space:normal;max-width:88vw;text-align:center;word-break:break-word;animation:fio 30s forwards;pointer-events:none;}
-@keyframes fio{0%{opacity:0;top:10px}3%{opacity:1;top:24px}90%{opacity:1}100%{opacity:0}}
+.toast{position:fixed;top:24px;left:50%;transform:translateX(-50%);background:#E8620A;color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;font-weight:700;z-index:999;white-space:normal;max-width:88vw;text-align:center;word-break:break-word;animation:fio 15s forwards;pointer-events:none;}
+@keyframes fio{0%{opacity:0;top:10px}3%{opacity:1;top:24px}88%{opacity:1}100%{opacity:0}}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;z-index:200;}
 .sheet{background:#fff;border-radius:24px 24px 0 0;padding:24px 20px 44px;width:100%;max-width:430px;max-height:90vh;overflow-y:auto;}
 .stitle{font-size:19px;font-weight:900;color:#1A1A2E;margin-bottom:4px;}
@@ -468,7 +469,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const assigned=effectiveTakingsPerson===user.id;
   const now=new Date();
-  function t(m){setMsg(m);setTimeout(()=>setMsg(""),30000);}
+  function t(m){setMsg(m);setTimeout(()=>setMsg(""),15000);}
   useEffect(()=>{loadData();},[]);
   useEffect(()=>{loadRota();},[rotaMon]);
   // Refresh rota from DB when staff opens the rota tab — picks up any manager changes (e.g. Off after rejection)
@@ -640,7 +641,30 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
           <div style={{fontSize:14,lineHeight:1.6}}>{user.welcomeMsg}</div>
         </div>}
         {assigned&&!submitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-t">📊 You're today's Takings Person!</div><div className="notif-s">Tap to record today's takings →</div></div>}
-        {/* Forgot to clock in banner - hide if any clock entry exists today */}
+        {/* Emergency sick leave — shown if scheduled today and not yet clocked in */}
+        {!clockedIn&&!logs.some(l=>l.date===todayISO()&&l.note==="sick_leave")&&(()=>{
+          const todayRota=rota.find(sh=>sh.date===todayISO());
+          if(!todayRota||todayRota.type==="Off")return null;
+          return(
+            <div style={{background:"#FEE2E2",border:"2px solid #E05252",borderRadius:13,padding:"13px 15px",marginBottom:12}}>
+              <div style={{fontSize:14,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>🤒 Emergency — Can't come in today?</div>
+              <div style={{fontSize:12,color:"#991B1B",marginBottom:10,lineHeight:1.6}}>Tap below to notify the manager immediately. This will record your absence as sick leave and update your payroll automatically.</div>
+              <button className="btn danger" style={{marginTop:0}} onClick={async()=>{
+                if(!window.confirm("Report emergency sick leave for today? The manager will be notified."))return;
+                const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:"",time_out:"",note:"sick_leave"}).select().single();
+                if(!error){setLogs(p=>[data,...p]);t("🤒 Sick leave reported — manager notified");}
+                else t("❌ "+error.message);
+              }}>🤒 Report Sick Leave for Today</button>
+            </div>
+          );
+        })()}
+        {/* Already reported sick today */}
+        {logs.some(l=>l.date===todayISO()&&l.note==="sick_leave")&&(
+          <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:13,padding:"12px 15px",marginBottom:12}}>
+            <div style={{fontSize:13,fontWeight:800,color:"#7F1D1D"}}>🤒 Sick leave reported for today</div>
+            <div style={{fontSize:12,color:"#991B1B",marginTop:3}}>The manager has been notified. Get well soon!</div>
+          </div>
+        )}
         {!logs.some(l=>l.date===todayISO()&&l.time_in)&&(()=>{
           const todayRota=rota.find(sh=>sh.date===todayISO());
           if(!todayRota||todayRota.type==="Off")return null;
@@ -669,7 +693,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
             </div>
           </div>);
         })()}
-        <div className="sec">This Week</div><RotaList/>
+        <div className="sec">This Week</div>{RotaList()}
       </div>}
 
       {tab==="clock"&&<div className="body">
@@ -761,7 +785,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
         <div style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:11,padding:"10px 13px",marginBottom:12,fontSize:12,color:"#1E40AF",lineHeight:1.7}}>
           📅 <strong>Check your rota every Wednesday</strong> and accept or reject by <strong>Friday</strong>. Also don't forget to report any absence or block the days you cannot work. For any emergency, contact the manager directly.
         </div>
-        <div className="wnav"><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button><div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button></div><RotaList/></div>}
+        <div className="wnav"><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,-7))}>‹</button><div className="wnavlbl">{fmtDate(rotaMon)} – {fmtDate(addDays(rotaMon,6))}</div><button className="wnavbtn" onClick={()=>setRotaMon(addDays(rotaMon,7))}>›</button></div>{RotaList()}</div>}
       {tab==="absence"&&<div className="body"><div className="sec">Report Absence</div><div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work. Dates 7+ days away can be reported here.</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={addDays(todayISO(),1)} onChange={e=>setAbsDate(e.target.value)}/>{absLessThan7Days&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 7 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is within the next 7 days. Please <strong>call or message the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</> }</div>}
       {tab==="takings"&&<div className="body">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
@@ -901,7 +925,7 @@ function ManagerApp({onLogout}){
   }
 
   const newCount=takings.filter(s=>s.is_new).length;
-  function t(m){setMsg(m);setTimeout(()=>setMsg(""),30000);}
+  function t(m){setMsg(m);setTimeout(()=>setMsg(""),15000);}
 
   useEffect(()=>{loadAll();},[]);
   useEffect(()=>{if(staff.length)loadRota();},[rotaMon,staff.length]);
