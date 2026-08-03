@@ -517,7 +517,10 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     if(!active)return;
     const time=nowTime();
     const bt=parseFloat(breakTime||0);
-    const finalNote=checklistDone&&assigned?("checklist_done"+(noteType?":"+noteType:"")):(noteType||"");
+    // Combine existing note (e.g. "back-stamped") with new noteType
+    const existingNote=active.note||"";
+    const newParts=[...new Set([...existingNote.split("|").filter(Boolean),...(noteType?[noteType]:[])])];
+    const finalNote=checklistDone&&assigned?("checklist_done"+(newParts.length?":"+newParts.join("|"):"")):(newParts.join("|")||"");
     let result=await db.from("clock_logs").update({time_out:time,note:finalNote,break_time:bt}).eq("id",active.id);
     if(result.error&&(result.error.message?.includes("break_time")||result.error.code==="42703"||result.error.details?.includes("break_time"))){
       result=await db.from("clock_logs").update({time_out:time,note:finalNote}).eq("id",active.id);
@@ -586,16 +589,16 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const absBeforeNextWed=absDate&&absDate<nextWed;
   async function confirmShift(idx){
     const weekKey=DAYS_MON[idx]+"|"+rotaMon;
-    // Optimistic update immediately so UI responds on first tap
-    const optimistic={id:"opt_"+Date.now(),staff_id:user.id,staff_name:user.name,day:weekKey};
-    setConfirmations(p=>[...p.filter(r=>r.day!==weekKey),optimistic]);
-    // Upsert to DB (handles duplicates gracefully)
-    const{error}=await db.from("confirmations").upsert({staff_id:user.id,staff_name:user.name,day:weekKey},{onConflict:"staff_id,day"});
-    if(error){
-      // Fallback: plain insert if upsert fails (no unique constraint)
-      await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:weekKey});
-    }
+    // Update local state immediately — UI never waits for DB
+    setConfirmations(p=>{
+      if(p.some(r=>r.day===weekKey))return p; // already confirmed
+      return[...p,{id:"local_"+Date.now(),staff_id:user.id,staff_name:user.name,day:weekKey}];
+    });
     t("✅ Shift confirmed!");
+    // Write to DB silently in background — errors don't affect the chip
+    try{
+      await db.from("confirmations").insert({staff_id:user.id,staff_name:user.name,day:weekKey});
+    }catch(_){/* silent — chip already shown */}
   }
   async function rejectShift(){
     const weekKey=DAYS_MON[rejectModal]+"|"+rotaMon;
@@ -623,7 +626,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   return(
     <div className="app">
       <Toast msg={msg}/>
-      <div className="hdr"><div><div className="hdr-greet">Good {now.getHours()<12?"morning":now.getHours()<18?"afternoon":"evening"},</div><div className="hdr-name">{user.name.split(" ")[0]} 👋</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button style={{background:"#FFF5EF",border:"1.5px solid #E8620A",borderRadius:"50%",width:32,height:32,fontSize:14,cursor:"pointer",fontWeight:800,color:"#E8620A"}} onClick={()=>{setTourMode("general");setTourStep(0);setShowTour(true);}}>?</button><button style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}} onClick={onLogout}>🚪</button></div></div>
+      <div className="hdr"><div><div className="hdr-greet">Good {now.getHours()<12?"morning":now.getHours()<18?"afternoon":"evening"},</div><div className="hdr-name">{user.name.split(" ")[0]} 👋</div></div><div style={{display:"flex",gap:8,alignItems:"center"}}><button title="Quick Guide" style={{background:"#FFF5EF",border:"1.5px solid #E8620A",borderRadius:"50%",width:32,height:32,fontSize:14,cursor:"pointer",fontWeight:800,color:"#E8620A"}} onClick={()=>{setTourMode("general");setTourStep(0);setShowTour(true);}}>ℹ</button><button style={{background:"none",border:"none",fontSize:22,cursor:"pointer"}} onClick={onLogout}>🚪</button></div></div>
       {tab==="home"&&<div className="body">
         {/* Welcome message banner */}
         {user.welcomeMsg&&<div style={{background:"linear-gradient(135deg,#E8620A,#FF8C42)",borderRadius:14,padding:"14px 16px",marginBottom:14,color:"#fff"}}>
@@ -757,7 +760,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
       {tab==="takings"&&<div className="body">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
           <div className="sec" style={{margin:0}}>📊 Daily Takings</div>
-          <button style={{background:"#FFF5EF",border:"1.5px solid #E8620A",borderRadius:"50%",width:28,height:28,fontSize:12,cursor:"pointer",fontWeight:800,color:"#E8620A"}} onClick={()=>{setTourMode("takings");setTourStep(0);setShowTour(true);}}>?</button>
+          <button title="Takings Guide" style={{background:"#FFF5EF",border:"1.5px solid #E8620A",borderRadius:"50%",width:28,height:28,fontSize:13,cursor:"pointer",fontWeight:800,color:"#E8620A"}} onClick={()=>{setTourMode("takings");setTourStep(0);setShowTour(true);}}>📖</button>
         </div>
         {!assigned?<div className="empty"><div className="emptyicon">🔒</div><div className="emptytxt">Not assigned today</div></div>
         :submitted&&!showCorrect?(
@@ -788,7 +791,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
         )}
       </div>}
       <div className="bnav">{navItems.map(n=><button key={n.id} className={`nbtn${tab===n.id?" on":""}`} onClick={()=>setTab(n.id)}>{n.badge&&<span className="nbadge">!</span>}<span className="ni">{n.icon}</span><span className="nl">{n.label}</span></button>)}</div>
-      <div style={{textAlign:"center",fontSize:11,color:"#bbb",padding:"3px 0 2px"}}>💡 Tap <strong style={{color:"#E8620A"}}>?</strong> in the header for a quick guide</div>
+      <div style={{textAlign:"center",fontSize:11,color:"#bbb",padding:"3px 0 2px"}}>💡 Tap <strong style={{color:"#E8620A"}}>ℹ</strong> in the header for a quick guide</div>
       {showTour&&(()=>{
         const TOUR_STEPS_GENERAL=[
           {title:"👋 Welcome to Ming's Staff App!",body:"This app lets you clock in/out, view your rota, report absences, and submit takings. Let's take a quick tour so you know how everything works.",icon:"🏠"},
@@ -1711,7 +1714,7 @@ function ManagerApp({onLogout}){
       const noteLabel=(l.note||"").split("|").map(n=>n.startsWith("checklist_done")?"✅ End-of-shift checklist done":(NOTE_MAP[n]||n)).filter(Boolean).join(" + ");
       const overrideDate=l.override_at?new Date(l.override_at):null;
       const overrideLabel=(overrideDate&&overrideDate.getFullYear()>2020)?overrideDate.toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
-      rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?extraTime:"",overrideLabel]);
+      rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",overrideLabel]);
     });
     if(rows.length>1)await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",rows);
   }
