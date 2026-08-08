@@ -804,7 +804,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
               :<button className="btn sec" style={{marginTop:0}} onClick={async()=>{
                 // Load existing values into the form before showing it
                 const{data}=await db.from("takings").select("*").eq("staff_id",user.id).eq("date",todayISO()).maybeSingle();
-                if(data){const v={};TKFIELDS.filter(f=>!f.managerOnly).forEach(f=>{v[f.key]=String(data[f.db]||"");});setTVals(v);const c={};TKFIELDS.filter(f=>!f.managerOnly&&f.ccDb).forEach(f=>{c[f.key]=data[f.ccDb]||"cash";});setTCC(c);setTNote(data.note||"");}
+                if(data){const v={};TKFIELDS.filter(f=>!f.managerOnly).forEach(f=>{const raw=parseFloat(data[f.db]||0);v[f.key]=raw>0?String(r2(raw)):"";});setTVals(v);const c={};TKFIELDS.filter(f=>!f.managerOnly&&f.ccDb).forEach(f=>{c[f.key]=data[f.ccDb]||"cash";});setTCC(c);setTNote(data.note||"");}
                 setShowCorrect(true);
               }}>✏️ Made a mistake? Correct it</button>
             }
@@ -1085,9 +1085,15 @@ function ManagerApp({onLogout}){
     if(!hasShiftRate){
       const dailyRaw={};
       logsInRange.forEach(l=>{
+        // If note="forgot" (forgot to clock out), use rota scheduled hours, not actual
+        const dayRota=myRota.find(sh=>sh.date===l.date);
+        const forgotClockOut=(l.note||"").includes("forgot");
+        if(forgotClockOut&&dayRota&&dayRota.type==="Custom"&&dayRota.customIn&&dayRota.customOut){
+          dailyRaw[l.date]=(dailyRaw[l.date]||0)+Math.max(0,parseHrs(dayRota.customIn,dayRota.customOut)-parseFloat(l.break_time||0));
+          return;
+        }
         // Cap start time at rota scheduled start — early clock-ins are not paid
         let effectiveIn=l.time_in;
-        const dayRota=myRota.find(sh=>sh.date===l.date);
         if(dayRota&&effectiveIn){
           let schedStart=null;
           if(dayRota.type==="Full Day (11am–close)")schedStart="11:00";
@@ -1786,7 +1792,16 @@ function ManagerApp({onLogout}){
       const breakHrs=parseFloat(l.break_time||0);
       const netHrs=rawHrs>0?r2(Math.max(0,rawHrs-breakHrs)):"";
       const NOTE_MAP={"forgot":"Forgot to clock out","overtime":"Working extra time","sick_leave":"Sick leave","left_early":"Left early/late","back-stamped":"Back-stamped"};
-      const noteLabel=(l.note||"").split("|").map(n=>n.startsWith("checklist_done")?"✅ End-of-shift checklist done":(NOTE_MAP[n]||n)).filter(Boolean).join(" + ");
+      const noteLabel=(()=>{
+        const parts=(l.note||"").split("|");
+        const labels=[];let checklist=false;
+        parts.forEach(n=>{
+          if(n.startsWith("checklist_done")){checklist=true;const inner=n.slice(n.indexOf(":")+1);if(inner&&inner!==n)inner.split("|").forEach(p=>{const lbl=NOTE_MAP[p.trim()]||p.trim();if(lbl)labels.push(lbl);});}
+          else{const lbl=NOTE_MAP[n]||n;if(lbl)labels.push(lbl);}
+        });
+        if(checklist)labels.push("✅ End-of-shift checklist done");
+        return[...new Set(labels)].join(" + ");
+      })();
       const overrideDate=l.override_at?new Date(l.override_at):null;
       const overrideLabel=(overrideDate&&overrideDate.getFullYear()>2020)?overrideDate.toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
       rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",overrideLabel]);
@@ -1813,7 +1828,8 @@ function ManagerApp({onLogout}){
           else rotaType=rotaEntry.type;
         }
         let extraTime=0;
-        if(l.time_out&&rotaEntry&&rotaEntry.customOut){
+        const forgotNote=(l.note||"").includes("forgot");
+        if(!forgotNote&&l.time_out&&rotaEntry&&rotaEntry.customOut){
           const[eH,eM]=rotaEntry.customOut.split(":").map(Number);
           const[oH,oM]=l.time_out.split(":").map(Number);
           const diffMins=(oH*60+oM)-(eH*60+eM);
@@ -1823,7 +1839,16 @@ function ManagerApp({onLogout}){
         const breakHrs=parseFloat(l.break_time||0);
         const netHrs=rawHrs>0?r2(Math.max(0,rawHrs-breakHrs)):"";
         const NOTE_MAP={"forgot":"Forgot to clock out","overtime":"Working extra time","sick_leave":"Sick leave","left_early":"Left early/late","back-stamped":"Back-stamped"};
-        const noteLabel=(l.note||"").split("|").map(n=>n.startsWith("checklist_done")?"✅ End-of-shift checklist done":(NOTE_MAP[n]||n)).filter(Boolean).join(" + ");
+        const noteLabel=(()=>{
+        const parts=(l.note||"").split("|");
+        const labels=[];let checklist=false;
+        parts.forEach(n=>{
+          if(n.startsWith("checklist_done")){checklist=true;const inner=n.slice(n.indexOf(":")+1);if(inner&&inner!==n)inner.split("|").forEach(p=>{const lbl=NOTE_MAP[p.trim()]||p.trim();if(lbl)labels.push(lbl);});}
+          else{const lbl=NOTE_MAP[n]||n;if(lbl)labels.push(lbl);}
+        });
+        if(checklist)labels.push("✅ End-of-shift checklist done");
+        return[...new Set(labels)].join(" + ");
+      })();
         const overrideDate=l.override_at?new Date(l.override_at):null;
         const overrideLabel=(overrideDate&&overrideDate.getFullYear()>2020)?overrideDate.toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
         rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",overrideLabel]);
@@ -2548,7 +2573,15 @@ const existing=(l.note||"").split("|").filter(n=>n&&!["forgot","left_early","ove
                 },0));
                 const hasFlag=hasOvertime||hasSick||hasLate||hasLeftEarly;
                 const dailyRaw={};
-                sLogs.forEach(l=>{dailyRaw[l.date]=(dailyRaw[l.date]||0)+Math.max(0,parseHrs(l.time_in,l.time_out)-parseFloat(l.break_time||0));});
+                sLogs.forEach(l=>{
+                  const forgotCO=(l.note||"").includes("forgot");
+                  const dRota=(rota[s.id]||[]).find(d=>d.date===l.date);
+                  if(forgotCO&&dRota&&dRota.type==="Custom"&&dRota.customIn&&dRota.customOut){
+                    dailyRaw[l.date]=(dailyRaw[l.date]||0)+Math.max(0,parseHrs(dRota.customIn,dRota.customOut)-parseFloat(l.break_time||0));
+                  }else{
+                    dailyRaw[l.date]=(dailyRaw[l.date]||0)+Math.max(0,parseHrs(l.time_in,l.time_out)-parseFloat(l.break_time||0));
+                  }
+                });
                 const clockHrs=r2(Object.values(dailyRaw).reduce((a,h)=>a+roundHrsUp(h),0));
                 const autoFull=(rota[s.id]||[]).filter(sh=>sh?.type==="Full Day (11am–close)"&&sh.date>=ws&&sh.date<=we).length;
                 const autoNight=(rota[s.id]||[]).filter(sh=>sh?.type==="Night (5:30pm–close)"&&sh.date>=ws&&sh.date<=we).length;
@@ -2579,12 +2612,25 @@ const existing=(l.note||"").split("|").filter(n=>n&&!["forgot","left_early","ove
                         t(`⚠️ Payroll is set to week of ${fmtDate(weekRange.start)} but you're viewing clock data for ${fmtDate(ws)}. Switch payroll to the same week first.`);
                         return;
                       }
-                      const hasShiftRate=parseFloat(s.shiftRate||0)>0;
+                      // Compute custom-shift hours separately from full/night shift counts
+                      const customLogs=sLogs.filter(l=>{
+                        const sr=(rota[s.id]||[]).find(d=>d.date===l.date);
+                        return sr&&sr.type==="Custom"&&l.time_in&&l.time_out;
+                      });
+                      const customHrs=r2(customLogs.reduce((a,l)=>{
+                        const forgotCO=(l.note||"").includes("forgot");
+                        const dRota=(rota[s.id]||[]).find(d=>d.date===l.date);
+                        if(forgotCO&&dRota&&dRota.customIn&&dRota.customOut)return a+Math.max(0,parseHrs(dRota.customIn,dRota.customOut)-parseFloat(l.break_time||0));
+                        return a+Math.max(0,parseHrs(l.time_in,l.time_out)-parseFloat(l.break_time||0));
+                      },0));
                       setExtras(p=>{
                         const ex=p[s.id]||getExtras(s.id);
                         const updated={...ex};
-                        if(!hasShiftRate){if(!ex.manualHrs||ex.manualHrs==="")updated.manualHrs=String(clockHrs);}
-                        else{if(!ex.manualFull||ex.manualFull==="")updated.manualFull=String(autoFull);if(!ex.manualNight||ex.manualNight==="")updated.manualNight=String(autoNight);}
+                        // Full/Night shifts counted by shift type (independent of hours)
+                        if(!ex.manualFull||ex.manualFull==="")updated.manualFull=String(autoFull);
+                        if(!ex.manualNight||ex.manualNight==="")updated.manualNight=String(autoNight);
+                        // Custom shifts counted as hours
+                        if(customHrs>0&&(!ex.manualHrs||ex.manualHrs===""))updated.manualHrs=String(customHrs);
                         return{...p,[s.id]:updated};
                       });
                       t(`✅ ${s.name.split(" ")[0]} authorised for week of ${fmtDate(ws)} → check payroll card`);
@@ -3035,7 +3081,7 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
             return(
               <div key={sub.id} className="tmsg new">
                 <div className="tmsg-h">🆕 {sub.staff_name} · {dispDate(sub.date,true)}<span style={{float:"right",fontSize:14,fontWeight:900}}>£{total.toFixed(2)}</span></div>
-                <div className="tmsg-d">{TKFIELDS.filter(f=>parseFloat(sub[f.db]||0)>0).map(f=>`${f.label.replace(/[🛵💵💳🌐🎟️🎫]/g,"").trim()}: £${sub[f.db]}`).join(" · ")}</div>
+                <div className="tmsg-d">{TKFIELDS.filter(f=>parseFloat(sub[f.db]||0)>0).map(f=>`${f.label.replace(/[🛵💵💳🌐🎟️🎫]/g,"").trim()}: £${r2(sub[f.db]).toFixed(2)}`).join(" · ")}</div>
                 {sub.note&&<div style={{marginTop:4,fontSize:12,opacity:.8}}>📝 {sub.note}</div>}
                 <button className="btn sm" style={{marginTop:8,background:"#065F46",color:"#fff"}} onClick={()=>markSeen(sub)}>
                   Mark Seen ✓ {gsReady?"& Push to Sheets":""}
@@ -3130,7 +3176,7 @@ function TakingsTab({staff,takings,setTakings,expenses,takingDefaults,todayOverr
           {[...takings].filter(s=>!s.is_new).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,7).map(sub=>{
             const _dep=parseFloat(sub.deposit_receipt||0);const _vp=parseFloat(sub.voucher_purchase||0);
             const total=r2(parseFloat(sub.deliveroo||0)+parseFloat(sub.uber||0)+parseFloat(sub.cash||0)+parseFloat(sub.card||0)+parseFloat(sub.online||0)-parseFloat(sub.shop_expense||0)+_dep+_vp);
-            return(<div key={sub.id} className="tmsg"><div className="tmsg-h">{sub.staff_id==="manager"?"📝":"✓"} {sub.staff_name} · {dispDate(sub.date,true)}<span style={{float:"right",fontSize:14,fontWeight:900}}>£{total.toFixed(2)}</span></div><div className="tmsg-d">{TKFIELDS.filter(f=>parseFloat(sub[f.db]||0)>0).map(f=>`${f.label.replace(/[🛵💵💳🌐🎟️🎫🧾]/g,"").trim()}: £${sub[f.db]}`).join(" · ")}</div></div>);
+            return(<div key={sub.id} className="tmsg"><div className="tmsg-h">{sub.staff_id==="manager"?"📝":"✓"} {sub.staff_name} · {dispDate(sub.date,true)}<span style={{float:"right",fontSize:14,fontWeight:900}}>£{total.toFixed(2)}</span></div><div className="tmsg-d">{TKFIELDS.filter(f=>parseFloat(sub[f.db]||0)>0).map(f=>`${f.label.replace(/[🛵💵💳🌐🎟️🎫🧾]/g,"").trim()}: £${r2(sub[f.db]).toFixed(2)}`).join(" · ")}</div></div>);
           })}
         </div>
       )}
