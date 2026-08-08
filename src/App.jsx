@@ -961,7 +961,7 @@ function ManagerApp({onLogout}){
     setStaff((staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardMode:s.card_mode||"fixed",tipsPct:s.tips_pct||"0",monthlyCard:s.monthly_card||"0"})));
     setAbsences(absR.data||[]);setClockLogs(logR.data||[]);setRejections(rejR.data||[]);
     setTakings(takR.data||[]);setExpenses(expR.data||[]);
-    setKitchenStaff((kitR.data||[]).map(k=>({...k,payType:k.pay_type||"hourly",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0",cardMode:k.card_mode||"fixed",cardFixed:k.card_fixed||"0",monthlyCard:k.monthly_card||"0"})));
+    setKitchenStaff((kitR.data||[]).map(k=>({...k,payType:k.pay_type||"hourly",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0",cardMode:k.card_mode||"fixed",cardFixed:k.card_fixed||"0",monthlyCard:k.monthly_card||"0",weeklyFixed:k.weekly_fixed||"0"})));
     setTodayOverride(ovR.data?.staff_id||null);
     const staffIds=new Set((staffR.data||[]).map(s=>s.id));
     const dd={};(defR.data||[]).forEach(r=>{if(staffIds.has(r.staff_id))dd[r.day_of_week]=r.staff_id;});setTakingDefaults(dd);
@@ -1175,7 +1175,7 @@ function ManagerApp({onLogout}){
     const tips=parseFloat(ex.tips||0);
     const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    const base=hrs*parseFloat(k.rate||0)+full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0);
+    const base=hrs*parseFloat(k.rate||0)+full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0)+parseFloat(k.weeklyFixed||0);
     const calcTotal=Math.max(0,base+tips+addT-dedT);
     const cardMode=k.cardMode||"fixed";
     const{cardAmt:calcCard,cashAmt:calcCash,exceeds}=splitCard(cardMode,k.cardFixed,calcTotal);
@@ -1611,7 +1611,7 @@ function ManagerApp({onLogout}){
         const tips=parseFloat(ex.tips||0);
         const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
         const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const base=hrs*parseFloat(k.rate||0)+full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0);
+        const base=hrs*parseFloat(k.rate||0)+full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0)+parseFloat(k.weeklyFixed||0);
         const salaryTotal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
         const{cardAmt,cashAmt}=splitCard(k.cardMode||"fixed",k.cardFixed,salaryTotal);
         const cash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
@@ -1937,7 +1937,7 @@ function ManagerApp({onLogout}){
   }
 
   // ── Payroll card (shared for FOH and kitchen) ──
-  function PayrollCard({name,icon,sid,payType,rate,shiftRate,nightRate,calcFn,isKitchen,kitchenId,cardMode,cardFixed,staffId}){
+  function PayrollCard({name,icon,sid,payType,rate,shiftRate,nightRate,weeklyFixed,calcFn,isKitchen,kitchenId,cardMode,cardFixed,staffId}){
     const p=calcFn();const ex=getExtras(sid);
     const[showOverride,setShowOverride]=useState(!!(ex.manualTotal&&ex.manualTotal!==""));
     const[localCardFixed,setLocalCardFixed]=useState(cardFixed||"0");
@@ -1984,6 +1984,7 @@ function ManagerApp({onLogout}){
           {!isKitchen&&p.sickDays>0&&<div className="row" style={{background:"#FEE2E2"}}><span>🤒 Sick days excluded</span><span className="rowb" style={{color:"#7F1D1D"}}>{p.sickDays} shift(s)</span></div>}
           {p.autoDeductions&&p.autoDeductions.filter(d=>d.auto).map((d,i)=><div key={"ad"+i} className="row" style={{background:"#FEE2E2"}}><span style={{fontSize:11}}>📉 {d.label}</span><span className="rowb" style={{color:"#7F1D1D"}}>-£{parseFloat(d.amount).toFixed(2)}</span></div>)}
           <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
+          {isKitchen&&parseFloat(weeklyFixed||0)>0&&<div className="row"><span>Weekly fixed</span><span className="rowb">£{parseFloat(weeklyFixed||0).toFixed(2)}</span></div>}
           <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
           <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,tips:e.target.value}))}/></div>
           <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS <span style={{fontWeight:400}}>(+ add / - deduct / note only)</span></div><AdjustmentsRow sid={sid}/></div>
@@ -2364,6 +2365,7 @@ function ManagerApp({onLogout}){
                   <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#555",fontWeight:700,marginBottom:3}}>£/HR</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.rate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,rate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"rate",e.target.value)}/></div>
                   <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#555",fontWeight:700,marginBottom:3}}>FULL SHIFT £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.shiftRate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,shiftRate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"shift_rate",e.target.value)}/></div>
                   <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#555",fontWeight:700,marginBottom:3}}>NIGHT £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.nightRate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,nightRate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"night_rate",e.target.value)}/></div>
+                  <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#E8620A",fontWeight:700,marginBottom:3}}>WEEKLY £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.weeklyFixed||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,weeklyFixed:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"weekly_fixed",e.target.value)}/></div>
                 </div>
                 <label className="lbl" style={{marginTop:12}}>Card Payment</label>
                 <div className="toggle" style={{marginBottom:10,width:"100%"}}>
@@ -2646,7 +2648,7 @@ const existing=(l.note||"").split("|").filter(n=>n&&!["forgot","left_early","ove
               <button className="btn sm navy" onClick={addKitchen}>Add</button>
             </div>
             {kitchenStaff.length===0&&<div style={{fontSize:13,color:"#ccc",marginBottom:10,fontStyle:"italic"}}>No kitchen staff yet — add via Staff tab</div>}
-            {kitchenStaff.map(k=><PayrollCard key={k.id+'-'+clearKey} name={k.name} icon="👨‍🍳" sid={kId(k.id)} payType={k.payType||"hourly"} rate={k.rate} shiftRate={k.shiftRate} nightRate={k.nightRate} calcFn={()=>calcKitchenPay(k)} isKitchen={true} kitchenId={k.id} cardMode={k.cardMode||"fixed"} cardFixed={k.cardFixed}/>)}
+            {kitchenStaff.map(k=><PayrollCard key={k.id+'-'+clearKey} name={k.name} icon="👨‍🍳" sid={kId(k.id)} payType={k.payType||"hourly"} rate={k.rate} shiftRate={k.shiftRate} nightRate={k.nightRate} weeklyFixed={k.weeklyFixed||"0"} calcFn={()=>calcKitchenPay(k)} isKitchen={true} kitchenId={k.id} cardMode={k.cardMode||"fixed"} cardFixed={k.cardFixed}/>)}
             <div className="psum">
               <div className="psumtitle">Week Summary — {fmtRange(weekRange.start,weekRange.end)}</div>
               <div className="psumrow"><span>💵 Total Cash</span><span className="psumamt">£{totCash}</span></div>
