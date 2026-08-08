@@ -698,11 +698,30 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
             {(()=>{
               const todayRota=rota.find(sh=>sh.date===todayISO());
               const isOff=!todayRota||todayRota.type==="Off";
-              return isOff&&!clockedIn
-                ?<div style={{fontSize:13,color:"rgba(255,255,255,.7)",textAlign:"center",padding:"10px 0"}}>📅 Not scheduled today — contact your manager if this is incorrect.</div>
-                :<><button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button><button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button></>;
+              if(isOff&&!clockedIn)return<div style={{fontSize:13,color:"rgba(255,255,255,.7)",textAlign:"center",padding:"10px 0"}}>📅 Not scheduled today — contact your manager if this is incorrect.</div>;
+              return(<>
+                <button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button>
+                <button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button>
+              </>);
             })()}
           </div>
+          {/* Back-stamp option — shown when not clocked in and scheduled today */}
+          {!clockedIn&&(()=>{
+            const todayRota=rota.find(sh=>sh.date===todayISO());
+            if(!todayRota||todayRota.type==="Off")return null;
+            let startTime="";
+            if(todayRota.type==="Full Day (11am–close)")startTime="11:00";
+            else if(todayRota.type==="Night (5:30pm–close)")startTime="17:30";
+            else if(todayRota.customIn)startTime=todayRota.customIn;
+            if(!startTime)return null;
+            return(<div style={{marginTop:10,textAlign:"center"}}>
+              <button className="btn sec" style={{fontSize:12,padding:"8px 14px"}} onClick={async()=>{
+                const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:startTime,note:"back-stamped"}).select().single();
+                if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(startTime);t("✅ Back-stamped to "+startTime);}
+                else t("❌ "+error.message);
+              }}>⏪ Back-stamp to {startTime}</button>
+            </div>);
+          })()}
         </div>
         {/* 7-day log */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
@@ -939,10 +958,10 @@ function ManagerApp({onLogout}){
       db.from("payroll_extras").select("*"),
       db.from("app_settings").select("key,value").in("key",["gs_webapp_url","gs_payroll_id","gs_takings_id","gs_clocklog_id","manager_pin","welcome_message"]),
     ]);
-    setStaff((staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardMode:s.card_mode||"fixed",tipsPct:s.tips_pct||"0"})));
+    setStaff((staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardMode:s.card_mode||"fixed",tipsPct:s.tips_pct||"0",monthlyCard:s.monthly_card||"0"})));
     setAbsences(absR.data||[]);setClockLogs(logR.data||[]);setRejections(rejR.data||[]);
     setTakings(takR.data||[]);setExpenses(expR.data||[]);
-    setKitchenStaff((kitR.data||[]).map(k=>({...k,payType:k.pay_type||"hourly",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0",cardMode:k.card_mode||"fixed",cardFixed:k.card_fixed||"0"})));
+    setKitchenStaff((kitR.data||[]).map(k=>({...k,payType:k.pay_type||"hourly",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0",cardMode:k.card_mode||"fixed",cardFixed:k.card_fixed||"0",monthlyCard:k.monthly_card||"0"})));
     setTodayOverride(ovR.data?.staff_id||null);
     const staffIds=new Set((staffR.data||[]).map(s=>s.id));
     const dd={};(defR.data||[]).forEach(r=>{if(staffIds.has(r.staff_id))dd[r.day_of_week]=r.staff_id;});setTakingDefaults(dd);
@@ -1201,14 +1220,25 @@ function ManagerApp({onLogout}){
 
   // ── Remove FOH staff ──
   async function removeStaff(s){
-    if(!window.confirm(`Remove ${s.name}? This cannot be undone.`))return;
+    if(!window.confirm(`Remove ${s.name} and ALL their history (clock logs, rota, absences, payroll data)? This cannot be undone.`))return;
     const{error}=await db.from("staff").delete().eq("id",s.id);
     if(!error){
       setStaff(p=>p.filter(x=>x.id!==s.id));
-      // Clean up any takings assignments for removed staff
-      await db.from("takings_defaults").delete().eq("staff_id",s.id);
+      // Cascade delete all related records
+      await Promise.all([
+        db.from("takings_defaults").delete().eq("staff_id",s.id),
+        db.from("clock_logs").delete().eq("staff_id",s.id),
+        db.from("rota").delete().eq("staff_id",s.id),
+        db.from("confirmations").delete().eq("staff_id",s.id),
+        db.from("rejections").delete().eq("staff_id",s.id),
+        db.from("absences").delete().eq("staff_id",s.id),
+        db.from("payroll_extras").delete().eq("staff_id",s.id),
+      ]);
       setTakingDefaults(p=>{const n={...p};Object.keys(n).forEach(k=>{if(n[k]===s.id)delete n[k];});return n;});
-      t(`${s.name} removed`);
+      setClockLogs(p=>p.filter(l=>l.staff_id!==s.id));
+      setAbsences(p=>p.filter(a=>a.staff_id!==s.id));
+      setRejections(p=>p.filter(r=>r.staff_id!==s.id));
+      t(`✅ ${s.name} and all their history removed`);
     }else t("❌ "+error.message);
   }
 
@@ -1359,12 +1389,12 @@ function ManagerApp({onLogout}){
     if(qualifyingWeeks.size===0)return rows;
 
     const allPeople=[
-      ...staff.map(s=>({id:s.id,name:s.name,type:"FOH",rate:s.rate,shiftRate:s.shiftRate,nightRate:s.nightRate,cardMode:s.cardMode,cardFixed:s.cardFixed,tipsPct:s.tipsPct||"0",sid:s.id})),
-      ...kitchenStaff.map(k=>({id:k.id,name:k.name,type:"Kitchen",rate:k.rate,shiftRate:k.shiftRate,nightRate:k.nightRate,cardMode:k.cardMode,cardFixed:k.cardFixed,tipsPct:"0",sid:kId(k.id)}))
+      ...staff.map(s=>({id:s.id,name:s.name,type:"FOH",rate:s.rate,shiftRate:s.shiftRate,nightRate:s.nightRate,cardMode:s.cardMode,cardFixed:s.cardFixed,tipsPct:s.tipsPct||"0",monthlyCard:s.monthlyCard||"0",sid:s.id})),
+      ...kitchenStaff.map(k=>({id:k.id,name:k.name,type:"Kitchen",rate:k.rate,shiftRate:k.shiftRate,nightRate:k.nightRate,cardMode:k.cardMode,cardFixed:k.cardFixed,tipsPct:"0",monthlyCard:k.monthlyCard||"0",sid:kId(k.id)}))
     ];
 
     allPeople.forEach(person=>{
-      let totalCash=0,totalCard=0,totalTips=0;
+      let totalCash=0,totalTips=0;
       qualifyingWeeks.forEach(ws=>{
         const ex=allEx.find(e=>e.staff_id===person.sid&&e.week_start===ws);
         if(!ex)return;
@@ -1375,19 +1405,21 @@ function ManagerApp({onLogout}){
         const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
         const base=hrs*parseFloat(person.rate||0)+full*parseFloat(person.shiftRate||0)+night*parseFloat(person.nightRate||0);
         const sal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
-        const{cardAmt,cashAmt}=splitCard(person.cardMode||"fixed",person.cardFixed,sal);
+        const{cashAmt}=splitCard(person.cardMode||"fixed",person.cardFixed,sal);
         const storedTips=parseFloat(ex.tips||0);
         const weekTakingsForWs=takings.filter(tk=>tk.date>=ws&&tk.date<=addDays(ws,6));
         const weekTipsTotal=weekTakingsForWs.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0)+parseFloat(tk.tips_card||0),0);
         const autoTips=person.type==="FOH"?r2(weekTipsTotal*parseFloat(person.tipsPct||0)/100):0;
         const tips=storedTips>0?storedTips:autoTips;
+        // Cash: accumulated from weekly cash payments (1st to last day of month)
         totalCash+=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
-        totalCard+=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
         totalTips+=tips;
       });
-      if(totalCash+totalCard+totalTips===0)return;
-      const bankTransfer=r2(totalCard+totalTips);
-      rows.push([rangeStr,person.name,person.type,r2(totalCash).toFixed(2),r2(totalCard).toFixed(2),r2(totalTips).toFixed(2),bankTransfer.toFixed(2)]);
+      // Card: fixed monthly amount per staff — independent of weekly shifts
+      const fixedMonthlyCard=parseFloat(person.monthlyCard||0);
+      if(totalCash+fixedMonthlyCard+totalTips===0)return;
+      const bankTransfer=r2(fixedMonthlyCard+totalTips);
+      rows.push([rangeStr,person.name,person.type,r2(totalCash).toFixed(2),fixedMonthlyCard.toFixed(2),r2(totalTips).toFixed(2),bankTransfer.toFixed(2)]);
     });
     return rows;
   }
@@ -2284,6 +2316,10 @@ function ManagerApp({onLogout}){
                     </div>
                   )}
                   <div style={{marginTop:10,paddingTop:10,borderTop:"1px dashed #E5E5E5"}}>
+                    <div style={{fontSize:10,fontWeight:700,color:"#555",marginBottom:3}}>MONTHLY CARD PAYMENT (£) <span style={{fontWeight:400}}>— fixed amount paid by card each month, independent of weekly shifts</span></div>
+                    <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={s.monthlyCard||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,monthlyCard:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({monthly_card:e.target.value}).eq("id",s.id);t(`${s.name} monthly card saved`);}}/>
+                  </div>
+                  <div style={{marginTop:10,paddingTop:10,borderTop:"1px dashed #E5E5E5"}}>
                     <div style={{fontSize:10,fontWeight:700,color:"#555",marginBottom:3}}>TIPS % <span style={{fontWeight:400}}>— share of weekly takings tips allocated to this staff</span></div>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <input type="number" min="0" max="100" className="inp sm" style={{width:80}} placeholder="0" value={s.tipsPct||""} onChange={e=>setStaff(p=>p.map(x=>x.id===s.id?{...x,tipsPct:e.target.value}:x))} onBlur={async e=>{await db.from("staff").update({tips_pct:e.target.value}).eq("id",s.id);t(`${s.name} tips % saved`);}}/>
@@ -2335,12 +2371,10 @@ function ManagerApp({onLogout}){
                   <button className={`tgl${k.cardMode==="cash"?" on":""}`} style={{flex:1}} onClick={()=>{updKitchenField(k.id,"card_mode","cash");setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,cardMode:"cash"}:x));}}>All Cash</button>
                   <button className={`tgl${k.cardMode==="card"?" on":""}`} style={{flex:1}} onClick={()=>{updKitchenField(k.id,"card_mode","card");setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,cardMode:"card"}:x));}}>All Card</button>
                 </div>
-                {(k.cardMode||"fixed")==="fixed"&&(
-                  <div style={{marginBottom:4}}>
-                    <div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>FIXED CARD AMOUNT (£) <span style={{fontWeight:400}}>— the rest is paid as cash</span></div>
-                    <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.cardFixed||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,cardFixed:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"card_fixed",e.target.value)} id={`cf-k-${k.id}`}/>
+                  <div style={{marginTop:8,paddingTop:8,borderTop:"1px dashed #E5E5E5"}}>
+                    <div style={{fontSize:10,fontWeight:700,color:"#555",marginBottom:3}}>MONTHLY CARD PAYMENT (£) <span style={{fontWeight:400}}>— fixed amount paid by card each month</span></div>
+                    <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.monthlyCard||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,monthlyCard:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"monthly_card",e.target.value)}/>
                   </div>
-                )}
               </div>
             ))}
             <div style={{background:"#FFF5EF",borderRadius:12,padding:"12px 14px",fontSize:12,color:"#888",lineHeight:1.6,marginTop:8}}>
@@ -3237,7 +3271,10 @@ function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast,gsReady,gsConfig,bu
 
       {expenses.length===0?<div className="empty"><div className="emptyicon">🧾</div><div className="emptytxt">No expenses yet</div></div>:(
         <>
-          <div className="sec">Recent Expenses {expenses.length>10&&<span style={{fontSize:11,color:"#aaa",fontWeight:400}}>(showing 10 of {expenses.length})</span>}</div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div className="sec" style={{margin:0}}>Recent Expenses {expenses.length>10&&<span style={{fontSize:11,color:"#aaa",fontWeight:400}}>(showing 10 of {expenses.length})</span>}</div>
+            <button className="btn sm danger" style={{fontSize:11}} onClick={async()=>{if(!window.confirm(`Delete ALL ${expenses.length} expense records? This cannot be undone.`))return;const ids=expenses.map(e=>e.id);await db.from("expenses").delete().in("id",ids);setExpenses([]);toast("🗑️ All expenses deleted");}}>🗑️ Delete All</button>
+          </div>
           {[...expenses].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10).map(e=>(
             <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 0",borderBottom:"1px solid #F0F0F0"}}>
               <div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{e.description}</div><div style={{fontSize:11,color:"#aaa"}}>{dispDate(e.date,true)} · {e.pay_type==="cash"?"💵 Cash":"💳 Card"}</div></div>
