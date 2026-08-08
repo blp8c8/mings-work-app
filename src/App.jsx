@@ -558,36 +558,16 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   }
   function doActualClockOut(){
     const todayRota=rota.find(sh=>sh.date===todayISO());
-    const isHourlyOnly=parseFloat(user.shiftRate||0)===0&&parseFloat(user.nightRate||0)===0&&parseFloat(user.rate||0)>0;
-    // Only check time restrictions for hourly-only staff
-    if(isHourlyOnly&&todayRota){
-      let schedEnd=null;
-      if(todayRota.type==="Full Day (11am–close)")schedEnd="23:00";
-      else if(todayRota.type==="Night (5:30pm–close)")schedEnd="23:00";
-      else if(todayRota.type==="Custom"&&todayRota.customOut)schedEnd=todayRota.customOut;
-      if(schedEnd){
-        const[eH,eM]=schedEnd.split(":").map(Number);
-        const now=new Date();
-        const nowMins=now.getHours()*60+now.getMinutes();
-        const endMins=eH*60+eM;
-        const diffMins=nowMins-endMins;
-        if(diffMins>15){setLateModal(true);return;}
-        if(diffMins<-60){setEarlyModal("blocked");return;}
-        if(diffMins<-10){setEarlyModal("confirm");return;}
-      }
-    }else if(!isHourlyOnly&&todayRota){
-      // Shift-paid: only check late (forgot/overtime), no early restriction
-      let schedEnd=null;
-      if(todayRota.type==="Full Day (11am–close)")schedEnd="23:00";
-      else if(todayRota.type==="Night (5:30pm–close)")schedEnd="23:00";
-      else if(todayRota.type==="Custom"&&todayRota.customOut)schedEnd=todayRota.customOut;
-      if(schedEnd){
-        const[eH,eM]=schedEnd.split(":").map(Number);
-        const now=new Date();
-        const diffMins=now.getHours()*60+now.getMinutes()-eH*60-eM;
-        if(diffMins>15){setLateModal(true);return;}
-      }
+    if(todayRota&&todayRota.type==="Custom"&&todayRota.customOut){
+      // Custom shift: check time — late gets forgot/overtime modal, early gets confirm/blocked
+      const[eH,eM]=todayRota.customOut.split(":").map(Number);
+      const now=new Date();
+      const diffMins=now.getHours()*60+now.getMinutes()-eH*60-eM;
+      if(diffMins>15){setLateModal(true);return;}      // late >15min → forgot or overtime
+      if(diffMins<-60){setEarlyModal("blocked");return;} // early >1hr → blocked
+      if(diffMins<-10){setEarlyModal("confirm");return;} // early <1hr → confirm
     }
+    // Full Day, Night, or no rota: no time restriction — clock out freely
     doClockOut("");
   }
   async function reportAbsence(){
@@ -2583,8 +2563,9 @@ const existing=(l.note||"").split("|").filter(n=>n&&!["forgot","left_early","ove
                   }
                 });
                 const clockHrs=r2(Object.values(dailyRaw).reduce((a,h)=>a+roundHrsUp(h),0));
-                const autoFull=(rota[s.id]||[]).filter(sh=>sh?.type==="Full Day (11am–close)"&&sh.date>=ws&&sh.date<=we).length;
-                const autoNight=(rota[s.id]||[]).filter(sh=>sh?.type==="Night (5:30pm–close)"&&sh.date>=ws&&sh.date<=we).length;
+                const clockedDatesSet=new Set(sLogs.filter(l=>l.time_in&&l.time_out).map(l=>l.date));
+                const autoFull=(rota[s.id]||[]).filter(sh=>sh?.type==="Full Day (11am–close)"&&sh.date>=ws&&sh.date<=we&&clockedDatesSet.has(sh.date)).length;
+                const autoNight=(rota[s.id]||[]).filter(sh=>sh?.type==="Night (5:30pm–close)"&&sh.date>=ws&&sh.date<=we&&clockedDatesSet.has(sh.date)).length;
                 const dots=[-3,-2,-1,0].map(wOffset=>{
                   const w=addDays(ws,wOffset*7);const wE=addDays(w,6);
                   const wLogs=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=w&&l.date<=wE);
