@@ -2373,6 +2373,12 @@ function ManagerApp({onLogout}){
                   <button className={`tgl${k.cardMode==="cash"?" on":""}`} style={{flex:1}} onClick={()=>{updKitchenField(k.id,"card_mode","cash");setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,cardMode:"cash"}:x));}}>All Cash</button>
                   <button className={`tgl${k.cardMode==="card"?" on":""}`} style={{flex:1}} onClick={()=>{updKitchenField(k.id,"card_mode","card");setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,cardMode:"card"}:x));}}>All Card</button>
                 </div>
+                {(k.cardMode||"fixed")==="fixed"&&(
+                  <div style={{marginBottom:10}}>
+                    <div style={{fontSize:10,fontWeight:700,color:"#aaa",marginBottom:3}}>FIXED CARD AMOUNT (£) <span style={{fontWeight:400}}>— the rest is paid as cash</span></div>
+                    <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.cardFixed||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,cardFixed:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"card_fixed",e.target.value)}/>
+                  </div>
+                )}
                   <div style={{marginTop:8,paddingTop:8,borderTop:"1px dashed #E5E5E5"}}>
                     <div style={{fontSize:10,fontWeight:700,color:"#555",marginBottom:3}}>MONTHLY CARD PAYMENT (£) <span style={{fontWeight:400}}>— fixed amount paid by card each month</span></div>
                     <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.monthlyCard||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,monthlyCard:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"monthly_card",e.target.value)}/>
