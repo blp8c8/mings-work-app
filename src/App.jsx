@@ -885,7 +885,9 @@ function ManagerApp({onLogout}){
   const[kpiCompare,setKpiCompare]=useState("none");
   const[payrollLoaded,setPayrollLoaded]=useState(false);
   const[expandedSummaryStaff,setExpandedSummaryStaff]=useState(new Set());
-  const[pushedClockDates,setPushedClockDates]=useState(()=>{try{return new Set(JSON.parse(localStorage.getItem("pushedClockDates")||"[]"));}catch{return new Set();}}); // gates auto-count display until Load pressed
+  const[pushedClockDates,setPushedClockDates]=useState(()=>{try{return new Set(JSON.parse(localStorage.getItem("pushedClockDates")||"[]"));}catch{return new Set();}});
+  // Accumulated clock log history stored in localStorage — written as full history on each push
+  const clockLogHistoryRef=React.useRef(JSON.parse(localStorage.getItem("clockLogHistory")||"{}")); // gates auto-count display until Load pressed
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const[cashPopup,setCashPopup]=useState(false);
   const[pinModal,setPinModal]=useState(false);
@@ -1591,11 +1593,13 @@ function ManagerApp({onLogout}){
         const tips=parseFloat(ex.tips||0);
         const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
         const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const base=hrs*parseFloat(k.rate||0)+full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0)+parseFloat(k.weeklyFixed||0);
+        const base=hrs*parseFloat(k.rate||0)+full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0);
         const salaryTotal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
-        const{cardAmt,cashAmt}=splitCard(k.cardMode||"fixed",k.cardFixed,salaryTotal);
-        const cash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
-        const card=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
+        // Kitchen: fixed cash and fixed card from staff settings (not splitCard)
+        const fixedCash=parseFloat(k.fixed_cash||k.fixedCash||0);
+        const fixedCard=parseFloat(k.card_fixed||k.cardFixed||0);
+        const cash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):r2(fixedCash+addT-dedT>0?fixedCash:0);
+        const card=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):fixedCard;
         payrollRows.push([wRange,k.name,"Kitchen",full,night,r2(hrs).toFixed(2),k.rate||"0",k.shiftRate||"0",k.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),"","",ex.manual_total?"MANUAL":""]);
       });
     });
@@ -1781,8 +1785,15 @@ function ManagerApp({onLogout}){
       rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",overrideLabel]);
     });
     if(rows.length>1){
+      // Accumulate this day's rows in localStorage history keyed by date
+      const hist=clockLogHistoryRef.current;
+      hist[date]=rows.slice(1); // store data rows (no header) keyed by ISO date
+      localStorage.setItem("clockLogHistory",JSON.stringify(hist));
+      // Build full accumulated history sorted by date
       const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Override At"];
-      const result=await pushSheetAppend(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",hdr,rows.slice(1));
+      const allDataRows=Object.keys(hist).sort().flatMap(d=>hist[d]);
+      const allRows=[hdr,...allDataRows];
+      const result=await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",allRows);
       if(result.ok){
         setPushedClockDates(prev=>{const n=new Set(prev);n.add(date);localStorage.setItem("pushedClockDates",JSON.stringify([...n]));return n;});
       }
@@ -1836,7 +1847,17 @@ function ManagerApp({onLogout}){
       });
     });
     if(rows.length<=1)return{ok:true,written:0};
-    const result=await pushSheetAppend(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",rows[0],rows.slice(1));
+    // Accumulate week's rows into localStorage history per day
+    const hist=clockLogHistoryRef.current;
+    dates.forEach(date=>{
+      const dayData=rows.slice(1).filter(r=>r[0]===fmtDate(date));
+      if(dayData.length>0)hist[date]=dayData;
+    });
+    localStorage.setItem("clockLogHistory",JSON.stringify(hist));
+    // Write full accumulated history sorted by date
+    const allDataRows=Object.keys(hist).sort().flatMap(d=>hist[d]);
+    const allRows=[rows[0],...allDataRows]; // rows[0] = header
+    const result=await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",allRows);
     if(result.ok){
       setPushedClockDates(prev=>{const n=new Set(prev);dates.forEach(d=>n.add(d));localStorage.setItem("pushedClockDates",JSON.stringify([...n]));return n;});
     }
@@ -2072,7 +2093,7 @@ function ManagerApp({onLogout}){
           </>)}
           <div className="divider"/>
           {!isKitchen&&(<>
-            {p.cardExceeds&&countsEdited&&(
+            {p.cardExceeds&&payrollLoaded&&(
             <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
               <div style={{fontSize:12,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Fixed card amount is more than was earned</div>
               <div style={{fontSize:11,color:"#991B1B",marginBottom:8}}>Fixed at £{parseFloat(cardFixed||0).toFixed(2)} but only £{p.grossTotal.toFixed(2)} was earned this week. Please correct the amount below.</div>
@@ -2448,7 +2469,6 @@ function ManagerApp({onLogout}){
                   <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#555",fontWeight:700,marginBottom:3}}>£/HR</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.rate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,rate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"rate",e.target.value)}/></div>
                   <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#555",fontWeight:700,marginBottom:3}}>FULL SHIFT £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.shiftRate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,shiftRate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"shift_rate",e.target.value)}/></div>
                   <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#555",fontWeight:700,marginBottom:3}}>NIGHT £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.nightRate||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,nightRate:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"night_rate",e.target.value)}/></div>
-                  <div style={{flex:1,minWidth:76}}><div style={{fontSize:10,color:"#E8620A",fontWeight:700,marginBottom:3}}>WEEKLY £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.weeklyFixed||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,weeklyFixed:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"weekly_fixed",e.target.value)}/></div>
                 </div>
                 <label className="lbl" style={{marginTop:12}}>Card Payment</label>
                 <div className="toggle" style={{marginBottom:10,width:"100%"}}>
