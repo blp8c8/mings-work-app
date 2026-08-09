@@ -884,7 +884,8 @@ function ManagerApp({onLogout}){
   const[kpiMetrics,setKpiMetrics]=useState({takings:true,wages:true,labour:true,tips:false});
   const[kpiCompare,setKpiCompare]=useState("none");
   const[payrollLoaded,setPayrollLoaded]=useState(false);
-  const[expandedSummaryStaff,setExpandedSummaryStaff]=useState(new Set()); // gates auto-count display until Load pressed
+  const[expandedSummaryStaff,setExpandedSummaryStaff]=useState(new Set());
+  const[pushedClockDates,setPushedClockDates]=useState(()=>{try{return new Set(JSON.parse(localStorage.getItem("pushedClockDates")||"[]"));}catch{return new Set();}}); // gates auto-count display until Load pressed
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const[cashPopup,setCashPopup]=useState(false);
   const[pinModal,setPinModal]=useState(false);
@@ -941,7 +942,7 @@ function ManagerApp({onLogout}){
     setStaff((staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardMode:s.card_mode||"fixed",tipsPct:s.tips_pct||"0",monthlyCard:s.monthly_card||"0"})));
     setAbsences(absR.data||[]);setClockLogs(logR.data||[]);setRejections(rejR.data||[]);
     setTakings(takR.data||[]);setExpenses(expR.data||[]);
-    setKitchenStaff((kitR.data||[]).map(k=>({...k,payType:k.pay_type||"hourly",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0",cardMode:k.card_mode||"fixed",cardFixed:k.card_fixed||"0",monthlyCard:k.monthly_card||"0",weeklyFixed:k.weekly_fixed||"0"})));
+    setKitchenStaff((kitR.data||[]).map(k=>({...k,payType:k.pay_type||"hourly",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0",cardMode:k.card_mode||"fixed",cardFixed:k.card_fixed||"0",monthlyCard:k.monthly_card||"0",weeklyFixed:k.weekly_fixed||"0",fixedCash:k.fixed_cash||"0"})));
     setTodayOverride(ovR.data?.staff_id||null);
     const staffIds=new Set((staffR.data||[]).map(s=>s.id));
     const dd={};(defR.data||[]).forEach(r=>{if(staffIds.has(r.staff_id))dd[r.day_of_week]=r.staff_id;});setTakingDefaults(dd);
@@ -1155,21 +1156,14 @@ function ManagerApp({onLogout}){
 
   function calcKitchenPay(k){
     const sid=kId(k.id);const ex=getExtras(sid);
-    const hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):0;
-    const full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):0;
-    const night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):0;
-    const tips=parseFloat(ex.tips||0);
     const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
     const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    const base=hrs*parseFloat(k.rate||0)+full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0)+parseFloat(k.weeklyFixed||0);
-    const calcTotal=Math.max(0,base+tips+addT-dedT);
-    const cardMode=k.cardMode||"fixed";
-    const{cardAmt:calcCard,cashAmt:calcCash,exceeds}=splitCard(cardMode,k.cardFixed,calcTotal);
+    const fixedCash=parseFloat(ex.manualCash!==""&&ex.manualCash!=null?ex.manualCash:k.fixedCash||0);
+    const fixedCard=parseFloat(ex.manualCard!==""&&ex.manualCard!=null?ex.manualCard:k.cardFixed||0);
+    const total=r2(Math.max(0,fixedCash+fixedCard+addT-dedT));
     const isOverride=!!(ex.manualTotal&&ex.manualTotal!=="");
-    const total=isOverride?parseFloat(ex.manualTotal):calcTotal;
-    const cardAmt=ex.manualCard&&ex.manualCard!==""?parseFloat(ex.manualCard):calcCard;
-    const cashAmt=ex.manualCash&&ex.manualCash!==""?parseFloat(ex.manualCash):calcCash;
-    return{hrs:hrs.toFixed(2),full,night,base:base.toFixed(2),tips:tips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:total.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride,grossTotal:calcTotal,cardExceeds:!isOverride&&cardMode==="fixed"&&exceeds};
+    const finalTotal=isOverride?parseFloat(ex.manualTotal):total;
+    return{fixedCash:fixedCash.toFixed(2),fixedCard:fixedCard.toFixed(2),cashAmt:fixedCash.toFixed(2),cardAmt:fixedCard.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:finalTotal.toFixed(2),grossTotal:total,isOverride};
   }
 
   function payTotals(){
@@ -1786,7 +1780,14 @@ function ManagerApp({onLogout}){
       const overrideLabel=(overrideDate&&overrideDate.getFullYear()>2020)?overrideDate.toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
       rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",overrideLabel]);
     });
-    if(rows.length>1)await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",rows);
+    if(rows.length>1){
+      const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Override At"];
+      const result=await pushSheetAppend(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",hdr,rows.slice(1));
+      if(result.ok){
+        setPushedClockDates(prev=>{const n=new Set(prev);n.add(date);localStorage.setItem("pushedClockDates",JSON.stringify([...n]));return n;});
+      }
+      return result;
+    }
   }
   // Push a full week of clock logs (all 7 days) sorted by date — called after payroll push
   async function pushClockLogWeek(weekStart){
@@ -1834,8 +1835,12 @@ function ManagerApp({onLogout}){
         rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",overrideLabel]);
       });
     });
-    if(rows.length<=1)return{ok:true,written:0}; // no clock data for this week
-    return await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",rows);
+    if(rows.length<=1)return{ok:true,written:0};
+    const result=await pushSheetAppend(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",rows[0],rows.slice(1));
+    if(result.ok){
+      setPushedClockDates(prev=>{const n=new Set(prev);dates.forEach(d=>n.add(d));localStorage.setItem("pushedClockDates",JSON.stringify([...n]));return n;});
+    }
+    return result;
   }
   const[lastClockPush,setLastClockPush]=useState(()=>localStorage.getItem("lastClockPush")||"");
   useEffect(()=>{
@@ -1898,6 +1903,69 @@ function ManagerApp({onLogout}){
       if(a.period==="Evening"&&(sh.type.includes("Night")||sh.type==="Full Day (11am–close)"))return true;
       return false;
     });
+  }
+
+  // ── KitchenAdjustmentsRow — 4-field structured adjustments for kitchen staff ──
+  function KitchenAdjustmentsRow({sid,rate,shiftRate,nightRate}){
+    const ex=getExtras(sid);
+    const allItems=[...(ex.additions||[]).map(a=>({...a,signed:parseFloat(a.amount),dir:"add"})),...(ex.deductions||[]).map(d=>({...d,signed:-parseFloat(d.amount),dir:"ded"}))];
+    const[dir,setDir]=useState("add");
+    const[qty,setQty]=useState("");
+    const[unitType,setUnitType]=useState("custom");
+    const[noteReason,setNoteReason]=useState("Bank holiday");
+    const NOTE_REASONS=["Bank holiday","Red day","Left early","Sick leave","Custom"];
+    function calcAmount(){
+      const q=parseFloat(qty)||0;
+      if(unitType==="hours")return r2(q*parseFloat(rate||0));
+      if(unitType==="full_shift")return r2(q*parseFloat(shiftRate||0));
+      if(unitType==="night_shift")return r2(q*parseFloat(nightRate||0));
+      return r2(q); // custom — qty IS the £ amount
+    }
+    const preview=calcAmount();
+    return(
+      <div>
+        {allItems.map((item,i)=>(
+          <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderBottom:"1px dashed #F0F0F0"}}>
+            <div style={{fontSize:12,flex:1}}>
+              <span style={{color:item.signed>0?"#065F46":"#E05252",fontWeight:700}}>{item.signed>0?"+":"-"}£{Math.abs(item.signed).toFixed(2)}</span>
+              {item.label&&<span style={{color:"#888",marginLeft:6,fontSize:11}}>{item.label}</span>}
+            </div>
+            <button onClick={()=>{
+              if(item.dir==="add")setExtrasState(sid,ex=>({...ex,additions:(ex.additions||[]).filter((_,j)=>j!==i)}));
+              else setExtrasState(sid,ex=>({...ex,deductions:(ex.deductions||[]).filter((_,j)=>j!==i-(ex.additions||[]).length)}));
+            }} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#ccc",flexShrink:0}}>✕</button>
+          </div>
+        ))}
+        {/* Add row: 4 fields */}
+        <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",marginTop:6}}>
+          <select className="addinp" style={{padding:"6px 6px",fontSize:11,minWidth:80}} value={dir} onChange={e=>setDir(e.target.value)}>
+            <option value="add">Addition</option>
+            <option value="ded">Deduction</option>
+          </select>
+          <input className="addinp" type="number" step="0.1" placeholder="0.0" value={qty} onChange={e=>setQty(e.target.value)} style={{width:60}}/>
+          <select className="addinp" style={{padding:"6px 6px",fontSize:11,minWidth:80}} value={unitType} onChange={e=>setUnitType(e.target.value)}>
+            <option value="hours">Hours</option>
+            <option value="full_shift">Full Shifts</option>
+            <option value="night_shift">Night Shifts</option>
+            <option value="custom">Custom £</option>
+          </select>
+          <span style={{fontSize:11,color:"#888",minWidth:44}}>= £{preview.toFixed(2)}</span>
+        </div>
+        {/* Note/reason row */}
+        <div style={{display:"flex",gap:4,alignItems:"center",marginTop:4}}>
+          <select className="addinp" style={{flex:1,padding:"6px 6px",fontSize:11}} value={noteReason} onChange={e=>setNoteReason(e.target.value)}>
+            {NOTE_REASONS.map(r=><option key={r}>{r}</option>)}
+          </select>
+          <button className="addbtn" onClick={()=>{
+            if(!qty)return;
+            const amt=preview;const label=noteReason+(unitType!=="custom"?` (${qty} ${unitType.replace("_"," ")})`:` £${amt.toFixed(2)}`);
+            if(dir==="add")setExtrasState(sid,ex=>({...ex,additions:[...(ex.additions||[]),{label,amount:String(amt)}]}));
+            else setExtrasState(sid,ex=>({...ex,deductions:[...(ex.deductions||[]),{label,amount:String(amt)}]}));
+            setQty("");
+          }}>+ Add</button>
+        </div>
+      </div>
+    );
   }
 
   // ── AdjustmentsRow (merged add/deduct) ──
@@ -1988,14 +2056,23 @@ function ManagerApp({onLogout}){
           {!isKitchen&&p.autoOvertimeHrs>0&&<div className="row" style={{background:"#FEF3C7"}}><span>⏱ {p.autoOvertimeLabel}</span><span className="rowb" style={{color:"#78350F"}}>info only</span></div>}
           {!isKitchen&&p.sickDays>0&&<div className="row" style={{background:"#FEE2E2"}}><span>🤒 Sick days excluded</span><span className="rowb" style={{color:"#7F1D1D"}}>{p.sickDays} shift(s)</span></div>}
           {p.autoDeductions&&p.autoDeductions.filter(d=>d.auto).map((d,i)=><div key={"ad"+i} className="row" style={{background:"#FEE2E2"}}><span style={{fontSize:11}}>📉 {d.label}</span><span className="rowb" style={{color:"#7F1D1D"}}>-£{parseFloat(d.amount).toFixed(2)}</span></div>)}
-          <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
-          {isKitchen&&parseFloat(weeklyFixed||0)>0&&<div className="row"><span>Weekly fixed</span><span className="rowb">£{parseFloat(weeklyFixed||0).toFixed(2)}</span></div>}
-          <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
-          <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,tips:e.target.value}))}/></div>
-          <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS <span style={{fontWeight:400}}>(+ add / - deduct / note only)</span></div><AdjustmentsRow sid={sid}/></div>
+          {isKitchen?(<>
+            <div className="row"><span>💵 Fixed Cash</span><span className="rowb">£{p.fixedCash}</span></div>
+            <div className="row"><span>💳 Fixed Card</span><span className="rowb">£{p.fixedCard}</span></div>
+            <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS</div><KitchenAdjustmentsRow sid={sid} rate={rate} shiftRate={shiftRate} nightRate={nightRate}/></div>
+            <div className="divider"/>
+            <div className="row"><span>Total Additions</span><span className="rowb" style={{color:"#065F46"}}>+£{p.addT}</span></div>
+            <div className="row"><span>Total Deductions</span><span className="rowb" style={{color:"#E05252"}}>-£{p.dedT}</span></div>
+            <div className="row"><span style={{fontWeight:800}}>Kitchen Total</span><span style={{fontWeight:900,color:"#E8620A",fontSize:15}}>£{p.total}</span></div>
+          </>):(<>
+            <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
+            <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
+            <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,tips:e.target.value}))}/></div>
+            <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS <span style={{fontWeight:400}}>(+ add / - deduct / note only)</span></div><AdjustmentsRow sid={sid}/></div>
+          </>)}
           <div className="divider"/>
-          {/* Card payment mode — editable directly in payroll, same for FOH and kitchen */}
-          {p.cardExceeds&&countsEdited&&(
+          {!isKitchen&&(<>
+            {p.cardExceeds&&countsEdited&&(
             <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
               <div style={{fontSize:12,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Fixed card amount is more than was earned</div>
               <div style={{fontSize:11,color:"#991B1B",marginBottom:8}}>Fixed at £{parseFloat(cardFixed||0).toFixed(2)} but only £{p.grossTotal.toFixed(2)} was earned this week. Please correct the amount below.</div>
@@ -2024,6 +2101,7 @@ function ManagerApp({onLogout}){
           <div className="row"><span>💵 Cash</span><span className="rowb">£{p.cashAmt}</span></div>
           <div className="row"><span>💳 Card</span><span className="rowb">£{p.cardAmt}</span></div>
           <div className="row"><span style={{fontWeight:800}}>Salary Total</span><span style={{fontWeight:900,color:"#E8620A",fontSize:15}}>£{p.total}</span></div>
+          </>)}
           {!isKitchen&&<div className="row" style={{borderTop:"1px dashed #E5E5E5",marginTop:4,paddingTop:4}}><span>💳 Tips (card) {p.autoTips!=="0.00"&&!ex.tips&&<span style={{fontSize:10,color:"#aaa"}}>(auto from takings)</span>}</span><span className="rowb" style={{color:"#50DC78"}}>£{p.tips}</span></div>}
           {/* Manual override — overrides ALL exported values including shifts/hours */}
           <button style={{marginTop:8,background:showOverride?"#FEF3C7":"#F0F0F0",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",width:"100%",color:showOverride?"#78350F":"#555"}} onClick={()=>setShowOverride(v=>!v)}>
@@ -2385,6 +2463,10 @@ function ManagerApp({onLogout}){
                   </div>
                 )}
                   <div style={{marginTop:8,paddingTop:8,borderTop:"1px dashed #E5E5E5"}}>
+                    <div style={{fontSize:10,fontWeight:700,color:"#555",marginBottom:3}}>FIXED CASH PAYMENT (£) <span style={{fontWeight:400}}>— paid in cash every week</span></div>
+                    <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.fixedCash||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,fixedCash:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"fixed_cash",e.target.value)}/>
+                  </div>
+                  <div style={{marginTop:8,paddingTop:8,borderTop:"1px dashed #E5E5E5"}}>
                     <div style={{fontSize:10,fontWeight:700,color:"#555",marginBottom:3}}>MONTHLY CARD PAYMENT (£) <span style={{fontWeight:400}}>— fixed amount paid by card each month</span></div>
                     <input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={k.monthlyCard||""} onChange={e=>setKitchenStaff(p=>p.map(x=>x.id===k.id?{...x,monthlyCard:e.target.value}:x))} onBlur={e=>updKitchenField(k.id,"monthly_card",e.target.value)}/>
                   </div>
@@ -2471,6 +2553,7 @@ function ManagerApp({onLogout}){
             <div style={{display:"flex",gap:6,marginBottom:14,alignItems:"center"}}>
               <button className="btn sm sec" style={{padding:"6px 10px",flexShrink:0}} onClick={()=>{setClockDate(addDays(clockDate,-1));setClockShowAll(false);}} disabled={clockShowAll}>‹</button>
               <input type="date" className="inp sm" style={{flex:1}} value={clockDate} onChange={e=>{setClockDate(e.target.value);setClockShowAll(false);}} disabled={clockShowAll}/>
+              {!clockShowAll&&pushedClockDates.has(clockDate)&&<span style={{fontSize:11,color:"#50DC78",fontWeight:800,whiteSpace:"nowrap"}}>✓ Pushed</span>}
               <button className="btn sm sec" style={{padding:"6px 10px",flexShrink:0}} onClick={()=>{setClockDate(addDays(clockDate,1));setClockShowAll(false);}} disabled={clockShowAll}>›</button>
               <button className="btn sm sec" onClick={()=>{setClockDate(todayISO());setClockShowAll(false);}}>Today</button>
               {gsConfig.clockLogId&&<button className="btn sm navy" onClick={()=>{pushClockLog(clockDate);t("⏳ Pushing clock log…");}}>📤 Push</button>}
