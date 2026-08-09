@@ -2093,7 +2093,7 @@ function ManagerApp({onLogout}){
           </>)}
           <div className="divider"/>
           {!isKitchen&&(<>
-            {p.cardExceeds&&payrollLoaded&&(
+            {p.cardExceeds&&(
             <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
               <div style={{fontSize:12,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Fixed card amount is more than was earned</div>
               <div style={{fontSize:11,color:"#991B1B",marginBottom:8}}>Fixed at £{parseFloat(cardFixed||0).toFixed(2)} but only £{p.grossTotal.toFixed(2)} was earned this week. Please correct the amount below.</div>
@@ -2576,7 +2576,6 @@ function ManagerApp({onLogout}){
               {!clockShowAll&&pushedClockDates.has(clockDate)&&<span style={{fontSize:11,color:"#50DC78",fontWeight:800,whiteSpace:"nowrap"}}>✓ Pushed</span>}
               <button className="btn sm sec" style={{padding:"6px 10px",flexShrink:0}} onClick={()=>{setClockDate(addDays(clockDate,1));setClockShowAll(false);}} disabled={clockShowAll}>›</button>
               <button className="btn sm sec" onClick={()=>{setClockDate(todayISO());setClockShowAll(false);}}>Today</button>
-              {gsConfig.clockLogId&&<button className="btn sm navy" onClick={()=>{pushClockLog(clockDate);t("⏳ Pushing clock log…");}}>📤 Push</button>}
               <button className={`btn sm${clockShowAll?" navy":" sec"}`} onClick={()=>setClockShowAll(v=>!v)}>{clockShowAll?"✓ All":"All"}</button>
             </div>
             {staff.map(s=>{
