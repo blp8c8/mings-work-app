@@ -2049,7 +2049,7 @@ function ManagerApp({onLogout}){
       setLCash(ex.manualCash||"");
       setLCard(ex.manualCard||"");
       setLTotal(ex.manualTotal||"");
-    },[ex.manualFull,ex.manualNight,ex.manualHrs,ex.tips,ex.manualCash,ex.manualCard,ex.manualTotal,ex.extraTime]);
+    },[ex.manualFull,ex.manualNight,ex.manualHrs,ex.tips,ex.manualCash,ex.manualCard,ex.manualTotal,ex.extraTime,p.autoTips]);
     return(
       <div className="paycard">
         <div className="phead">
@@ -2068,7 +2068,7 @@ function ManagerApp({onLogout}){
           </div>
           <div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{(parseFloat(p.hrs||0)*parseFloat(rate||0)).toFixed(2)}</span></div>
           {!isKitchen&&p.autoOvertimeHrs>0&&<div className="row" style={{background:"#FEF3C7"}}><span>⏱ {p.autoOvertimeLabel}</span><span className="rowb" style={{color:"#78350F"}}>info only</span></div>}
-          {!isKitchen&&p.sickDays>0&&<div className="row" style={{background:"#FEE2E2"}}><span>🤒 Sick days excluded</span><span className="rowb" style={{color:"#7F1D1D"}}>{p.sickDays} shift(s)</span></div>}
+          {!isKitchen&&p.sickDays>0&&(lFull||lNight||lHrs)&&<div className="row" style={{background:"#FEE2E2"}}><span>🤒 Sick days excluded</span><span className="rowb" style={{color:"#7F1D1D"}}>{p.sickDays} shift(s)</span></div>}
           {p.autoDeductions&&p.autoDeductions.filter(d=>d.auto).map((d,i)=><div key={"ad"+i} className="row" style={{background:"#FEE2E2"}}><span style={{fontSize:11}}>📉 {d.label}</span><span className="rowb" style={{color:"#7F1D1D"}}>-£{parseFloat(d.amount).toFixed(2)}</span></div>)}
           {isKitchen?(<>
             <div className="row"><span>💵 Fixed Cash <span style={{fontSize:10,color:"#aaa"}}>(± adj)</span></span><span className="rowb">£{r2(parseFloat(p.fixedCash)+parseFloat(p.addT)-parseFloat(p.dedT)).toFixed(2)}</span></div>
