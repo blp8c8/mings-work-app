@@ -599,9 +599,9 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     if(!error){setRejections(p=>[...p,data]);setRejectModal(null);t("Rejection sent");}
     else t("❌ "+error.message);
   }
-  async function submitTakings(){const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(tVals[f.key]||0);if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});const{error}=await db.from("takings").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),...vals,note:tNote,is_new:true,is_corrected:false});if(!error){setTVals({});setTCC({});setTNote("");setSubmitted(true);t("📊 Submitted!");setTab("home");}else t("❌ "+error.message);}
+  async function submitTakings(){const vals={};TKFIELDS.forEach(f=>{vals[f.db]=r2(parseFloat(tVals[f.key]||0));if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});const{error}=await db.from("takings").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),...vals,note:tNote,is_new:true,is_corrected:false});if(!error){setTVals({});setTCC({});setTNote("");setSubmitted(true);t("📊 Submitted!");setTab("home");}else t("❌ "+error.message);}
   async function correctTakings(){
-    const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(tVals[f.key]||0);if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});
+    const vals={};TKFIELDS.forEach(f=>{vals[f.db]=r2(parseFloat(tVals[f.key]||0));if(f.ccDb)vals[f.ccDb]=tCC[f.key]||"cash";});
     const{data:existing}=await db.from("takings").select("id").eq("staff_id",user.id).eq("date",todayISO()).maybeSingle();
     if(!existing)return t("❌ No submission found for today");
     const{error}=await db.from("takings").update({...vals,note:tNote,is_new:true,is_corrected:true}).eq("id",existing.id);
@@ -891,6 +891,7 @@ function ManagerApp({onLogout}){
   const[payrollLoaded,setPayrollLoaded]=useState(false);
   const[expandedSummaryStaff,setExpandedSummaryStaff]=useState(new Set());
   const[pushedClockDates,setPushedClockDates]=useState(()=>{try{return new Set(JSON.parse(localStorage.getItem("pushedClockDates")||"[]"));}catch{return new Set();}});
+  const clockLogDrafts=React.useRef({}); // {logId: {time_in, time_out, note}} — local edits before Confirm
   // Accumulated clock log history stored in localStorage — written as full history on each push
   const clockLogHistoryRef=React.useRef(JSON.parse(localStorage.getItem("clockLogHistory")||"{}")); // gates auto-count display until Load pressed
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
@@ -1692,7 +1693,12 @@ function ManagerApp({onLogout}){
       const wr3=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",monthlyRows);
       if(!wr3.ok){t("❌ Monthly: "+wr3.err);return;}
     }
-    setExtras({});
+    // Clear extras state — PayrollCard remounts via clearKey and shows defaults
+    const emptyExtras={};
+    [...staff.map(s=>s.id),...kitchenStaff.map(k=>kId(k.id))].forEach(sid=>{
+      emptyExtras[sid]={tips:"",additions:[],deductions:[],notes:[],manualFull:"",manualNight:"",manualHrs:"",manualCash:"",manualCard:"",manualTotal:"",extraTime:"",id:null,ws:null};
+    });
+    setExtras(emptyExtras);
     setClearKey(k=>k+1);
     // Push clock log for the full payroll week (all 7 days, sorted by date)
     if(gsConfig.clockLogId){
@@ -2038,7 +2044,7 @@ function ManagerApp({onLogout}){
       setLFull(ex.manualFull||"");
       setLNight(ex.manualNight||"");
       setLHrs(ex.manualHrs||"");
-      setLTips(ex.tips||"");
+      setLTips(ex.tips||p.autoTips||"");
       setLExtraTime(ex.extraTime||"");
       setLCash(ex.manualCash||"");
       setLCard(ex.manualCard||"");
@@ -2591,11 +2597,11 @@ function ManagerApp({onLogout}){
                     {l.override_at&&new Date(l.override_at).getFullYear()>2020&&<div style={{fontSize:10,color:"#aaa",marginBottom:3}}>✏️ Edited {new Date(l.override_at).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>}
                     <div className="logedit">
                       <span className="logelbl">In</span>
-                      <input type="time" className="inp time" value={l.time_in||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v,_dirty:true}:x));}}/>
+                      <input type="time" className="inp time" defaultValue={l.time_in||""} onChange={e=>{if(!clockLogDrafts.current[l.id])clockLogDrafts.current[l.id]={time_in:l.time_in,time_out:l.time_out,note:l.note||""};clockLogDrafts.current[l.id].time_in=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,_dirty:true}:x));}}/>
                       <span className="logelbl">Out</span>
-                      <input type="time" className="inp time" value={l.time_out||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v,_dirty:true}:x));}}/>
+                      <input type="time" className="inp time" defaultValue={l.time_out||""} onChange={e=>{if(!clockLogDrafts.current[l.id])clockLogDrafts.current[l.id]={time_in:l.time_in,time_out:l.time_out,note:l.note||""};clockLogDrafts.current[l.id].time_out=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,_dirty:true}:x));}}/>
                     </div>
-                    <select className="lognote" style={{marginBottom:4}} value={(l.note||"").split("|").find(n=>["forgot","left_early","overtime","sick_leave","back-stamped","custom",""].includes(n))||""} onChange={e=>{const v=e.target.value;const existing=(l.note||"").split("|").filter(n=>n&&!["forgot","left_early","overtime","sick_leave","custom"].includes(n)&&!n.startsWith("custom:"));const newParts=v?[...existing,v]:existing;const combined=newParts.join("|");setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:combined,_dirty:true}:x));}}>
+                    <select className="lognote" style={{marginBottom:4}} value={(l.note||"").split("|").find(n=>["forgot","left_early","overtime","sick_leave","back-stamped","custom",""].includes(n))||""} onChange={e=>{const v=e.target.value;const existing=(l.note||"").split("|").filter(n=>n&&!["forgot","left_early","overtime","sick_leave","custom"].includes(n)&&!n.startsWith("custom:"));const newParts=v?[...existing,v]:existing;const combined=newParts.join("|");if(!clockLogDrafts.current[l.id])clockLogDrafts.current[l.id]={time_in:l.time_in,time_out:l.time_out,note:l.note||""};clockLogDrafts.current[l.id].note=combined;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,_dirty:true}:x));}}>
                       <option value="">— No note —</option>
                       <option value="forgot">Forgot to clock out</option>
                       <option value="left_early">Left early / came in late</option>
@@ -2607,8 +2613,8 @@ function ManagerApp({onLogout}){
                     {l._dirty&&(
                       <button className="btn sm" style={{marginTop:6,background:"#E8620A",color:"#fff"}} onClick={async()=>{
                         const oa=new Date().toISOString();
-                        const{error}=await db.from("clock_logs").update({time_in:l.time_in,time_out:l.time_out,note:l.note||"",override_at:oa}).eq("id",l.id);
-                        if(!error){setClockLogs(p=>p.map(x=>x.id===l.id?{...x,override_at:oa,_dirty:false}:x));t(`✅ ${s.name} clock log updated`);}
+                        const draft=clockLogDrafts.current[l.id]||{time_in:l.time_in,time_out:l.time_out,note:l.note||""};const{error}=await db.from("clock_logs").update({time_in:draft.time_in,time_out:draft.time_out,note:draft.note,override_at:oa}).eq("id",l.id);
+                        if(!error){const draft=clockLogDrafts.current[l.id]||{time_in:l.time_in,time_out:l.time_out,note:l.note||""};setClockLogs(p=>p.map(x=>x.id===l.id?{...x,...draft,override_at:oa,_dirty:false}:x));delete clockLogDrafts.current[l.id];t(`✅ ${s.name} updated — re-authorise in Payroll if this week hasn't been pushed yet`);}
                         else t("❌ "+error.message);
                       }}>✓ Confirm Override</button>
                     )}
@@ -3283,7 +3289,7 @@ function TakingsEditForm({takings,upsertTakings,toast,autoPushDay,gsReady}){
 
   async function save(){
     setSaving(true);
-    const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(values[f.key]||0);if(f.ccDb)vals[f.ccDb]=cc[f.key]||"cash";});
+    const vals={};TKFIELDS.forEach(f=>{vals[f.db]=r2(parseFloat(values[f.key]||0));if(f.ccDb)vals[f.ccDb]=cc[f.key]||"cash";});
     const r=await upsertTakings(date,vals,note);
     if(r.ok){
       toast("✅ Takings updated!");
@@ -3319,7 +3325,7 @@ function TakingsEditForm({takings,upsertTakings,toast,autoPushDay,gsReady}){
 function TakingsForm({setTakings,toast}){
   const[values,setValues]=useState({});const[cc,setCC]=useState({});const[note,setNote]=useState("");const[date,setDate]=useState(todayISO());const[saving,setSaving]=useState(false);
   async function submit(){
-    setSaving(true);const vals={};TKFIELDS.forEach(f=>{vals[f.db]=parseFloat(values[f.key]||0);if(f.ccDb)vals[f.ccDb]=cc[f.key]||"cash";});
+    setSaving(true);const vals={};TKFIELDS.forEach(f=>{vals[f.db]=r2(parseFloat(values[f.key]||0));if(f.ccDb)vals[f.ccDb]=cc[f.key]||"cash";});
     const{data,error}=await db.from("takings").insert({staff_id:"manager",staff_name:"Manager",date,...vals,note,is_new:false}).select().single();
     if(!error){setTakings(p=>[data,...p]);setValues({});setNote("");setDate(todayISO());toast("✅ Takings saved!");}else toast("❌ "+error.message);setSaving(false);
   }
