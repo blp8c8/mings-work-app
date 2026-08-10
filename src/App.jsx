@@ -984,19 +984,33 @@ function ManagerApp({onLogout}){
   }
 
   // ── Rota ──
-  async function setShift(sId,dayIdx,field,val){
+  // setShift: local state only — DB write happens when manager presses Send
+  function setShift(sId,dayIdx,field,val){
     const days=rota[sId]||[];const day=days[dayIdx];if(!day)return;
-    const updated={...day,[field]:val};
+    const updated={...day,[field]:val,_unsaved:true};
     setRota(p=>({...p,[sId]:p[sId].map((d,i)=>i===dayIdx?updated:d)}));
-    const payload={staff_id:sId,day_index:day.jsDay,week_start:rotaMon,shift_type:field==="type"?val:day.type,custom_in:field==="customIn"?val:day.customIn,custom_out:field==="customOut"?val:day.customOut};
-    if(day.rowId){await db.from("rota").update(payload).eq("id",day.rowId);}
-    else{const{data}=await db.from("rota").insert(payload).select().single();if(data)setRota(p=>({...p,[sId]:p[sId].map((d,i)=>i===dayIdx?{...updated,rowId:data.id}:d)}));}
-    // If shift type changed, delete that day's confirmation so staff must re-confirm
-    if(field==="type"){
-      const dayName=DAYS_MON[day.jsDay];
-      await db.from("confirmations").delete().eq("staff_id",sId).eq("day",dayName);
-      t(`✅ ${DAYS_MON[day.jsDay]} updated — staff must re-confirm`);
-    }
+  }
+
+  // sendRota: saves all 7 days for one staff member to DB, then clears confirmation
+  async function sendRota(sId){
+    const days=rota[sId]||[];
+    const saves=days.map(async(day)=>{
+      const payload={staff_id:sId,day_index:day.jsDay,week_start:rotaMon,shift_type:day.type,custom_in:day.customIn||null,custom_out:day.customOut||null};
+      if(day.rowId){
+        await db.from("rota").update(payload).eq("id",day.rowId);
+        return day;
+      }else{
+        const{data}=await db.from("rota").insert(payload).select().single();
+        return data?{...day,rowId:data.id}:day;
+      }
+    });
+    const saved=await Promise.all(saves);
+    // Mark all days as saved in local state
+    setRota(p=>({...p,[sId]:saved.map(d=>({...d,_unsaved:false}))}));
+    // Delete all confirmations for this staff so they must re-confirm
+    await db.from("confirmations").delete().eq("staff_id",sId);
+    const s=staff.find(x=>x.id===sId);
+    t(`✅ Rota sent to ${s?.name?.split(" ")[0]||"staff"} — they must re-confirm`);
   }
 
   // ── Takings defaults ──
@@ -2047,7 +2061,7 @@ function ManagerApp({onLogout}){
           {!isKitchen&&p.sickDays>0&&<div className="row" style={{background:"#FEE2E2"}}><span>🤒 Sick days excluded</span><span className="rowb" style={{color:"#7F1D1D"}}>{p.sickDays} shift(s)</span></div>}
           {p.autoDeductions&&p.autoDeductions.filter(d=>d.auto).map((d,i)=><div key={"ad"+i} className="row" style={{background:"#FEE2E2"}}><span style={{fontSize:11}}>📉 {d.label}</span><span className="rowb" style={{color:"#7F1D1D"}}>-£{parseFloat(d.amount).toFixed(2)}</span></div>)}
           {isKitchen?(<>
-            <div className="row"><span>💵 Fixed Cash</span><span className="rowb">£{p.fixedCash}</span></div>
+            <div className="row"><span>💵 Fixed Cash <span style={{fontSize:10,color:"#aaa"}}>(± adj)</span></span><span className="rowb">£{r2(parseFloat(p.fixedCash)+parseFloat(p.addT)-parseFloat(p.dedT)).toFixed(2)}</span></div>
             <div className="row"><span>💳 Fixed Card</span><span className="rowb">£{p.fixedCard}</span></div>
             <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS</div><KitchenAdjustmentsRow sid={sid} rate={rate} shiftRate={shiftRate} nightRate={nightRate}/></div>
             <div className="divider"/>
@@ -2088,8 +2102,8 @@ function ManagerApp({onLogout}){
             )}
             <div style={{fontSize:10,color:"#aaa",marginTop:6}}>{cardMode==="fixed"?"Card never exceeds what was earned — rest is cash":cardMode==="cash"?"Entire amount paid in cash":"Entire amount paid by card"}</div>
           </div>
-          <div className="row"><span>💵 Cash</span><span className="rowb">£{p.cashAmt}</span></div>
-          <div className="row"><span>💳 Card</span><span className="rowb">£{p.cardAmt}</span></div>
+          <div className="row"><span>💵 Cash <span style={{fontSize:10,color:"#aaa"}}>(base − card ± adj)</span></span><span className="rowb">£{p.cashAmt}</span></div>
+          <div className="row"><span>💳 Card <span style={{fontSize:10,color:"#aaa"}}>(fixed)</span></span><span className="rowb">£{p.cardAmt}</span></div>
           <div className="row"><span style={{fontWeight:800}}>Salary Total</span><span style={{fontWeight:900,color:"#E8620A",fontSize:15}}>£{p.total}</span></div>
           </>)}
           {!isKitchen&&<div className="row" style={{borderTop:"1px dashed #E5E5E5",marginTop:4,paddingTop:4}}><span>💳 Tips (card) {p.autoTips!=="0.00"&&!ex.tips&&<span style={{fontSize:10,color:"#aaa"}}>(auto from takings)</span>}</span><span className="rowb" style={{color:"#50DC78"}}>£{p.tips}</span></div>}
@@ -2509,7 +2523,10 @@ function ManagerApp({onLogout}){
                     {d.type==="Custom"&&<><input type="time" className="inp time" value={d.customIn||""} onChange={e=>setShift(s.id,idx,"customIn",e.target.value)}/><span style={{fontSize:10,color:"#aaa"}}>–</span><input type="time" className="inp time" value={d.customOut||""} onChange={e=>setShift(s.id,idx,"customOut",e.target.value)}/></>}
                   </div>
                 ))}
-                <button className="btn green" style={{marginTop:8,padding:"11px"}} onClick={()=>t(`✅ Rota saved for ${s.name}!`)}>📤 Send Rota to {s.name.split(" ")[0]}</button>
+                <button className="btn green" style={{marginTop:8,padding:"11px"}} onClick={()=>sendRota(s.id)}>
+                  📤 Send Rota to {s.name.split(" ")[0]}
+                  {(rota[s.id]||[]).some(d=>d._unsaved)&&<span style={{background:"#E05252",color:"#fff",borderRadius:10,fontSize:10,padding:"1px 7px",marginLeft:8}}>Unsaved</span>}
+                </button>
               </div>
             );})}
 
