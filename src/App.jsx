@@ -881,6 +881,7 @@ function ManagerApp({onLogout}){
   const[weekRange,setWeekRange]=useState(()=>payWeekOf(todayISO()));
   const[payrollMonth,setPayrollMonth]=useState(()=>todayISO().slice(0,7));
   const[clearKey,setClearKey]=useState(0);
+  const[authoriseKey,setAuthoriseKey]=useState(0);
   const[kpiWeek,setKpiWeek]=useState(()=>snapToSunday(todayISO()));
   const[kpiRange,setKpiRange]=useState(8);
   const[kpiCustomStart,setKpiCustomStart]=useState(()=>snapToSunday(addDays(todayISO(),-55)));
@@ -994,23 +995,26 @@ function ManagerApp({onLogout}){
   // sendRota: saves all 7 days for one staff member to DB, then clears confirmation
   async function sendRota(sId){
     const days=rota[sId]||[];
-    const saves=days.map(async(day)=>{
+    const changed=days.filter(d=>d._unsaved);
+    if(changed.length===0){t("No changes to send");return;}
+    const saves=changed.map(async(day)=>{
       const payload={staff_id:sId,day_index:day.jsDay,week_start:rotaMon,shift_type:day.type,custom_in:day.customIn||null,custom_out:day.customOut||null};
       if(day.rowId){
         await db.from("rota").update(payload).eq("id",day.rowId);
-        return day;
+        return{...day,_unsaved:false};
       }else{
         const{data}=await db.from("rota").insert(payload).select().single();
-        return data?{...day,rowId:data.id}:day;
+        return{...day,...(data?{rowId:data.id}:{}),_unsaved:false};
       }
     });
-    const saved=await Promise.all(saves);
-    // Mark all days as saved in local state
-    setRota(p=>({...p,[sId]:saved.map(d=>({...d,_unsaved:false}))}));
-    // Delete all confirmations for this staff so they must re-confirm
-    await db.from("confirmations").delete().eq("staff_id",sId);
+    const savedDays=await Promise.all(saves);
+    // Update only the changed days in rota state
+    setRota(p=>({...p,[sId]:p[sId].map(d=>{const updated=savedDays.find(u=>u.jsDay===d.jsDay);return updated||d;})}));
+    // Delete confirmations only for the changed days so staff re-confirms only those
+    await Promise.all(changed.map(day=>db.from("confirmations").delete().eq("staff_id",sId).eq("day",DAYS_MON[day.jsDay])));
     const s=staff.find(x=>x.id===sId);
-    t(`✅ Rota sent to ${s?.name?.split(" ")[0]||"staff"} — they must re-confirm`);
+    const changedNames=changed.map(d=>DAYS_MON[d.jsDay]).join(", ");
+    t(`✅ ${s?.name?.split(" ")[0]||"Staff"}: ${changedNames} sent — staff must re-confirm those days`);
   }
 
   // ── Takings defaults ──
@@ -1171,7 +1175,7 @@ function ManagerApp({onLogout}){
     const salaryFinal=isOverride?parseFloat(ex.manualTotal):salaryTotal;
     const cardAmt=ex.manualCard&&ex.manualCard!==""?parseFloat(ex.manualCard):calcCard;
     const cashAmt=ex.manualCash&&ex.manualCash!==""?parseFloat(ex.manualCash):calcCash;
-    return{full,night,hrs:typeof hrs==="number"?hrs.toFixed(2):hrs,base:base.toFixed(2),tips:tips.toFixed(2),autoTips:autoTips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:salaryFinal.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride,grossTotal:salaryTotal,cardExceeds:!isOverride&&cardMode==="fixed"&&exceeds,autoOvertimeHrs,autoOvertimeLabel,sickDays:sickDates.size,autoDeductions};
+    return{full,night,hrs:typeof hrs==="number"?hrs.toFixed(2):hrs,base:base.toFixed(2),baseCash:Math.max(0,base-parseFloat(s.cardFixed||0)).toFixed(2),tips:tips.toFixed(2),autoTips:autoTips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:salaryFinal.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride,grossTotal:salaryTotal,cardExceeds:!isOverride&&cardMode==="fixed"&&exceeds,autoOvertimeHrs,autoOvertimeLabel,sickDays:sickDates.size,autoDeductions};
   }
 
   function calcKitchenPay(k){
@@ -2102,8 +2106,10 @@ function ManagerApp({onLogout}){
             )}
             <div style={{fontSize:10,color:"#aaa",marginTop:6}}>{cardMode==="fixed"?"Card never exceeds what was earned — rest is cash":cardMode==="cash"?"Entire amount paid in cash":"Entire amount paid by card"}</div>
           </div>
-          <div className="row"><span>💵 Cash <span style={{fontSize:10,color:"#aaa"}}>(base − card ± adj)</span></span><span className="rowb">£{p.cashAmt}</span></div>
+          <div className="row"><span>💵 Cash <span style={{fontSize:10,color:"#aaa"}}>(base − card)</span></span><span className="rowb">£{p.baseCash}</span></div>
           <div className="row"><span>💳 Card <span style={{fontSize:10,color:"#aaa"}}>(fixed)</span></span><span className="rowb">£{p.cardAmt}</span></div>
+          <div className="row"><span>➕ Additions</span><span className="rowb" style={{color:"#065F46"}}>+£{p.addT}</span></div>
+          <div className="row"><span>➖ Deductions</span><span className="rowb" style={{color:"#E05252"}}>-£{p.dedT}</span></div>
           <div className="row"><span style={{fontWeight:800}}>Salary Total</span><span style={{fontWeight:900,color:"#E8620A",fontSize:15}}>£{p.total}</span></div>
           </>)}
           {!isKitchen&&<div className="row" style={{borderTop:"1px dashed #E5E5E5",marginTop:4,paddingTop:4}}><span>💳 Tips (card) {p.autoTips!=="0.00"&&!ex.tips&&<span style={{fontSize:10,color:"#aaa"}}>(auto from takings)</span>}</span><span className="rowb" style={{color:"#50DC78"}}>£{p.tips}</span></div>}
@@ -2710,6 +2716,7 @@ const jsDay=new Date(dateForEntry+"T12:00:00").getDay();const rotaEntry=(rota[s.
                         return{...p,[s.id]:updated};
                       });
                       t(`✅ ${s.name.split(" ")[0]} authorised for week of ${fmtDate(ws)} → check payroll card`);
+                      setAuthoriseKey(k=>k+1);
                     }}>✓ Authorise → Payroll</button>
                     <button className="btn sm sec" style={{marginTop:5}} onClick={()=>setExpandedSummaryStaff(prev=>{const n=new Set(prev);n.has(s.id)?n.delete(s.id):n.add(s.id);return n;})}>
                       {expandedSummaryStaff.has(s.id)?"▲ Hide details":"▼ View week details"}
@@ -2769,14 +2776,14 @@ const jsDay=new Date(dateForEntry+"T12:00:00").getDay();const rotaEntry=(rota[s.
             <div style={{fontSize:11,color:"#888",marginBottom:8}}>Pick the week start (Sunday), tap Load to fill cards, make edits, then Push.</div>
             {getWeekAlerts(weekRange.start).map((a,i)=><div key={i} style={{background:a.type==="bh"?"#FEF3C7":"#EFF6FF",border:`1.5px solid ${a.type==="bh"?"#F59E0B":"#BFDBFE"}`,borderRadius:10,padding:"8px 12px",marginBottom:8,fontSize:13,color:a.type==="bh"?"#78350F":"#1E40AF"}}>{a.type==="bh"?"⚠️":"📅"} {a.label}</div>)}
             <div style={{fontSize:13,fontWeight:800,color:"#1A1A2E",marginBottom:8}}>Front of House</div>
-            {staff.map(s=><PayrollCard key={s.id+'-'+clearKey} name={s.name} icon="👤" sid={s.id} payType={s.payType} rate={s.rate} shiftRate={s.shiftRate} nightRate={s.nightRate} calcFn={()=>calcPay(s)} isKitchen={false} cardMode={s.cardMode||"fixed"} cardFixed={s.cardFixed} staffId={s.id}/>)}
+            {staff.map(s=><PayrollCard key={s.id+'-'+clearKey+'-'+authoriseKey} name={s.name} icon="👤" sid={s.id} payType={s.payType} rate={s.rate} shiftRate={s.shiftRate} nightRate={s.nightRate} calcFn={()=>calcPay(s)} isKitchen={false} cardMode={s.cardMode||"fixed"} cardFixed={s.cardFixed} staffId={s.id}/>)}
             <div style={{fontSize:13,fontWeight:800,color:"#1A1A2E",margin:"14px 0 8px"}}>Kitchen Staff</div>
             <div style={{display:"flex",gap:6,marginBottom:10}}>
               <input className="inp sm" style={{flex:1}} placeholder="Add kitchen staff name…" value={newKName} onChange={e=>setNewKName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addKitchen()}/>
               <button className="btn sm navy" onClick={addKitchen}>Add</button>
             </div>
             {kitchenStaff.length===0&&<div style={{fontSize:13,color:"#ccc",marginBottom:10,fontStyle:"italic"}}>No kitchen staff yet — add via Staff tab</div>}
-            {kitchenStaff.map(k=><PayrollCard key={k.id+'-'+clearKey} name={k.name} icon="👨‍🍳" sid={kId(k.id)} payType={k.payType||"hourly"} rate={k.rate} shiftRate={k.shiftRate} nightRate={k.nightRate} weeklyFixed={k.weeklyFixed||"0"} calcFn={()=>calcKitchenPay(k)} isKitchen={true} kitchenId={k.id} cardMode={k.cardMode||"fixed"} cardFixed={k.cardFixed}/>)}
+            {kitchenStaff.map(k=><PayrollCard key={k.id+'-'+clearKey+'-'+authoriseKey} name={k.name} icon="👨‍🍳" sid={kId(k.id)} payType={k.payType||"hourly"} rate={k.rate} shiftRate={k.shiftRate} nightRate={k.nightRate} weeklyFixed={k.weeklyFixed||"0"} calcFn={()=>calcKitchenPay(k)} isKitchen={true} kitchenId={k.id} cardMode={k.cardMode||"fixed"} cardFixed={k.cardFixed}/>)}
             <div className="psum">
               <div className="psumtitle">Week Summary — {fmtRange(weekRange.start,weekRange.end)}</div>
               <div className="psumrow"><span>💵 Total Cash</span><span className="psumamt">£{totCash}</span></div>
