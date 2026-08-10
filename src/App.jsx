@@ -534,19 +534,23 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     else t("❌ "+error.message);
   }
   async function doClockOut(noteType){
-    const active=logs.find(l=>l.date===todayISO()&&l.time_in&&!l.time_out);
+    // Find any active log regardless of date — handles past-midnight forgotten clock-outs
+    const active=logs.find(l=>l.time_in&&!l.time_out);
+    if(!active)return;
+    const isNextDay=active.date!==todayISO(); // true if forgot to clock out yesterday
     if(!active)return;
     const time=nowTime();
     const bt=parseFloat(breakTime||0);
     // Combine existing note (e.g. "back-stamped") with new noteType
     const existingNote=active.note||"";
-    const newParts=[...new Set([...existingNote.split("|").filter(Boolean),...(noteType?[noteType]:[])])];
+    const effectiveNoteType=isNextDay?"forgot":noteType; // auto-forgot if past midnight
+    const newParts=[...new Set([...existingNote.split("|").filter(Boolean),...(effectiveNoteType?[effectiveNoteType]:[])])];
     const finalNote=checklistDone&&assigned?("checklist_done"+(newParts.length?":"+newParts.join("|"):"")):(newParts.join("|")||"");
     let result=await db.from("clock_logs").update({time_out:time,note:finalNote,break_time:bt}).eq("id",active.id);
     if(result.error&&(result.error.message?.includes("break_time")||result.error.code==="42703"||result.error.details?.includes("break_time"))){
       result=await db.from("clock_logs").update({time_out:time,note:finalNote}).eq("id",active.id);
     }
-    if(!result.error){setLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time,note:finalNote,break_time:bt}:l));setClockedIn(false);setBreakTime("0");setLateModal(false);setEarlyModal(null);t("👋 Clocked out at "+time+(bt>0?` (${bt}hr break)`:""));}
+    if(!result.error){setLogs(p=>p.map(l=>l.id===active.id?{...l,time_out:time,note:finalNote,break_time:bt}:l));setClockedIn(false);setBreakTime("0");setLateModal(false);setEarlyModal(null);isNextDay?t("👋 Clocked out — yesterday's shift marked as 'forgot to clock out'"):t("👋 Clocked out at "+time+(bt>0?` (${bt}hr break)`:""));}
     else t("❌ "+result.error.message);
   }
   function clockOut(){
@@ -603,11 +607,11 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     const{error}=await db.from("takings").update({...vals,note:tNote,is_new:true,is_corrected:true}).eq("id",existing.id);
     if(!error){setTVals({});setTCC({});setTNote("");setCorrected(true);setShowCorrect(false);t("✅ Correction submitted!");setTab("home");}else t("❌ "+error.message);
   }
-  function shiftLabel(sh){if(!sh||sh.type==="Off")return"Day off";if(sh.type==="Full Day (11am–close)")return"Full Day 11am–close";if(sh.type==="Night (5:30pm–close)")return"Night 5:30pm–close";if(sh.type==="Custom")return`${sh.customIn||"?"}–${sh.customOut||"?"}`;return sh.type;}
+  function shiftLabel(sh){if(!sh||sh.type==="Off")return"Day off";if(sh.type==="Sick Leave")return"🤒 Sick Leave";if(sh.type==="Full Day (11am–close)")return"Full Day 11am–close";if(sh.type==="Night (5:30pm–close)")return"Night 5:30pm–close";if(sh.type==="Custom")return`${sh.customIn||"?"}–${sh.customOut||"?"}`;return sh.type;}
 
   if(loading)return<Loading text="Loading your data…"/>;
 
-  function RotaList(){return rota.map((sh,idx)=>{const isToday=sh.date===todayISO();const dayName=DAYS_MON[idx];const rejected=rejections.some(r=>r.day===dayName);const confirmed=confirmedKeysRef.current.has(dayName)||confirmations.some(r=>r.day===dayName);const isOff=sh.type==="Off";return(<div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}`}><div className="rdaylbl"><div className="rdayname">{dayName}</div><div className="rdaydate">{dispDate(sh.date)}</div>{isToday&&<div className="rdayflag">TODAY</div>}</div><div className="rdayshift">{shiftLabel(sh)}</div>{!isOff&&!rejected&&!confirmed&&<div className="rdaybtns"><button className="okbtn" onClick={()=>confirmShift(idx)}>✓ OK</button><button className="nobtn" onClick={()=>{setRejectModal(idx);setRejectReason("");}}>✕ Can't</button></div>}{confirmed&&<span className="chip g">✓ OK</span>}{rejected&&!isOff&&<span className="chip r">Rejected</span>}</div>);});}
+  function RotaList(){return rota.map((sh,idx)=>{const isToday=sh.date===todayISO();const dayName=DAYS_MON[idx];const rejected=rejections.some(r=>r.day===dayName);const confirmed=confirmedKeysRef.current.has(dayName)||confirmations.some(r=>r.day===dayName);const isOff=sh.type==="Off";const isSick=sh.type==="Sick Leave";return(<div key={idx} className={`rday${isToday?" today":""}${isOff?" off":""}${isSick?" off":""}`} style={isSick?{borderLeft:"3px solid #E05252"}:{}}><div className="rdaylbl"><div className="rdayname">{dayName}</div><div className="rdaydate">{dispDate(sh.date)}</div>{isToday&&<div className="rdayflag">TODAY</div>}</div><div className="rdayshift" style={isSick?{color:"#E05252"}:{}}>{shiftLabel(sh)}</div>{!isOff&&!isSick&&!rejected&&!confirmed&&<div className="rdaybtns"><button className="okbtn" onClick={()=>confirmShift(idx)}>✓ OK</button><button className="nobtn" onClick={()=>{setRejectModal(idx);setRejectReason("");}}>✕ Can't</button></div>}{confirmed&&!isSick&&<span className="chip g">✓ OK</span>}{rejected&&!isOff&&!isSick&&<span className="chip r">Rejected</span>}{isSick&&<span className="chip" style={{background:"#FEE2E2",color:"#7F1D1D"}}>🤒 Sick</span>}</div>);});}
 
   const navItems=[{id:"home",icon:"🏠",label:"Home"},{id:"clock",icon:"⏰",label:"Clock"},{id:"rota",icon:"📋",label:"Rota"},{id:"absence",icon:"📅",label:"Absence"},...(assigned?[{id:"takings",icon:"📊",label:"Takings",badge:!submitted}]:[])];
   return(
@@ -1990,44 +1994,9 @@ function ManagerApp({onLogout}){
   }
 
   // ── AdjustmentsRow (merged add/deduct) ──
-  function AdjustmentsRow({sid}){
-    const ex=getExtras(sid);
-    const addItems=(ex.additions||[]).map(a=>({...a,signed:parseFloat(a.amount)}));
-    const dedItems=(ex.deductions||[]).map(d=>({...d,signed:-parseFloat(d.amount)}));
-    const allItems=[...addItems,...dedItems];
-    const[amount,setAmount]=useState("");const[reason,setReason]=useState("Bonus");const[custom,setCustom]=useState("");
-    const REASONS=["Sick leave","Left early","Bank holiday","Red day","Custom"];
-    const NOTE_REASONS=["Bank holiday — extra day off","Custom note"];
-    return(
-      <div>
-        {allItems.map((item,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:"1px dashed #F0F0F0"}}>
-          <span style={{fontSize:12,color:"#555"}}>{item.label}{item.signed!==0&&<span style={{fontWeight:700,color:item.signed>0?"#065F46":"#E05252",marginLeft:6}}>{item.signed>0?"+":""}£{Math.abs(item.signed).toFixed(2)}</span>}</span>
-          <button onClick={()=>{
-            if(i<addItems.length)setExtrasState(sid,ex=>({...ex,additions:(ex.additions||[]).filter((_,j)=>j!==i)}));
-            else setExtrasState(sid,ex=>({...ex,deductions:(ex.deductions||[]).filter((_,j)=>j!==i-addItems.length)}));
-          }} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#ccc"}}>✕</button>
-        </div>)}
-        <div className="addrow">
-          <select className="addinp" style={{flex:"none",padding:"6px 7px",fontSize:11}} value={reason} onChange={e=>setReason(e.target.value)}>
-            <optgroup label="Adjustments (+ or -)">
-              {REASONS.map(r=><option key={r}>{r}</option>)}
-            </optgroup>
-            <optgroup label="Notes only (no £)">
-              {NOTE_REASONS.map(r=><option key={r}>{r}</option>)}
-            </optgroup>
-          </select>
-          {!NOTE_REASONS.includes(reason)&&<input className="addinp" type="number" placeholder="+ or - £" value={amount} onChange={e=>setAmount(e.target.value)} style={{width:80}}/>}
-          <button className="addbtn" onClick={()=>{
-            const label=reason==="Custom"&&custom?custom:reason==="Custom note"&&custom?custom:reason;const amt=parseFloat(amount)||0;
-            if(NOTE_REASONS.includes(reason)){setExtrasState(sid,ex=>({...ex,notes:[...(ex.notes||[]),label]}));}
-            else if(amt>0)setExtrasState(sid,ex=>({...ex,additions:[...(ex.additions||[]),{label,amount:String(amt)}]}));
-            else if(amt<0)setExtrasState(sid,ex=>({...ex,deductions:[...(ex.deductions||[]),{label,amount:String(Math.abs(amt))}]}));
-            setAmount("");setCustom("");
-          }}>+ Add</button>
-        </div>
-        {(reason==="Custom"||reason==="Custom note")&&<input className="addinp" style={{marginTop:5,width:"100%"}} placeholder="Custom reason…" value={custom} onChange={e=>setCustom(e.target.value)}/>}
-      </div>
-    );
+  // ── AdjustmentsRow (FOH) — delegates to KitchenAdjustmentsRow for same 4-field UI ──
+  function AdjustmentsRow({sid,rate,shiftRate,nightRate}){
+    return <KitchenAdjustmentsRow sid={sid} rate={rate||"0"} shiftRate={shiftRate||"0"} nightRate={nightRate||"0"}/>;
   }
 
   // ── Payroll card (shared for FOH and kitchen) ──
@@ -2089,7 +2058,7 @@ function ManagerApp({onLogout}){
             <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
             <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
             <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,tips:e.target.value}))}/></div>
-            <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS <span style={{fontWeight:400}}>(+ add / - deduct / note only)</span></div><AdjustmentsRow sid={sid}/></div>
+            <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS</div><AdjustmentsRow sid={sid} rate={rate} shiftRate={shiftRate} nightRate={nightRate}/></div>
           </>)}
           <div className="divider"/>
           {!isKitchen&&(<>
@@ -2596,15 +2565,14 @@ function ManagerApp({onLogout}){
                         <button onClick={async()=>{if(!window.confirm(`Delete this entry for ${s.name} on ${dispDate(l.date,true)}?`))return;const{error}=await db.from("clock_logs").delete().eq("id",l.id);if(!error){setClockLogs(p=>p.filter(x=>x.id!==l.id));t("🗑️ Entry deleted");}else t("❌ "+error.message);}} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,color:"#E05252",padding:"2px 4px"}}>🗑️</button>
                       </div>
                     </div>
-                    {l.override_at&&<div style={{fontSize:10,color:"#aaa",marginBottom:3}}>✏️ Edited by manager {new Date(l.override_at).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>}
+                    {l.override_at&&new Date(l.override_at).getFullYear()>2020&&<div style={{fontSize:10,color:"#aaa",marginBottom:3}}>✏️ Edited {new Date(l.override_at).toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div>}
                     <div className="logedit">
                       <span className="logelbl">In</span>
-                      <input type="time" className="inp time" value={l.time_in||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v}:x));}} onBlur={e=>{const v=e.target.value;const oa=new Date().toISOString();db.from("clock_logs").update({time_in:v,override_at:oa}).eq("id",l.id);setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v,override_at:oa}:x));}}/>
+                      <input type="time" className="inp time" value={l.time_in||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_in:v,_dirty:true}:x));}}/>
                       <span className="logelbl">Out</span>
-                      <input type="time" className="inp time" value={l.time_out||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v}:x));}} onBlur={e=>{const v=e.target.value;const oa=new Date().toISOString();db.from("clock_logs").update({time_out:v,override_at:oa}).eq("id",l.id);setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v,override_at:oa}:x));}}/>
+                      <input type="time" className="inp time" value={l.time_out||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,time_out:v,_dirty:true}:x));}}/>
                     </div>
-                    <select className="lognote" style={{marginBottom:4}} value={(l.note||"").split("|").find(n=>["forgot","left_early","overtime","sick_leave","back-stamped","custom",""].includes(n))||""} onChange={e=>{const v=e.target.value;const oa=new Date().toISOString();// Preserve non-status parts (e.g. back-stamped) and replace status part
-const existing=(l.note||"").split("|").filter(n=>n&&!["forgot","left_early","overtime","sick_leave","custom"].includes(n)&&!n.startsWith("custom:"));const newParts=v?[...existing,v]:existing;const combined=newParts.join("|");setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:combined,override_at:oa}:x));db.from("clock_logs").update({note:combined,override_at:oa}).eq("id",l.id);}}>
+                    <select className="lognote" style={{marginBottom:4}} value={(l.note||"").split("|").find(n=>["forgot","left_early","overtime","sick_leave","back-stamped","custom",""].includes(n))||""} onChange={e=>{const v=e.target.value;const existing=(l.note||"").split("|").filter(n=>n&&!["forgot","left_early","overtime","sick_leave","custom"].includes(n)&&!n.startsWith("custom:"));const newParts=v?[...existing,v]:existing;const combined=newParts.join("|");setClockLogs(p=>p.map(x=>x.id===l.id?{...x,note:combined,_dirty:true}:x));}}>
                       <option value="">— No note —</option>
                       <option value="forgot">Forgot to clock out</option>
                       <option value="left_early">Left early / came in late</option>
@@ -2613,11 +2581,20 @@ const existing=(l.note||"").split("|").filter(n=>n&&!["forgot","left_early","ove
                       <option value="back-stamped">Back-stamped (forgot to clock in)</option>
                       <option value="custom">Custom…</option>
                     </select>
-                    {l.note==="custom"&&<textarea className="lognote" rows={1} placeholder="Custom note…" value={l.customNote||""} onChange={e=>{const v=e.target.value;setClockLogs(p=>p.map(x=>x.id===l.id?{...x,customNote:v}:x));db.from("clock_logs").update({note:"custom:"+v}).eq("id",l.id);}}/> }
+                    {l._dirty&&(
+                      <button className="btn sm" style={{marginTop:6,background:"#E8620A",color:"#fff"}} onClick={async()=>{
+                        const oa=new Date().toISOString();
+                        const{error}=await db.from("clock_logs").update({time_in:l.time_in,time_out:l.time_out,note:l.note||"",override_at:oa}).eq("id",l.id);
+                        if(!error){setClockLogs(p=>p.map(x=>x.id===l.id?{...x,override_at:oa,_dirty:false}:x));t(`✅ ${s.name} clock log updated`);}
+                        else t("❌ "+error.message);
+                      }}>✓ Confirm Override</button>
+                    )}
                   </div>
-                ))}
-                <button className="btn sm" style={{marginTop:9,background:"#E8620A"}} onClick={async()=>{const dateForEntry=clockShowAll?todayISO():clockDate;const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:""}).select().single();if(!error)setClockLogs(p=>[data,...p]);else t("❌ "+error.message);}}>+ Add Entry {clockShowAll?"":`for ${dispDate(clockDate)}`}</button>
-                <button className="btn sm" style={{marginTop:6,background:"#FEE2E2",color:"#7F1D1D"}} onClick={async()=>{const dateForEntry=clockShowAll?todayISO():clockDate;if(!window.confirm(`Mark ${s.name} as sick leave on ${dispDate(dateForEntry,true)}?`))return;const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:"sick_leave"}).select().single();if(!error){setClockLogs(p=>[data,...p]);t(`🤒 ${s.name} marked as sick leave for ${dispDate(dateForEntry,true)}`);}else t("❌ "+error.message);}}>🤒 Mark Sick Leave {clockShowAll?"":`for ${dispDate(clockDate)}`}</button>
+                  </div>
+                ))
+                }
+                <button className="btn sm" style={{marginTop:6,background:"#FEE2E2",color:"#7F1D1D"}} onClick={async()=>{const dateForEntry=clockShowAll?todayISO():clockDate;if(!window.confirm(`Mark ${s.name} as sick leave on ${dispDate(dateForEntry,true)}?`))return;const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:"sick_leave"}).select().single();if(!error){setClockLogs(p=>[data,...p]);// Also update rota shift to "Sick Leave" for that day
+const jsDay=new Date(dateForEntry+"T12:00:00").getDay();const rotaEntry=(rota[s.id]||[]).find(d=>d.date===dateForEntry);if(rotaEntry?.rowId){await db.from("rota").update({shift_type:"Sick Leave"}).eq("id",rotaEntry.rowId);setRota(p=>({...p,[s.id]:(p[s.id]||[]).map(d=>d.date===dateForEntry?{...d,type:"Sick Leave"}:d)}));}t(`🤒 ${s.name} marked as sick leave for ${dispDate(dateForEntry,true)}`);}else t("❌ "+error.message);}}>🤒 Mark Sick Leave {clockShowAll?"":`for ${dispDate(clockDate)}`}</button>
               </div>
             );})}
 
