@@ -2590,7 +2590,6 @@ function ManagerApp({onLogout}){
                       }}>✓ Confirm Override</button>
                     )}
                   </div>
-                  </div>
                 ))
                 }
                 <button className="btn sm" style={{marginTop:6,background:"#FEE2E2",color:"#7F1D1D"}} onClick={async()=>{const dateForEntry=clockShowAll?todayISO():clockDate;if(!window.confirm(`Mark ${s.name} as sick leave on ${dispDate(dateForEntry,true)}?`))return;const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:"sick_leave"}).select().single();if(!error){setClockLogs(p=>[data,...p]);// Also update rota shift to "Sick Leave" for that day
