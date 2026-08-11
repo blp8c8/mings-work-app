@@ -772,7 +772,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
         <div style={{background:"#FEF3C7",border:"1.5px solid #F59E0B",borderRadius:11,padding:"11px 13px",marginBottom:12,fontSize:13,color:"#78350F",lineHeight:1.7}}>
           ⚠️ <strong>Need to report an absence within the next 7 days?</strong> Please call or message the manager directly — do not use this form for urgent absences.
         </div>
-        <div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work. Dates 7+ days away can be reported here.</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={addDays(todayISO(),1)} onChange={e=>setAbsDate(e.target.value)}/>{absLessThan7Days&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 7 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is within the next 7 days. Please <strong>call or message the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><button onClick={async()=>{if(new Date(a.date+"T12:00:00")<=new Date(todayISO()+"T12:00:00"))return t("⚠️ Cannot cancel a past absence");const{error}=await db.from("absences").delete().eq("id",a.id);if(!error){setAbsences(p=>p.filter(x=>x.id!==a.id));t("✅ Absence cancelled");}else t("❌ "+error.message);}} style={{background:"none",border:"1.5px solid #E05252",borderRadius:8,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#E05252",fontWeight:700}}>✕ Cancel</button></div>)}</> }</div>}
+        <div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work. Dates 7+ days away can be reported here.</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={addDays(todayISO(),1)} onChange={e=>setAbsDate(e.target.value)}/>{absLessThan7Days&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 7 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is within the next 7 days. Please <strong>call or message the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><button onClick={async()=>{if(new Date(a.date+"T12:00:00")<=new Date(todayISO()+"T12:00:00"))return t("⚠️ Cannot cancel a past absence");const{error}=await db.from("absences").update({is_cancelled:true}).eq("id",a.id);if(!error){setAbsences(p=>p.map(x=>x.id===a.id?{...x,is_cancelled:true}:x));t("✅ Absence cancelled — manager notified");}else t("❌ "+error.message);}} style={{background:"none",border:"1.5px solid #E05252",borderRadius:8,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#E05252",fontWeight:700}}>✕ Cancel</button></div>)}</> }</div>}
       {tab==="takings"&&<div className="body">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
           <div className="sec" style={{margin:0}}>📊 Daily Takings</div>
@@ -916,7 +916,7 @@ function ManagerApp({onLogout}){
     if(val>grossTotal+0.001){setCardWarning({name,entered:val.toFixed(2),total:grossTotal.toFixed(2),focusId});}
   }
 
-  const newCount=takings.filter(s=>s.is_new).length;
+  const cancelledAbsCount=absences.filter(a=>a.is_cancelled&&!a.manager_seen).length;
   function t(m){setMsg(m);setTimeout(()=>setMsg(""),15000);}
 
   useEffect(()=>{loadAll();},[]);
@@ -1633,50 +1633,22 @@ function ManagerApp({onLogout}){
       });
     });
 
-    // ── Build PayrollWeekly: one row per week aggregated ──
+    // ── Build PayrollWeekly: aggregate directly from payrollRows (one source of truth) ──
     const wklyHdr=["Date Range","FH Cash (£)","FH Card (£)","FH Tips (£)","Kitchen Cash (£)","Kitchen Card (£)","Total Cash (£)","Total Card (£)","Total (£)"];
     const wklyRows=[wklyHdr];
-    weekStarts.forEach(ws=>{
-      const wEnd=addDays(ws,6);
-      let fhCash=0,fhCard=0,fhTips=0,kcCash=0,kcCard=0;
-      staff.forEach(s=>{
-        const ex=allEx.find(e=>e.staff_id===s.id&&e.week_start===ws)||{};
-        if(!allEx.find(e=>e.staff_id===s.id&&e.week_start===ws)&&!parseFloat(s.cardFixed||0))return;
-        const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
-        const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
-        const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
-        const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const base=hrs*parseFloat(s.rate||0)+full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
-        const sal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
-        const{cardAmt,cashAmt}=splitCard(s.cardMode||"fixed",s.cardFixed,sal);
-        fhCash+=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
-        fhCard+=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
-        // Auto-tips from takings if not manually set
-        const storedTips=parseFloat(ex.tips||0);
-        const weekTakingsForWs=takings.filter(tk=>tk.date>=ws&&tk.date<=wEnd);
-        const weekTipsTotal=weekTakingsForWs.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0)+parseFloat(tk.tips_card||0),0);
-        const autoTips=r2(weekTipsTotal*parseFloat(s.tipsPct||0)/100);
-        fhTips+=storedTips>0?storedTips:autoTips;
-      });
-      kitchenStaff.forEach(k=>{
-        const sid=kId(k.id);
-        const ex=allEx.find(e=>e.staff_id===sid&&e.week_start===ws)||{};
-        if(!allEx.find(e=>e.staff_id===sid&&e.week_start===ws)&&!parseFloat(k.fixedCash||k.fixed_cash||0)&&!parseFloat(k.cardFixed||k.card_fixed||0))return;
-        const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
-        const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
-        const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
-        const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const base=hrs*parseFloat(k.rate||0)+full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0);
-        const sal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
-        const{cardAmt,cashAmt}=splitCard(k.cardMode||"fixed",k.cardFixed,sal);
-        kcCash+=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
-        kcCard+=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
-      });
-      if(fhCash+fhCard+fhTips+kcCash+kcCard===0)return;
-      const totCash=r2(fhCash+kcCash),totCard=r2(fhCard+kcCard),totAll=r2(fhCash+kcCash+fhCard+kcCard);
-      wklyRows.push([fmtRangeExport(ws,wEnd),r2(fhCash),r2(fhCard),r2(fhTips),r2(kcCash),r2(kcCard),totCash,totCard,totAll]);
+    // Group payrollRows (skip header) by date range
+    const weekMap={};
+    payrollRows.slice(1).forEach(row=>{
+      const[wRange,,type,,,,,,, cash,card,tips]=[...row];
+      if(!weekMap[wRange])weekMap[wRange]={fhCash:0,fhCard:0,fhTips:0,kcCash:0,kcCard:0};
+      const c=parseFloat(cash||0),cd=parseFloat(card||0),tp=parseFloat(tips||0);
+      if(type==="FOH"){weekMap[wRange].fhCash+=c;weekMap[wRange].fhCard+=cd;weekMap[wRange].fhTips+=tp;}
+      else if(type==="Kitchen"){weekMap[wRange].kcCash+=c;weekMap[wRange].kcCard+=cd;}
+    });
+    Object.entries(weekMap).sort(([a],[b])=>a.localeCompare(b)).forEach(([wRange,w])=>{
+      const totCash=r2(w.fhCash+w.kcCash),totCard=r2(w.fhCard+w.kcCard),totAll=r2(totCash+totCard);
+      if(totCash+totCard+w.fhTips===0)return;
+      wklyRows.push([wRange,r2(w.fhCash),r2(w.fhCard),r2(w.fhTips),r2(w.kcCash),r2(w.kcCard),totCash,totCard,totAll]);
     });
 
     // Guard: if no data built, surface a clear error instead of pushing empty sheets
@@ -2366,7 +2338,7 @@ function ManagerApp({onLogout}){
       </div>
 
       <div className="mtabs">
-        {[{id:"staff",label:"👥 Staff"},{id:"rota",label:`📋 Rota${rejections.length>0?` (${rejections.length})`:""}`},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:`📊 Takings${newCount>0?` (${newCount})`:""}`},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:"📅 Absences"},{id:"kpi",label:"📈 KPI"}]
+        {[{id:"staff",label:"👥 Staff"},{id:"rota",label:`📋 Rota${rejections.length>0?` (${rejections.length})`:""}`},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:`📊 Takings${newCount>0?` (${newCount})`:""}`},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:`📅 Absences${cancelledAbsCount>0?` (${cancelledAbsCount})`:""}`},{id:"kpi",label:"📈 KPI"}]
           .map(tb=><button key={tb.id} className={`mtab${tab===tb.id?" on":""}${tb.id==="rota"&&rejections.length>0?" rej":""}`} onClick={()=>setTab(tb.id)}>{tb.label}</button>)}
       </div>
 
@@ -2620,15 +2592,44 @@ function ManagerApp({onLogout}){
                       <button className="btn sm" style={{marginTop:6,background:"#E8620A",color:"#fff"}} onClick={async()=>{
                         const oa=new Date().toISOString();
                         const draft=clockLogDrafts.current[l.id]||{time_in:l.time_in,time_out:l.time_out,note:l.note||""};const{error}=await db.from("clock_logs").update({time_in:draft.time_in,time_out:draft.time_out,note:draft.note,override_at:oa}).eq("id",l.id);
-                        if(!error){const draft=clockLogDrafts.current[l.id]||{time_in:l.time_in,time_out:l.time_out,note:l.note||""};setClockLogs(p=>p.map(x=>x.id===l.id?{...x,...draft,override_at:oa,_dirty:false}:x));delete clockLogDrafts.current[l.id];if(pushedClockDates.has(l.date))pushClockLog(l.date);t(`✅ ${s.name} updated — re-authorise in Payroll tab if this week hasn't been pushed yet`);}
+                        if(!error){const draft=clockLogDrafts.current[l.id]||{time_in:l.time_in,time_out:l.time_out,note:l.note||""};setClockLogs(p=>p.map(x=>x.id===l.id?{...x,...draft,override_at:oa,_dirty:false}:x));delete clockLogDrafts.current[l.id];if(pushedClockDates.has(l.date))pushClockLog(l.date);t(`✅ ${s.name} updated — if payroll already pushed: Payroll tab → Load week → re-authorise → push again`);}
                         else t("❌ "+error.message);
                       }}>✓ Confirm Override</button>
                     )}
                   </div>
                 ))
                 }
-                <button className="btn sm" style={{marginTop:6,background:"#FEE2E2",color:"#7F1D1D"}} onClick={async()=>{const dateForEntry=clockShowAll?todayISO():clockDate;if(!window.confirm(`Mark ${s.name} as sick leave on ${dispDate(dateForEntry,true)}?`))return;const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:"sick_leave"}).select().single();if(!error){setClockLogs(p=>[data,...p]);// Also update rota shift to "Sick Leave" for that day
-const jsDay=new Date(dateForEntry+"T12:00:00").getDay();const rotaEntry=(rota[s.id]||[]).find(d=>d.date===dateForEntry);if(rotaEntry?.rowId){await db.from("rota").update({shift_type:"Sick Leave"}).eq("id",rotaEntry.rowId);setRota(p=>({...p,[s.id]:(p[s.id]||[]).map(d=>d.date===dateForEntry?{...d,type:"Sick Leave"}:d)}));}t(`🤒 ${s.name} marked as sick leave for ${dispDate(dateForEntry,true)}`);}else t("❌ "+error.message);}}>🤒 Mark Sick Leave {clockShowAll?"":`for ${dispDate(clockDate)}`}</button>
+                {(()=>{
+                  const dateForEntry=clockShowAll?todayISO():clockDate;
+                  const sickLog=sLogsAll.find(l=>l.date===dateForEntry&&l.note==="sick_leave");
+                  if(sickLog){
+                    // Show Cancel Sick Leave button
+                    return(<button className="btn sm" style={{marginTop:6,background:"#D1FAE5",color:"#065F46"}} onClick={async()=>{
+                      if(!window.confirm(`Cancel sick leave for ${s.name} on ${dispDate(dateForEntry,true)}?`))return;
+                      // Delete sick leave clock log
+                      await db.from("clock_logs").delete().eq("id",sickLog.id);
+                      setClockLogs(p=>p.filter(x=>x.id!==sickLog.id));
+                      // Restore rota shift type from Sick Leave back to original
+                      // We restore to "Full Day (11am–close)" as safe default; manager can adjust
+                      const rotaEntry=(rota[s.id]||[]).find(d=>d.date===dateForEntry);
+                      if(rotaEntry?.rowId){
+                        await db.from("rota").update({shift_type:"Full Day (11am–close)"}).eq("id",rotaEntry.rowId);
+                        setRota(p=>({...p,[s.id]:(p[s.id]||[]).map(d=>d.date===dateForEntry?{...d,type:"Full Day (11am–close)"}:d)}));
+                      }
+                      t(`✅ ${s.name} sick leave cancelled — rota restored, clock in/out re-enabled`);
+                    }}>✅ Cancel Sick Leave for {dispDate(dateForEntry)}</button>);
+                  }
+                  return(<button className="btn sm" style={{marginTop:6,background:"#FEE2E2",color:"#7F1D1D"}} onClick={async()=>{
+                    if(!window.confirm(`Mark ${s.name} as sick leave on ${dispDate(dateForEntry,true)}?`))return;
+                    const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:"sick_leave"}).select().single();
+                    if(!error){
+                      setClockLogs(p=>[data,...p]);
+                      const rotaEntry=(rota[s.id]||[]).find(d=>d.date===dateForEntry);
+                      if(rotaEntry?.rowId){await db.from("rota").update({shift_type:"Sick Leave"}).eq("id",rotaEntry.rowId);setRota(p=>({...p,[s.id]:(p[s.id]||[]).map(d=>d.date===dateForEntry?{...d,type:"Sick Leave"}:d)}));}
+                      t(`🤒 ${s.name} marked as sick leave for ${dispDate(dateForEntry,true)}`);
+                    }else t("❌ "+error.message);
+                  }}>🤒 Mark Sick Leave {clockShowAll?"":`for ${dispDate(clockDate)}`}</button>);
+                })()}
               </div>
             );})}
 
@@ -2846,9 +2847,20 @@ const jsDay=new Date(dateForEntry+"T12:00:00").getDay();const rotaEntry=(rota[s.
         {tab==="absence"&&(
           <>
             <div className="sec">Absences</div>
+            {cancelledAbsCount>0&&(
+              <div style={{marginBottom:14}}>
+                <div style={{fontSize:13,fontWeight:800,color:"#E05252",marginBottom:8}}>🔔 Cancelled by Staff <span className="pending-badge">{cancelledAbsCount}</span></div>
+                {absences.filter(a=>a.is_cancelled&&!a.manager_seen).map(a=>(
+                  <div key={a.id} style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:12,padding:"10px 13px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div><div style={{fontWeight:800,color:"#7F1D1D",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#991B1B",marginTop:2}}>{dispDate(a.date,true)} — {a.period} (cancelled)</div></div>
+                    <button onClick={async()=>{await db.from("absences").update({manager_seen:true}).eq("id",a.id);setAbsences(p=>p.map(x=>x.id===a.id?{...x,manager_seen:true}:x));}} style={{background:"none",border:"1.5px solid #E05252",borderRadius:8,padding:"4px 10px",cursor:"pointer",fontSize:11,color:"#7F1D1D",fontWeight:700}}>✓ Seen</button>
+                  </div>
+                ))}
+              </div>
+            )}
             <button className="btn navy" style={{marginBottom:14}} onClick={()=>{setAbsModal(true);setAbsStaff("");setAbsDate("");setAbsPeriod("");}}>+ Log Absence for Staff</button>
             {absences.length===0?<div className="empty"><div className="emptyicon">📅</div><div className="emptytxt">No absences reported</div></div>
-              :absences.map(a=><div key={a.id} style={{background:"#FFF8EC",border:"1.5px solid #E8620A",borderRadius:12,padding:"10px 13px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:800,color:"#1A1A2E",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#888",marginTop:2}}>{dispDate(a.date,true)} — {a.period}</div></div><button onClick={async()=>{await db.from("absences").delete().eq("id",a.id);setAbsences(p=>p.filter(x=>x.id!==a.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ccc"}}>🗑️</button></div>)}
+              :absences.map(a=><div key={a.id} style={{background:"#FFF8EC",border:"1.5px solid #E8620A",borderRadius:12,padding:"10px 13px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:800,color:"#1A1A2E",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#888",marginTop:2}}>{dispDate(a.date,true)} — {a.period}</div></div><button onClick={async()=>{await db.from("absences").update({is_cancelled:true}).eq("id",a.id);setAbsences(p=>p.filter(x=>x.id!==a.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ccc"}}>🗑️</button></div>)}
           </>
         )}
       </div>
