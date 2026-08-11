@@ -2323,6 +2323,8 @@ function ManagerApp({onLogout}){
   }
 
   if(loading)return<Loading text="Loading manager data…"/>;
+  // Safety check - if any critical state is missing, show error
+  try { payTotals(); } catch(e) { return <div style={{padding:20,color:"red"}}><b>Render error in payTotals:</b> {e.message}</div>; }
   const{cash:totCash,card:totCard,gross:totGross}=payTotals();
   const gsReady=!!(gsConfig.webAppUrl&&gsConfig.payrollId&&gsConfig.takingsId);
 
