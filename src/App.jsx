@@ -700,8 +700,9 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
             else if(todayRota.type==="Night (5:30pm–close)")startTime="17:30";
             else if(todayRota.customIn)startTime=todayRota.customIn;
             if(!startTime)return null;
-            return(<div style={{marginTop:10,textAlign:"center"}}>
-              <button className="btn sec" style={{fontSize:12,padding:"8px 14px"}} onClick={async()=>{
+            return(<div style={{marginTop:10,borderTop:"1px solid rgba(255,255,255,.1)",paddingTop:10}}>
+              <div style={{fontSize:11,color:"rgba(255,255,255,.5)",marginBottom:6,textAlign:"center"}}>Forgot to clock in at your start time?</div>
+              <button style={{width:"100%",padding:"10px",borderRadius:10,border:"1.5px solid rgba(255,255,255,.3)",background:"rgba(255,255,255,.1)",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={async()=>{
                 const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:startTime,note:"back-stamped"}).select().single();
                 if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(startTime);t("✅ Back-stamped to "+startTime);}
                 else t("❌ "+error.message);
