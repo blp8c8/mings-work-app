@@ -518,6 +518,8 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     }));
   }
   async function clockIn(){
+    // Sick leave block
+    if(logs.some(l=>l.date===todayISO()&&l.note==="sick_leave"))return t("🤒 You've been marked as sick leave today — contact your manager.");
     // Once-per-day restriction
     const todayDone=logs.find(l=>l.date===todayISO()&&l.time_in&&l.time_out);
     if(todayDone)return t("⚠️ You've already clocked in and out today. Contact your manager if you need a correction.");
@@ -685,7 +687,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
               if(isOff&&!clockedIn)return<div style={{fontSize:13,color:"rgba(255,255,255,.7)",textAlign:"center",padding:"10px 0"}}>📅 Not scheduled today — contact your manager if this is incorrect.</div>;
               return(<>
                 <button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button>
-                <button className="clkbtn out" onClick={clockOut} disabled={!clockedIn}>🔴 Clock Out</button>
+                <button className="clkbtn out" onClick={clockOut} disabled={!clockedIn||logs.some(l=>l.date===todayISO()&&l.note==="sick_leave")}>🔴 Clock Out</button>
               </>);
             })()}
           </div>
@@ -770,7 +772,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
         <div style={{background:"#FEF3C7",border:"1.5px solid #F59E0B",borderRadius:11,padding:"11px 13px",marginBottom:12,fontSize:13,color:"#78350F",lineHeight:1.7}}>
           ⚠️ <strong>Need to report an absence within the next 7 days?</strong> Please call or message the manager directly — do not use this form for urgent absences.
         </div>
-        <div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work. Dates 7+ days away can be reported here.</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={addDays(todayISO(),1)} onChange={e=>setAbsDate(e.target.value)}/>{absLessThan7Days&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 7 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is within the next 7 days. Please <strong>call or message the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><span className="chip a">Sent ✓</span></div>)}</> }</div>}
+        <div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work. Dates 7+ days away can be reported here.</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={addDays(todayISO(),1)} onChange={e=>setAbsDate(e.target.value)}/>{absLessThan7Days&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 7 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is within the next 7 days. Please <strong>call or message the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><button onClick={async()=>{if(new Date(a.date+"T12:00:00")<=new Date(todayISO()+"T12:00:00"))return t("⚠️ Cannot cancel a past absence");const{error}=await db.from("absences").delete().eq("id",a.id);if(!error){setAbsences(p=>p.filter(x=>x.id!==a.id));t("✅ Absence cancelled");}else t("❌ "+error.message);}} style={{background:"none",border:"1.5px solid #E05252",borderRadius:8,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#E05252",fontWeight:700}}>✕ Cancel</button></div>)}</> }</div>}
       {tab==="takings"&&<div className="body">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
           <div className="sec" style={{margin:0}}>📊 Daily Takings</div>
@@ -808,13 +810,13 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
       <div style={{textAlign:"center",fontSize:11,color:"#bbb",padding:"3px 0 2px"}}>💡 Tap <strong style={{color:"#E8620A"}}>ℹ</strong> in the header for a quick guide</div>
       {showTour&&(()=>{
         const TOUR_STEPS_GENERAL=[
-          {title:"👋 Welcome to Ming's Staff App!",body:"This app lets you clock in/out, view your rota, report absences, and submit takings. Let's take a quick tour so you know how everything works.",icon:"🏠"},
-          {title:"⏰ Clock In & Out",body:"Tap the ⏰ Clock tab to clock in when you arrive and clock out when you leave. If you're paid hourly, select your break time before clocking out. You'll get a prompt if you're clocking out late or early.",icon:"⏰"},
-          {title:"📋 Rota — Confirm Your Shifts",body:"Check the 📋 Rota tab every Wednesday. Tap ✓ OK to accept a shift or ✕ Can't if you can't work. You must confirm your shift before you can clock in. Accept/reject by Friday.\n\nAlso don't forget to report any absence or block the days you cannot work.",icon:"📋"},
-          {title:"📅 Reporting Absence",body:"Tap the 📅 Absence tab to report an absence. Important: absences before next Wednesday must be reported by calling the manager directly — the app can only be used for future dates.",icon:"📅"},
-          {title:"📊 Takings",body:"If you're the designated takings person today, you'll see a notification on your Home tab. Complete the takings form before clocking out — you won't be able to clock out until it's done.\n\nTap ? on the Takings tab for a detailed takings guide.",icon:"📊"},
-          {title:"📱 Save to Your Home Screen",body:"You can access this app anytime like a regular app — no app store needed!\n\n📱 iPhone (Safari):\n1. Tap the Share button (□↑) at the bottom\n2. Scroll down and tap 'Add to Home Screen'\n3. Tap 'Add' — done!\n\n🤖 Android (Chrome):\n1. Tap the three dots (⋮) menu at top right\n2. Tap 'Add to Home screen'\n3. Tap 'Add' — done!",icon:"📱"},
-          {title:"✅ You're all set!",body:"You've completed the tour. Tap the ? button in the header anytime to see this guide again.\n\nTap 'I understand — let's go!' to confirm you've read this guide.",icon:"🎉",final:true},
+          {title:"👋 Welcome to Ming's Staff App!",body:"This app manages your rota, clock in/out, absences, and takings. Use it every shift — it feeds directly into payroll. Tap ℹ in the header anytime to see this guide again.",icon:"🏠"},
+          {title:"📋 Rota — Confirm Your Shifts",body:"Check the 📋 Rota tab every Wednesday. Tap ✓ OK to accept a shift or ✕ Can't if you can't work it. You must confirm your shift before you can clock in.\n\nIf the manager updates a shift, only that day's confirmation is reset — you'll need to re-confirm just that day.\n\nReport any absence or block days you cannot work. For anything within 7 days, call the manager directly.",icon:"📋"},
+          {title:"⏰ Clock In & Out",body:"Tap the ⏰ Clock tab to clock in when you arrive and clock out when you leave.\n\n• If you forgot to clock in, tap ⏪ Back-stamp — it uses your scheduled start time automatically.\n• If you clock out late on a custom shift, you'll be asked: forgot to clock out, or worked extra?\n• For full day or night shifts, you can clock out any time.\n• Break time: select before clocking out if you're on hourly pay.",icon:"⏰"},
+          {title:"📅 Reporting Absence",body:"Tap the 📅 Absence tab to report a future absence (7+ days ahead). You can also cancel an absence you've reported if your plans change — tap ✕ Cancel next to it.\n\n⚠️ For any absence within 7 days, call or message the manager directly — don't use this form.",icon:"📅"},
+          {title:"📊 Takings",body:"If you're the designated takings person today, you'll see a notification on your Home tab. Complete the takings form before clocking out — you can't clock out until it's done.\n\nYou can submit once, then correct once if you made a mistake. For any further issues, contact the manager.\n\nTap 📖 on the Takings tab for a step-by-step takings guide.",icon:"📊"},
+          {title:"📱 Save to Your Home Screen",body:"Access this app like a regular app — no app store needed!\n\n📱 iPhone (Safari):\n1. Tap the Share button (□↑) at the bottom\n2. Scroll down → 'Add to Home Screen' → Add\n\n🤖 Android (Chrome):\n1. Tap ⋮ menu top right\n2. 'Add to Home screen' → Add",icon:"📱"},
+          {title:"✅ You're all set!",body:"Clock in on time, confirm your rota every Wednesday, and report absences early.\n\nIf you're sick and can't come in today, call the manager — they'll mark it for you.\n\nTap ℹ in the header anytime to see this guide again.",icon:"🎉",final:true},
         ];
         const TOUR_STEPS_TAKINGS=[
           {title:"📊 Takings Guide",body:"This guide walks you through completing today's takings. You only see this tab if the manager has assigned you as today's takings person.",icon:"📊"},
@@ -1263,7 +1265,8 @@ function ManagerApp({onLogout}){
   async function upsertTakings(date,vals,note){
     const existing=takings.find(s=>s.date===date);
     if(existing){
-      const{error}=await db.from("takings").update({...vals,note,is_new:false}).eq("id",existing.id);
+      const safeVals={};Object.keys(vals).forEach(k=>{safeVals[k]=typeof vals[k]==="number"?r2(vals[k]):vals[k];});
+      const{error}=await db.from("takings").update({...safeVals,note,is_new:false}).eq("id",existing.id);
       if(!error){
         const updated=[...takings.map(x=>x.id===existing.id?{...x,...vals,note,is_new:false}:x)];
         setTakings(updated);
@@ -1271,7 +1274,8 @@ function ManagerApp({onLogout}){
       }
       return{ok:false,err:error.message};
     }else{
-      const{data,error}=await db.from("takings").insert({staff_id:"manager",staff_name:"Manager",date,...vals,note,is_new:false}).select().single();
+      const safeVals2={};Object.keys(vals).forEach(k=>{safeVals2[k]=typeof vals[k]==="number"?r2(vals[k]):vals[k];});
+      const{data,error}=await db.from("takings").insert({staff_id:"manager",staff_name:"Manager",date,...safeVals2,note,is_new:false}).select().single();
       if(!error){
         const updated=[data,...takings];
         setTakings(updated);
@@ -1563,10 +1567,11 @@ function ManagerApp({onLogout}){
     weekStarts.forEach(ws=>{
       const wEnd=addDays(ws,6);
       const wRange=fmtRangeExport(ws,wEnd);
-      // FOH staff
+      // FOH staff — include all FOH with any pay configured
       staff.forEach(s=>{
-        const ex=allEx.find(e=>e.staff_id===s.id&&e.week_start===ws);
-        if(!ex)return;
+        const ex=allEx.find(e=>e.staff_id===s.id&&e.week_start===ws)||{};
+        // Skip if no data and no fixed card amount
+        if(!allEx.find(e=>e.staff_id===s.id&&e.week_start===ws)&&!parseFloat(s.cardFixed||0)&&!parseFloat(s.shiftRate||0)&&!parseFloat(s.rate||0))return;
         const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
         const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
         const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
@@ -1603,13 +1608,14 @@ function ManagerApp({onLogout}){
         });
         const extraTimeVal=ex.extra_time||(fohOvertimeHrs>0?String(fohOvertimeHrs):"");
         const lostHrsVal=fohLostHrs>0?String(fohLostHrs):"";
-        payrollRows.push([wRange,s.name,"FOH",full,night,r2(hrs).toFixed(2),s.rate||"0",s.shiftRate||"0",s.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),extraTimeVal,lostHrsVal,ex.manual_total?"MANUAL":""]);
+        const fohOverrideLabel=ex.manual_total?new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"2-digit",hour:"2-digit",minute:"2-digit"}):"";payrollRows.push([wRange,s.name,"FOH",full,night,r2(hrs).toFixed(2),s.rate||"0",s.shiftRate||"0",s.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),extraTimeVal,lostHrsVal,fohOverrideLabel]);
       });
-      // Kitchen staff
+      // Kitchen staff — include all kitchen with fixed cash or card
       kitchenStaff.forEach(k=>{
         const sid=kId(k.id);
-        const ex=allEx.find(e=>e.staff_id===sid&&e.week_start===ws);
-        if(!ex)return;
+        const ex=allEx.find(e=>e.staff_id===sid&&e.week_start===ws)||{};
+        // Skip only if no extras AND no fixed amounts
+        if(!allEx.find(e=>e.staff_id===sid&&e.week_start===ws)&&!parseFloat(k.fixedCash||k.fixed_cash||0)&&!parseFloat(k.cardFixed||k.card_fixed||0))return;
         const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
         const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
         const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
@@ -1623,7 +1629,7 @@ function ManagerApp({onLogout}){
         const fixedCard=parseFloat(k.card_fixed||k.cardFixed||0);
         const cash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):r2(fixedCash+addT-dedT>0?fixedCash:0);
         const card=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):fixedCard;
-        payrollRows.push([wRange,k.name,"Kitchen",full,night,r2(hrs).toFixed(2),k.rate||"0",k.shiftRate||"0",k.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),"","",ex.manual_total?"MANUAL":""]);
+        const kitOverrideLabel=ex.manual_total?new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"2-digit",hour:"2-digit",minute:"2-digit"}):"";payrollRows.push([wRange,k.name,"Kitchen",full,night,r2(hrs).toFixed(2),k.rate||"0",k.shiftRate||"0",k.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),"","",kitOverrideLabel]);
       });
     });
 
@@ -1634,8 +1640,8 @@ function ManagerApp({onLogout}){
       const wEnd=addDays(ws,6);
       let fhCash=0,fhCard=0,fhTips=0,kcCash=0,kcCard=0;
       staff.forEach(s=>{
-        const ex=allEx.find(e=>e.staff_id===s.id&&e.week_start===ws);
-        if(!ex)return;
+        const ex=allEx.find(e=>e.staff_id===s.id&&e.week_start===ws)||{};
+        if(!allEx.find(e=>e.staff_id===s.id&&e.week_start===ws)&&!parseFloat(s.cardFixed||0))return;
         const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
         const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
         const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
@@ -1655,8 +1661,8 @@ function ManagerApp({onLogout}){
       });
       kitchenStaff.forEach(k=>{
         const sid=kId(k.id);
-        const ex=allEx.find(e=>e.staff_id===sid&&e.week_start===ws);
-        if(!ex)return;
+        const ex=allEx.find(e=>e.staff_id===sid&&e.week_start===ws)||{};
+        if(!allEx.find(e=>e.staff_id===sid&&e.week_start===ws)&&!parseFloat(k.fixedCash||k.fixed_cash||0)&&!parseFloat(k.cardFixed||k.card_fixed||0))return;
         const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
         const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
         const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
@@ -2614,7 +2620,7 @@ function ManagerApp({onLogout}){
                       <button className="btn sm" style={{marginTop:6,background:"#E8620A",color:"#fff"}} onClick={async()=>{
                         const oa=new Date().toISOString();
                         const draft=clockLogDrafts.current[l.id]||{time_in:l.time_in,time_out:l.time_out,note:l.note||""};const{error}=await db.from("clock_logs").update({time_in:draft.time_in,time_out:draft.time_out,note:draft.note,override_at:oa}).eq("id",l.id);
-                        if(!error){const draft=clockLogDrafts.current[l.id]||{time_in:l.time_in,time_out:l.time_out,note:l.note||""};setClockLogs(p=>p.map(x=>x.id===l.id?{...x,...draft,override_at:oa,_dirty:false}:x));delete clockLogDrafts.current[l.id];t(`✅ ${s.name} updated — re-authorise in Payroll if this week hasn't been pushed yet`);}
+                        if(!error){const draft=clockLogDrafts.current[l.id]||{time_in:l.time_in,time_out:l.time_out,note:l.note||""};setClockLogs(p=>p.map(x=>x.id===l.id?{...x,...draft,override_at:oa,_dirty:false}:x));delete clockLogDrafts.current[l.id];if(pushedClockDates.has(l.date))pushClockLog(l.date);t(`✅ ${s.name} updated — re-authorise in Payroll tab if this week hasn't been pushed yet`);}
                         else t("❌ "+error.message);
                       }}>✓ Confirm Override</button>
                     )}
@@ -3326,7 +3332,8 @@ function TakingsForm({setTakings,toast}){
   const[values,setValues]=useState({});const[cc,setCC]=useState({});const[note,setNote]=useState("");const[date,setDate]=useState(todayISO());const[saving,setSaving]=useState(false);
   async function submit(){
     setSaving(true);const vals={};TKFIELDS.forEach(f=>{vals[f.db]=r2(parseFloat(values[f.key]||0));if(f.ccDb)vals[f.ccDb]=cc[f.key]||"cash";});
-    const{data,error}=await db.from("takings").insert({staff_id:"manager",staff_name:"Manager",date,...vals,note,is_new:false}).select().single();
+    const safeVals2={};Object.keys(vals).forEach(k=>{safeVals2[k]=typeof vals[k]==="number"?r2(vals[k]):vals[k];});
+      const{data,error}=await db.from("takings").insert({staff_id:"manager",staff_name:"Manager",date,...safeVals2,note,is_new:false}).select().single();
     if(!error){setTakings(p=>[data,...p]);setValues({});setNote("");setDate(todayISO());toast("✅ Takings saved!");}else toast("❌ "+error.message);setSaving(false);
   }
   return(
