@@ -2339,7 +2339,7 @@ function ManagerApp({onLogout}){
       </div>
 
       <div className="mtabs">
-        {[{id:"staff",label:"👥 Staff"},{id:"rota",label:`📋 Rota${rejections.length>0?` (${rejections.length})`:""}`},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:`📊 Takings${newCount>0?` (${newCount})`:""}`},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:`📅 Absences${cancelledAbsCount>0?` (${cancelledAbsCount})`:""}`},{id:"kpi",label:"📈 KPI"}]
+        {[{id:"staff",label:"👥 Staff"},{id:"rota",label:"📋 Rota"+(rejections.length>0?" ("+rejections.length+")":"")},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:"📊 Takings"+(newCount>0?" ("+newCount+")":"")},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:"📅 Absences"+(cancelledAbsCount>0?" ("+cancelledAbsCount+")":"")},{id:"kpi",label:"📈 KPI"}]
           .map(tb=><button key={tb.id} className={`mtab${tab===tb.id?" on":""}${tb.id==="rota"&&rejections.length>0?" rej":""}`} onClick={()=>setTab(tb.id)}>{tb.label}</button>)}
       </div>
 
