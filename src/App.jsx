@@ -2859,8 +2859,8 @@ function ManagerApp({onLogout}){
               </div>
             )}
             <button className="btn navy" style={{marginBottom:14}} onClick={()=>{setAbsModal(true);setAbsStaff("");setAbsDate("");setAbsPeriod("");}}>+ Log Absence for Staff</button>
-            {absences.length===0?<div className="empty"><div className="emptyicon">📅</div><div className="emptytxt">No absences reported</div></div>
-              :absences.map(a=><div key={a.id} style={{background:"#FFF8EC",border:"1.5px solid #E8620A",borderRadius:12,padding:"10px 13px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:800,color:"#1A1A2E",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#888",marginTop:2}}>{dispDate(a.date,true)} — {a.period}</div></div><button onClick={async()=>{await db.from("absences").update({is_cancelled:true}).eq("id",a.id);setAbsences(p=>p.filter(x=>x.id!==a.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ccc"}}>🗑️</button></div>)}
+            {absences.filter(a=>!a.is_cancelled).length===0?<div className="empty"><div className="emptyicon">📅</div><div className="emptytxt">No absences reported</div></div>
+              :absences.filter(a=>!a.is_cancelled).map(a=><div key={a.id} style={{background:"#FFF8EC",border:"1.5px solid #E8620A",borderRadius:12,padding:"10px 13px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:800,color:"#1A1A2E",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#888",marginTop:2}}>{dispDate(a.date,true)} — {a.period}</div></div><button onClick={async()=>{await db.from("absences").delete().eq("id",a.id);setAbsences(p=>p.filter(x=>x.id!==a.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ccc"}}>🗑️</button></div>)}
           </>
         )}
       </div>
