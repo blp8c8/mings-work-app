@@ -917,7 +917,6 @@ function ManagerApp({onLogout}){
     if(val>grossTotal+0.001){setCardWarning({name,entered:val.toFixed(2),total:grossTotal.toFixed(2),focusId});}
   }
 
-  const cancelledAbsCount=absences.filter(a=>a.is_cancelled&&!a.manager_seen).length;
   function t(m){setMsg(m);setTimeout(()=>setMsg(""),15000);}
 
   useEffect(()=>{loadAll();},[]);
@@ -2323,8 +2322,6 @@ function ManagerApp({onLogout}){
   }
 
   if(loading)return<Loading text="Loading manager data…"/>;
-  // Safety check - if any critical state is missing, show error
-  try { payTotals(); } catch(e) { return <div style={{padding:20,color:"red"}}><b>Render error in payTotals:</b> {e.message}</div>; }
   const{cash:totCash,card:totCard,gross:totGross}=payTotals();
   const gsReady=!!(gsConfig.webAppUrl&&gsConfig.payrollId&&gsConfig.takingsId);
 
@@ -2341,7 +2338,7 @@ function ManagerApp({onLogout}){
       </div>
 
       <div className="mtabs">
-        {[{id:"staff",label:"👥 Staff"},{id:"rota",label:"📋 Rota"+(rejections.length>0?" ("+rejections.length+")":"")},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:"📊 Takings"+(newCount>0?" ("+newCount+")":"")},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:"📅 Absences"+(cancelledAbsCount>0?" ("+cancelledAbsCount+")":"")},{id:"kpi",label:"📈 KPI"}]
+        {[{id:"staff",label:"👥 Staff"},{id:"rota",label:"📋 Rota"+(rejections.length>0?" ("+rejections.length+")":"")},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:"📊 Takings"+(newCount>0?" ("+newCount+")":"")},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:"📅 Absences"},{id:"kpi",label:"📈 KPI"}]
           .map(tb=><button key={tb.id} className={`mtab${tab===tb.id?" on":""}${tb.id==="rota"&&rejections.length>0?" rej":""}`} onClick={()=>setTab(tb.id)}>{tb.label}</button>)}
       </div>
 
@@ -2850,20 +2847,9 @@ function ManagerApp({onLogout}){
         {tab==="absence"&&(
           <>
             <div className="sec">Absences</div>
-            {cancelledAbsCount>0&&(
-              <div style={{marginBottom:14}}>
-                <div style={{fontSize:13,fontWeight:800,color:"#E05252",marginBottom:8}}>🔔 Cancelled by Staff <span className="pending-badge">{cancelledAbsCount}</span></div>
-                {absences.filter(a=>a.is_cancelled&&!a.manager_seen).map(a=>(
-                  <div key={a.id} style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:12,padding:"10px 13px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <div><div style={{fontWeight:800,color:"#7F1D1D",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#991B1B",marginTop:2}}>{dispDate(a.date,true)} — {a.period} (cancelled)</div></div>
-                    <button onClick={async()=>{await db.from("absences").update({manager_seen:true}).eq("id",a.id);setAbsences(p=>p.map(x=>x.id===a.id?{...x,manager_seen:true}:x));}} style={{background:"none",border:"1.5px solid #E05252",borderRadius:8,padding:"4px 10px",cursor:"pointer",fontSize:11,color:"#7F1D1D",fontWeight:700}}>✓ Seen</button>
-                  </div>
-                ))}
-              </div>
-            )}
             <button className="btn navy" style={{marginBottom:14}} onClick={()=>{setAbsModal(true);setAbsStaff("");setAbsDate("");setAbsPeriod("");}}>+ Log Absence for Staff</button>
-            {absences.filter(a=>!a.is_cancelled).length===0?<div className="empty"><div className="emptyicon">📅</div><div className="emptytxt">No absences reported</div></div>
-              :absences.filter(a=>!a.is_cancelled).map(a=><div key={a.id} style={{background:"#FFF8EC",border:"1.5px solid #E8620A",borderRadius:12,padding:"10px 13px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:800,color:"#1A1A2E",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#888",marginTop:2}}>{dispDate(a.date,true)} — {a.period}</div></div><button onClick={async()=>{await db.from("absences").delete().eq("id",a.id);setAbsences(p=>p.filter(x=>x.id!==a.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ccc"}}>🗑️</button></div>)}
+            {absences.length===0?<div className="empty"><div className="emptyicon">📅</div><div className="emptytxt">No absences reported</div></div>
+              :absences.map(a=><div key={a.id} style={{background:"#FFF8EC",border:"1.5px solid #E8620A",borderRadius:12,padding:"10px 13px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:800,color:"#1A1A2E",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#888",marginTop:2}}>{dispDate(a.date,true)} — {a.period}</div></div><button onClick={async()=>{await db.from("absences").delete().eq("id",a.id);setAbsences(p=>p.filter(x=>x.id!==a.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ccc"}}>🗑️</button></div>)}
           </>
         )}
       </div>
