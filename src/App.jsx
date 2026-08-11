@@ -896,7 +896,7 @@ function ManagerApp({onLogout}){
   const[pushedClockDates,setPushedClockDates]=useState(()=>{try{return new Set(JSON.parse(localStorage.getItem("pushedClockDates")||"[]"));}catch{return new Set();}});
   const clockLogDrafts=React.useRef({}); // {logId: {time_in, time_out, note}} — local edits before Confirm
   // Accumulated clock log history stored in localStorage — written as full history on each push
-  const clockLogHistoryRef=React.useRef(JSON.parse(localStorage.getItem("clockLogHistory")||"{}")); // gates auto-count display until Load pressed
+  const clockLogHistoryRef=React.useRef((()=>{try{return JSON.parse(localStorage.getItem("clockLogHistory")||"{}");}catch{return{};}})());
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const[cashPopup,setCashPopup]=useState(false);
   const[pinModal,setPinModal]=useState(false);
