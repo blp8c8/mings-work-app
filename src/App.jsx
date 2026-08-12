@@ -865,6 +865,69 @@ function ManagerLogin({onLogin,onBack}){
 // ═══════════════════════════════════════════════════════════════════
 // MANAGER APP
 // ═══════════════════════════════════════════════════════════════════
+
+// ── KitchenAdjustmentsRow — 4-field structured adjustments for kitchen staff ──
+function KitchenAdjustmentsRow({sid,rate,shiftRate,nightRate,setExtrasState,getExtras}){
+  const ex=getExtras(sid);
+  const allItems=[...(ex.additions||[]).map(a=>({...a,signed:parseFloat(a.amount),dir:"add"})),...(ex.deductions||[]).map(d=>({...d,signed:-parseFloat(d.amount),dir:"ded"}))];
+  const[dir,setDir]=useState("add");
+  const[qty,setQty]=useState("");
+  const[unitType,setUnitType]=useState("custom");
+  const[noteReason,setNoteReason]=useState("Bank holiday");
+  const NOTE_REASONS=["Bank holiday","Red day","Left early","Sick leave","Custom"];
+  function calcAmount(){
+    const q=parseFloat(qty)||0;
+    if(unitType==="hours")return r2(q*parseFloat(rate||0));
+    if(unitType==="full_shift")return r2(q*parseFloat(shiftRate||0));
+    if(unitType==="night_shift")return r2(q*parseFloat(nightRate||0));
+    return r2(q); // custom — qty IS the £ amount
+  }
+  const preview=calcAmount();
+  return(
+    <div>
+      {allItems.map((item,i)=>(
+        <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderBottom:"1px dashed #F0F0F0"}}>
+          <div style={{fontSize:12,flex:1}}>
+            <span style={{color:item.signed>0?"#065F46":"#E05252",fontWeight:700}}>{item.signed>0?"+":"-"}£{Math.abs(item.signed).toFixed(2)}</span>
+            {item.label&&<span style={{color:"#888",marginLeft:6,fontSize:11}}>{item.label}</span>}
+          </div>
+          <button onClick={()=>{
+            if(item.dir==="add")setExtrasState(sid,ex=>({...ex,additions:(ex.additions||[]).filter((_,j)=>j!==i)}));
+            else setExtrasState(sid,ex=>({...ex,deductions:(ex.deductions||[]).filter((_,j)=>j!==i-(ex.additions||[]).length)}));
+          }} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#ccc",flexShrink:0}}>✕</button>
+        </div>
+      ))}
+      {/* Add row: 4 fields */}
+      <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",marginTop:6}}>
+        <select className="addinp" style={{padding:"6px 6px",fontSize:11,minWidth:80}} value={dir} onChange={e=>setDir(e.target.value)}>
+          <option value="add">Addition</option>
+          <option value="ded">Deduction</option>
+        </select>
+        <input className="addinp" type="number" step="0.1" placeholder="0.0" value={qty} onChange={e=>setQty(e.target.value)} style={{width:60}}/>
+        <select className="addinp" style={{padding:"6px 6px",fontSize:11,minWidth:80}} value={unitType} onChange={e=>setUnitType(e.target.value)}>
+          <option value="hours">Hours</option>
+          <option value="full_shift">Full Shifts</option>
+          <option value="night_shift">Night Shifts</option>
+          <option value="custom">Custom £</option>
+        </select>
+        <span style={{fontSize:11,color:"#888",minWidth:44}}>= £{preview.toFixed(2)}</span>
+      </div>
+      {/* Note/reason row */}
+      <div style={{display:"flex",gap:4,alignItems:"center",marginTop:4}}>
+        <select className="addinp" style={{flex:1,padding:"6px 6px",fontSize:11}} value={noteReason} onChange={e=>setNoteReason(e.target.value)}>
+          {NOTE_REASONS.map(r=><option key={r}>{r}</option>)}
+        </select>
+        <button className="addbtn" onClick={()=>{
+          if(!qty)return;
+          const amt=preview;const label=noteReason+(unitType!=="custom"?` (${qty} ${unitType.replace("_"," ")})`:` £${amt.toFixed(2)}`);
+          if(dir==="add")setExtrasState(sid,ex=>({...ex,additions:[...(ex.additions||[]),{label,amount:String(amt)}]}));
+          else setExtrasState(sid,ex=>({...ex,deductions:[...(ex.deductions||[]),{label,amount:String(amt)}]}));
+          setQty("");
+        }}>+ Add</button>
+      </div>
+    </div>
+  );
+}
 function ManagerApp({onLogout}){
   const[tab,setTab]=useState("staff");
   const[msg,setMsg]=useState("");
@@ -1932,68 +1995,7 @@ function ManagerApp({onLogout}){
     });
   }
 
-  // ── KitchenAdjustmentsRow — 4-field structured adjustments for kitchen staff ──
-  function KitchenAdjustmentsRow({sid,rate,shiftRate,nightRate}){
-    const ex=getExtras(sid);
-    const allItems=[...(ex.additions||[]).map(a=>({...a,signed:parseFloat(a.amount),dir:"add"})),...(ex.deductions||[]).map(d=>({...d,signed:-parseFloat(d.amount),dir:"ded"}))];
-    const[dir,setDir]=useState("add");
-    const[qty,setQty]=useState("");
-    const[unitType,setUnitType]=useState("custom");
-    const[noteReason,setNoteReason]=useState("Bank holiday");
-    const NOTE_REASONS=["Bank holiday","Red day","Left early","Sick leave","Custom"];
-    function calcAmount(){
-      const q=parseFloat(qty)||0;
-      if(unitType==="hours")return r2(q*parseFloat(rate||0));
-      if(unitType==="full_shift")return r2(q*parseFloat(shiftRate||0));
-      if(unitType==="night_shift")return r2(q*parseFloat(nightRate||0));
-      return r2(q); // custom — qty IS the £ amount
-    }
-    const preview=calcAmount();
-    return(
-      <div>
-        {allItems.map((item,i)=>(
-          <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"5px 0",borderBottom:"1px dashed #F0F0F0"}}>
-            <div style={{fontSize:12,flex:1}}>
-              <span style={{color:item.signed>0?"#065F46":"#E05252",fontWeight:700}}>{item.signed>0?"+":"-"}£{Math.abs(item.signed).toFixed(2)}</span>
-              {item.label&&<span style={{color:"#888",marginLeft:6,fontSize:11}}>{item.label}</span>}
-            </div>
-            <button onClick={()=>{
-              if(item.dir==="add")setExtrasState(sid,ex=>({...ex,additions:(ex.additions||[]).filter((_,j)=>j!==i)}));
-              else setExtrasState(sid,ex=>({...ex,deductions:(ex.deductions||[]).filter((_,j)=>j!==i-(ex.additions||[]).length)}));
-            }} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#ccc",flexShrink:0}}>✕</button>
-          </div>
-        ))}
-        {/* Add row: 4 fields */}
-        <div style={{display:"flex",gap:4,alignItems:"center",flexWrap:"wrap",marginTop:6}}>
-          <select className="addinp" style={{padding:"6px 6px",fontSize:11,minWidth:80}} value={dir} onChange={e=>setDir(e.target.value)}>
-            <option value="add">Addition</option>
-            <option value="ded">Deduction</option>
-          </select>
-          <input className="addinp" type="number" step="0.1" placeholder="0.0" value={qty} onChange={e=>setQty(e.target.value)} style={{width:60}}/>
-          <select className="addinp" style={{padding:"6px 6px",fontSize:11,minWidth:80}} value={unitType} onChange={e=>setUnitType(e.target.value)}>
-            <option value="hours">Hours</option>
-            <option value="full_shift">Full Shifts</option>
-            <option value="night_shift">Night Shifts</option>
-            <option value="custom">Custom £</option>
-          </select>
-          <span style={{fontSize:11,color:"#888",minWidth:44}}>= £{preview.toFixed(2)}</span>
-        </div>
-        {/* Note/reason row */}
-        <div style={{display:"flex",gap:4,alignItems:"center",marginTop:4}}>
-          <select className="addinp" style={{flex:1,padding:"6px 6px",fontSize:11}} value={noteReason} onChange={e=>setNoteReason(e.target.value)}>
-            {NOTE_REASONS.map(r=><option key={r}>{r}</option>)}
-          </select>
-          <button className="addbtn" onClick={()=>{
-            if(!qty)return;
-            const amt=preview;const label=noteReason+(unitType!=="custom"?` (${qty} ${unitType.replace("_"," ")})`:` £${amt.toFixed(2)}`);
-            if(dir==="add")setExtrasState(sid,ex=>({...ex,additions:[...(ex.additions||[]),{label,amount:String(amt)}]}));
-            else setExtrasState(sid,ex=>({...ex,deductions:[...(ex.deductions||[]),{label,amount:String(amt)}]}));
-            setQty("");
-          }}>+ Add</button>
-        </div>
-      </div>
-    );
-  }
+
 
   // ── AdjustmentsRow (merged add/deduct) ──
   // ── AdjustmentsRow (FOH) — delegates to KitchenAdjustmentsRow for same 4-field UI ──
@@ -2051,7 +2053,7 @@ function ManagerApp({onLogout}){
           {isKitchen?(<>
             <div className="row"><span>💵 Fixed Cash <span style={{fontSize:10,color:"#aaa"}}>(± adj)</span></span><span className="rowb">£{r2(parseFloat(p.fixedCash)+parseFloat(p.addT)-parseFloat(p.dedT)).toFixed(2)}</span></div>
             <div className="row"><span>💳 Fixed Card</span><span className="rowb">£{p.fixedCard}</span></div>
-            <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS</div><KitchenAdjustmentsRow sid={sid} rate={rate} shiftRate={shiftRate} nightRate={nightRate}/></div>
+            <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS</div><KitchenAdjustmentsRow sid={sid} rate={rate} shiftRate={shiftRate} nightRate={nightRate} setExtrasState={setExtrasState} getExtras={getExtras}/></div>
             <div className="divider"/>
             <div className="row"><span>Total Additions</span><span className="rowb" style={{color:"#065F46"}}>+£{p.addT}</span></div>
             <div className="row"><span>Total Deductions</span><span className="rowb" style={{color:"#E05252"}}>-£{p.dedT}</span></div>
