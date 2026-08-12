@@ -2339,6 +2339,7 @@ function ManagerApp({onLogout}){
   }
 
   if(loading)return<Loading text="Loading manager data…"/>;
+  const newCount=takings.filter(s=>s.is_new).length;
   const{cash:totCash,card:totCard,gross:totGross}=payTotals();
   const gsReady=!!(gsConfig.webAppUrl&&gsConfig.payrollId&&gsConfig.takingsId);
 
