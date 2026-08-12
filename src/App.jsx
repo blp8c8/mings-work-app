@@ -928,6 +928,326 @@ function KitchenAdjustmentsRow({sid,rate,shiftRate,nightRate,setExtrasState,getE
     </div>
   );
 }
+
+function PayrollCard({name,icon,sid,payType,rate,shiftRate,nightRate,weeklyFixed,calcFn,isKitchen,kitchenId,cardMode,cardFixed,staffId}){
+  const p=calcFn();const ex=getExtras(sid);
+  const[showOverride,setShowOverride]=useState(!!(ex.manualTotal&&ex.manualTotal!==""));
+  const[localCardFixed,setLocalCardFixed]=useState(cardFixed||"0");
+  // Local input state — avoids re-rendering whole list on every keystroke (fix for scroll-jump bug)
+  const[lFull,setLFull]=useState(ex.manualFull||"");
+  const[lNight,setLNight]=useState(ex.manualNight||"");
+  const[lHrs,setLHrs]=useState(ex.manualHrs||"");
+  const[lTips,setLTips]=useState(ex.tips||"");
+  const[lExtraTime,setLExtraTime]=useState(ex.extraTime||"");
+  const[lCash,setLCash]=useState(ex.manualCash||"");
+  const[lCard,setLCard]=useState(ex.manualCard||"");
+  const[lTotal,setLTotal]=useState(ex.manualTotal||"");
+  const[countsEdited,setCountsEdited]=useState(false); // only show card warning after counts are edited
+  useEffect(()=>{setLocalCardFixed(cardFixed||"0");},[cardFixed]);
+  // Sync all local inputs when extras changes (e.g. after manager taps Load week)
+  useEffect(()=>{
+    setLFull(ex.manualFull||"");
+    setLNight(ex.manualNight||"");
+    setLHrs(ex.manualHrs||"");
+    setLTips(ex.tips||p.autoTips||"");
+    setLExtraTime(ex.extraTime||"");
+    setLCash(ex.manualCash||"");
+    setLCard(ex.manualCard||"");
+    setLTotal(ex.manualTotal||"");
+  },[ex.manualFull,ex.manualNight,ex.manualHrs,ex.tips,ex.manualCash,ex.manualCard,ex.manualTotal,ex.extraTime,p.autoTips]);
+  return(
+    <div className="paycard">
+      <div className="phead">
+        <div className="pname">{icon} {name}{p.isOverride&&<span className="chip a" style={{marginLeft:6}}>Manual</span>}</div>
+        <div className="ptotal">£{p.total}</div>
+      </div>
+      <div className="pbody">
+        {/* Edit Counts — show only what's relevant for this staff member's pay type */}
+        <div style={{background:"#FFF5EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>EDIT COUNTS <span style={{fontWeight:400}}>(blank = auto from rota/clock)</span></div>
+          <div style={{display:"flex",gap:8}}>
+            <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>{setLFull(e.target.value);setCountsEdited(true);}} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualFull:e.target.value}))}/></div>
+            <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Night Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lNight} onChange={e=>{setLNight(e.target.value);setCountsEdited(true);}} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualNight:e.target.value}))}/></div>
+            <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder="0" value={lHrs} onChange={e=>{setLHrs(e.target.value);setCountsEdited(true);}} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>
+          </div>
+        </div>
+        <div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{(parseFloat(p.hrs||0)*parseFloat(rate||0)).toFixed(2)}</span></div>
+        {!isKitchen&&p.autoOvertimeHrs>0&&<div className="row" style={{background:"#FEF3C7"}}><span>⏱ {p.autoOvertimeLabel}</span><span className="rowb" style={{color:"#78350F"}}>info only</span></div>}
+        {!isKitchen&&p.sickDays>0&&(lFull||lNight||lHrs)&&<div className="row" style={{background:"#FEE2E2"}}><span>🤒 Sick days excluded</span><span className="rowb" style={{color:"#7F1D1D"}}>{p.sickDays} shift(s)</span></div>}
+        {p.autoDeductions&&p.autoDeductions.filter(d=>d.auto).map((d,i)=><div key={"ad"+i} className="row" style={{background:"#FEE2E2"}}><span style={{fontSize:11}}>📉 {d.label}</span><span className="rowb" style={{color:"#7F1D1D"}}>-£{parseFloat(d.amount).toFixed(2)}</span></div>)}
+        {isKitchen?(<>
+          <div className="row"><span>💵 Fixed Cash <span style={{fontSize:10,color:"#aaa"}}>(± adj)</span></span><span className="rowb">£{r2(parseFloat(p.fixedCash)+parseFloat(p.addT)-parseFloat(p.dedT)).toFixed(2)}</span></div>
+          <div className="row"><span>💳 Fixed Card</span><span className="rowb">£{p.fixedCard}</span></div>
+          <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS</div><KitchenAdjustmentsRow sid={sid} rate={rate} shiftRate={shiftRate} nightRate={nightRate} setExtrasState={setExtrasState} getExtras={getExtras}/></div>
+          <div className="divider"/>
+          <div className="row"><span>Total Additions</span><span className="rowb" style={{color:"#065F46"}}>+£{p.addT}</span></div>
+          <div className="row"><span>Total Deductions</span><span className="rowb" style={{color:"#E05252"}}>-£{p.dedT}</span></div>
+          <div className="row"><span style={{fontWeight:800}}>Kitchen Total</span><span style={{fontWeight:900,color:"#E8620A",fontSize:15}}>£{p.total}</span></div>
+        </>):(<>
+          <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
+          <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
+          <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,tips:e.target.value}))}/></div>
+          <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS</div><AdjustmentsRow sid={sid} rate={rate} shiftRate={shiftRate} nightRate={nightRate}/></div>
+        </>)}
+        <div className="divider"/>
+        {!isKitchen&&(<>
+          {p.cardExceeds&&(
+          <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+            <div style={{fontSize:12,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Fixed card amount is more than was earned</div>
+            <div style={{fontSize:11,color:"#991B1B",marginBottom:8}}>Fixed at £{parseFloat(cardFixed||0).toFixed(2)} but only £{p.grossTotal.toFixed(2)} was earned this week. Please correct the amount below.</div>
+            <button className="btn danger" style={{marginTop:0,padding:"7px"}} onClick={()=>{const el=document.getElementById(isKitchen?`cf-pk-${kitchenId}`:`cf-ps-${staffId}`);el?.focus();el?.scrollIntoView({behavior:"smooth",block:"center"});}}>Edit Fixed Amount</button>
+          </div>
+        )}
+        <div style={{background:"#FFF5EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>CARD PAYMENT</div>
+          <div className="toggle" style={{marginBottom:cardMode==="fixed"?10:0,width:"100%"}}>
+            <button className={`tgl${cardMode==="fixed"?" on":""}`} style={{flex:1}} onClick={async()=>{if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardMode:"fixed"}:x));await db.from("kitchen_staff").update({card_mode:"fixed"}).eq("id",kitchenId);}else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"fixed"}:x));await db.from("staff").update({card_mode:"fixed"}).eq("id",staffId);}}}>Fixed £</button>
+            <button className={`tgl${cardMode==="cash"?" on":""}`} style={{flex:1}} onClick={async()=>{if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardMode:"cash"}:x));await db.from("kitchen_staff").update({card_mode:"cash"}).eq("id",kitchenId);}else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"cash"}:x));await db.from("staff").update({card_mode:"cash"}).eq("id",staffId);}}}>All Cash</button>
+            <button className={`tgl${cardMode==="card"?" on":""}`} style={{flex:1}} onClick={async()=>{if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardMode:"card"}:x));await db.from("kitchen_staff").update({card_mode:"card"}).eq("id",kitchenId);}else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"card"}:x));await db.from("staff").update({card_mode:"card"}).eq("id",staffId);}}}>All Card</button>
+          </div>
+          {cardMode==="fixed"&&(
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:12,color:"#555"}}>Fixed card amount (£)</span>
+              <input id={isKitchen?`cf-pk-${kitchenId}`:`cf-ps-${staffId}`} type="number" className="mini" min="0" placeholder="0.00" value={localCardFixed} onChange={e=>setLocalCardFixed(e.target.value)} onBlur={async e=>{
+                checkCardWarning(name,e.target.value,p.grossTotal,isKitchen?`cf-pk-${kitchenId}`:`cf-ps-${staffId}`);
+                if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardFixed:e.target.value}:x));await db.from("kitchen_staff").update({card_fixed:e.target.value}).eq("id",kitchenId);}
+                else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardFixed:e.target.value}:x));await db.from("staff").update({card_fixed:e.target.value}).eq("id",staffId);}
+              }}/>
+            </div>
+          )}
+          <div style={{fontSize:10,color:"#aaa",marginTop:6}}>{cardMode==="fixed"?"Card never exceeds what was earned — rest is cash":cardMode==="cash"?"Entire amount paid in cash":"Entire amount paid by card"}</div>
+        </div>
+        <div className="row"><span>💵 Cash <span style={{fontSize:10,color:"#aaa"}}>(base − card)</span></span><span className="rowb">£{p.baseCash}</span></div>
+        <div className="row"><span>💳 Card <span style={{fontSize:10,color:"#aaa"}}>(fixed)</span></span><span className="rowb">£{p.cardAmt}</span></div>
+        <div className="row"><span>➕ Additions</span><span className="rowb" style={{color:"#065F46"}}>+£{p.addT}</span></div>
+        <div className="row"><span>➖ Deductions</span><span className="rowb" style={{color:"#E05252"}}>-£{p.dedT}</span></div>
+        <div className="row"><span style={{fontWeight:800}}>Salary Total</span><span style={{fontWeight:900,color:"#E8620A",fontSize:15}}>£{p.total}</span></div>
+        </>)}
+        {!isKitchen&&<div className="row" style={{borderTop:"1px dashed #E5E5E5",marginTop:4,paddingTop:4}}><span>💳 Tips (card) {p.autoTips!=="0.00"&&!ex.tips&&<span style={{fontSize:10,color:"#aaa"}}>(auto from takings)</span>}</span><span className="rowb" style={{color:"#50DC78"}}>£{p.tips}</span></div>}
+        {/* Manual override — overrides ALL exported values including shifts/hours */}
+        <button style={{marginTop:8,background:showOverride?"#FEF3C7":"#F0F0F0",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",width:"100%",color:showOverride?"#78350F":"#555"}} onClick={()=>setShowOverride(v=>!v)}>
+          {showOverride?"▲ Hide Override":"✏️ Override Exported Values (shifts, hours, cash, card, total)"}
+        </button>
+        {showOverride&&<div className="override-box">
+          <div style={{fontSize:11,color:"#78350F",marginBottom:8,fontWeight:700}}>These values replace everything in the spreadsheet export. Leave blank to use calculated values.</div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {payType==="shift"&&<><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>FULL SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>setLFull(e.target.value)}/></div><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>NIGHT SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lNight} onChange={e=>setLNight(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualNight:e.target.value}))}/></div></>}
+            {payType==="hourly"&&<div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>HOURS</div><input type="number" min="0" step="0.25" className="inp sm" style={{width:"100%"}} placeholder="0" value={lHrs} onChange={e=>setLHrs(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>}
+            <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CASH £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCash} onChange={e=>setLCash(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualCash:e.target.value}))}/></div>
+            <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CARD £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCard} onChange={e=>setLCard(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualCard:e.target.value}))}/></div>
+            <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>TOTAL £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lTotal} onChange={e=>setLTotal(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualTotal:e.target.value}))}/></div>
+          </div>
+          <button className="btn danger" style={{marginTop:8,padding:"8px"}} onClick={()=>{updateExtras(sid,ex=>({...ex,manualCash:"",manualCard:"",manualTotal:"",manualFull:"",manualNight:"",manualHrs:""}));setLCash("");setLCard("");setLTotal("");setLFull("");setLNight("");setLHrs("");}}>Clear All Overrides</button>
+        </div>}
+      </div>
+    </div>
+  );
+}
+
+// ── Modals ──
+function AddStaffModal({onClose}){
+  const[type,setType]=useState("foh"); // "foh" | "kitchen"
+  const[name,setName]=useState("");const[code,setCode]=useState("");const[rate,setRate]=useState("");const[shiftRate,setSR]=useState("");const[nightRate,setNR]=useState("");const[cardFixed,setCF]=useState("0");const[err,setErr]=useState("");const[saving,setSaving]=useState(false);
+  async function save(){
+    setErr("");if(!name.trim())return setErr("Enter a name");
+    setSaving(true);
+    if(type==="foh"){
+      if(!/^\d{4}$/.test(code)){setSaving(false);return setErr("Code must be 4 digits");}
+      const{data:newStaff,error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:"hourly",rate:rate||"0",shift_rate:shiftRate||"0",night_rate:nightRate||"0",card_fixed:cardFixed||"0",card_mode:"fixed"}).select().single();
+      if(error){setSaving(false);return setErr(error.code==="23505"?"Code already taken":error.message);}
+      setStaff(p=>[...p,{...newStaff,payType:"hourly",rate:rate||"0",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardFixed:cardFixed||"0",cardMode:"fixed",tipsPct:"0"}].sort((a,b)=>a.name.localeCompare(b.name)));
+      t("✅ "+name.trim()+" (FOH) added");
+    }else{
+      const{data,error}=await db.from("kitchen_staff").insert({name:name.trim(),cash_card:"cash",pay_type:"hourly",shift_rate:shiftRate||"0",night_rate:nightRate||"0",rate:rate||"0",card_mode:"fixed",card_fixed:cardFixed||"0"}).select().single();
+      if(error){setSaving(false);return setErr(error.message);}
+      setKitchenStaff(p=>[...p,{...data,payType:"hourly",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardMode:"fixed",cardFixed:cardFixed||"0"}]);
+      t("✅ "+name.trim()+" (Kitchen) added");
+    }
+    onClose();setSaving(false);
+  }
+  return(
+    <div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}>
+      <div className="stitle">➕ Add Staff Member</div>
+      <label className="lbl">Staff Type</label>
+      <div className="toggle" style={{marginBottom:14}}>
+        <button className={`tgl${type==="foh"?" on":""}`} onClick={()=>{setType("foh");setErr("");}}>👤 Front of House</button>
+        <button className={`tgl${type==="kitchen"?" on":""}`} onClick={()=>{setType("kitchen");setErr("");}}>👨‍🍳 Kitchen</button>
+      </div>
+      <label className="lbl">Full Name</label>
+      <input className="inp" placeholder={type==="foh"?"e.g. Amy Chen":"e.g. Marco"} value={name} onChange={e=>setName(e.target.value)}/>
+      {type==="foh"&&<>
+        <label className="lbl">4-Digit Login Code</label>
+        <input className="inp code" type="password" inputMode="numeric" maxLength={4} placeholder="••••" value={code} onChange={e=>setCode(e.target.value)}/>
+      </>}
+      <div style={{display:"flex",gap:8}}>
+        <div style={{flex:1}}><label className="lbl">£/HR</label><input className="inp" type="number" placeholder="0.00" value={rate} onChange={e=>setRate(e.target.value)}/></div>
+        <div style={{flex:1}}><label className="lbl">Full Shift £</label><input className="inp" type="number" placeholder="0.00" value={shiftRate} onChange={e=>setSR(e.target.value)}/></div>
+        <div style={{flex:1}}><label className="lbl">Night £</label><input className="inp" type="number" placeholder="0.00" value={nightRate} onChange={e=>setNR(e.target.value)}/></div>
+      </div>
+      <label className="lbl">Fixed Card Payment (£)</label>
+      <input className="inp" type="number" placeholder="0.00" value={cardFixed} onChange={e=>setCF(e.target.value)}/>
+      {err&&<div className="err">{err}</div>}
+      <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Add Staff Member"}</button>
+      <button className="btn sec" onClick={onClose}>Cancel</button>
+    </div></div>
+  );
+}
+
+function PinModal({onClose}){
+  const[curr,setCurr]=useState("");const[n1,setN1]=useState("");const[n2,setN2]=useState("");const[err,setErr]=useState("");const[saving,setSaving]=useState(false);
+  async function save(){setErr("");setSaving(true);const{data}=await db.from("app_settings").select("value").eq("key","manager_pin").maybeSingle();if(curr!==(data?.value||"00000000")){setErr("Current PIN wrong");setSaving(false);return;}if(!/^\d{8}$/.test(n1)){setErr("New PIN must be 8 digits");setSaving(false);return;}if(n1!==n2){setErr("PINs don't match");setSaving(false);return;}await db.from("app_settings").upsert({key:"manager_pin",value:n1});t("✅ PIN updated!");onClose();setSaving(false);}
+  return(<div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">🔒 Change Manager PIN</div><label className="lbl">Current PIN</label><input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={curr} onChange={e=>setCurr(e.target.value)}/><label className="lbl">New PIN</label><input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={n1} onChange={e=>setN1(e.target.value)}/><label className="lbl">Confirm New PIN</label><input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={n2} onChange={e=>setN2(e.target.value)}/>{err&&<div className="err">{err}</div>}<button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Change PIN"}</button><button className="btn sec" onClick={onClose}>Cancel</button></div></div>);
+}
+
+function SettingsModal({onClose}){
+  const[webAppUrl,setWebAppUrl]=useState(gsConfig.webAppUrl||"");
+  const[payrollId,setPayrollId]=useState(gsConfig.payrollId||"");
+  const[takingsId,setTakingsId]=useState(gsConfig.takingsId||"");
+  const[clockLogId,setClockLogId]=useState(gsConfig.clockLogId||"");
+  const[welcomeMsg,setWelcomeMsg]=useState(gsConfig.welcomeMsg||"");
+  const[saving,setSaving]=useState(false);
+  const[showScript,setShowScript]=useState(false);
+  const[testing,setTesting]=useState(false);
+  const[testResult,setTestResult]=useState(null);
+
+  const urlTrimmed=webAppUrl.trim();
+  const urlLooksValid=urlTrimmed.startsWith("https://script.google.com/macros/s/")&&urlTrimmed.endsWith("/exec");
+  const urlHasDev=urlTrimmed.endsWith("/dev");
+
+  // Auto-extract spreadsheet ID if user pastes full URL
+  function extractSheetId(val){
+    const v=val.trim();
+    const m=v.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+    if(m)return m[1];
+    // if it looks like just an ID already (no slashes, no spaces)
+    if(/^[a-zA-Z0-9_-]+$/.test(v))return v;
+    return v;
+  }
+  const cleanPayrollId=extractSheetId(payrollId);
+  const cleanTakingsId=extractSheetId(takingsId);
+  const payrollIdValid=/^[a-zA-Z0-9_-]{20,}$/.test(cleanPayrollId);
+  const takingsIdValid=/^[a-zA-Z0-9_-]{20,}$/.test(cleanTakingsId);
+
+  async function save(){
+    setSaving(true);
+    await saveGsConfig({webAppUrl:urlTrimmed,payrollId:cleanPayrollId,takingsId:cleanTakingsId,clockLogId:clockLogId.trim(),welcomeMsg:welcomeMsg.trim()});
+    setSaving(false);onClose();
+  }
+  async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(urlTrimmed);setTestResult(r);setTesting(false);}
+  async function testIds(){
+    setTesting(true);setTestResult(null);
+    const results=[];
+    for(const[label,id] of [["Payroll",cleanPayrollId],["Takings",cleanTakingsId],["Clock Log",clockLogId.trim()]]){
+      if(!id){results.push(`${label}: no ID entered`);continue;}
+      const payload=encodeURIComponent(JSON.stringify({
+        spreadsheetId:id,tab:"TestConnection",
+        rows:[["Test",label,new Date().toLocaleString()]],
+        startRow:1,clear:true,ts:Date.now()
+      }));
+      try{
+        const res=await fetch(`${urlTrimmed}?payload=${payload}`,{method:"GET",cache:"no-store"});
+        const data=await res.json().catch(()=>null);
+        if(data&&data.ok){
+          results.push(`✅ ${label} ID works — tabs in that sheet: [${(data.sheets||[]).join(", ")}]`);
+        }else{
+          results.push(`❌ ${label} ID FAILED — "${data?.error||"no response"}" — ID used: "${id}"`);
+        }
+      }catch(e){results.push(`❌ ${label}: network error — ${e.message}`);}
+    }
+    setTestResult({ok:results.every(r=>r.startsWith("✅")),msg:results.join("\n\n")});
+    setTesting(false);
+  }
+
+  const scriptCode=`function doGet(e) {\n  if (!e.parameter || !e.parameter.payload) {\n    return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n  }\n  try {\n    var body = JSON.parse(e.parameter.payload);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    // getInfo mode: return current row count without writing\n    if (body.getInfo) {\n      var sheets = ss.getSheets().map(function(s){return s.getName();});\n      return ContentService.createTextOutput(JSON.stringify({ok:true,rowCount:sheet.getLastRow(),sheets:sheets})).setMimeType(ContentService.MimeType.JSON);\n    }\n    if (body.clear) sheet.clearContents();\n    var rows = body.rows || [];\n    var written = 0;\n    if (rows.length > 0) {\n      var startRow = body.startRow || 1;\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(startRow, 1, rows.length, maxCols).setValues(rows);\n      written = rows.length;\n    }\n    SpreadsheetApp.flush();\n    var sheets = ss.getSheets().map(function(s){return s.getName();});\n    return ContentService.createTextOutput(JSON.stringify({ok:true,written:written,tab:body.tab,sheets:sheets,startRow:body.startRow||1})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message,spreadsheetId:body?body.spreadsheetId:"unknown",tab:body?body.tab:"unknown"})).setMimeType(ContentService.MimeType.JSON);\n  }\n}\n\nfunction doPost(e) { return doGet(e); }`;
+
+  return(
+    <div className="overlay" onClick={onClose}>
+      <div className="sheet" onClick={e=>e.stopPropagation()}>
+        <div className="stitle">🔗 Google Sheets</div>
+        <div className="ssub2">Saved permanently in Supabase — set once, never lost</div>
+
+        <button className="btn sec" style={{marginTop:0,marginBottom:14}} onClick={()=>setShowScript(v=>!v)}>{showScript?"▲ Hide setup steps":"▼ Show 3-minute setup steps"}</button>
+        {showScript&&(
+          <div style={{background:"#FFF5EF",borderRadius:10,padding:"12px 13px",fontSize:12,color:"#444",marginBottom:14,lineHeight:1.8}}>
+            <strong>Step 1</strong> — Go to <strong>script.google.com</strong> → click <strong>New project</strong><br/>
+            <strong>Step 2</strong> — Delete everything in the editor, paste in this code:
+            <textarea readOnly className="lognote" rows={12} style={{fontFamily:"monospace",fontSize:10,marginTop:6,marginBottom:6,background:"#fff"}} value={scriptCode} onClick={e=>e.target.select()}/>
+            <button className="btn sm" style={{marginBottom:10}} onClick={()=>{navigator.clipboard.writeText(scriptCode);t("📋 Script copied!");}}>📋 Copy Script</button><br/>
+            <strong>Step 3</strong> — Click <strong>Deploy</strong> (top right) → <strong>New deployment</strong><br/>
+            <strong>Step 4</strong> — Click ⚙️ gear next to "Select type" → choose <strong>Web app</strong><br/>
+            <div style={{background:"#FEE2E2",border:"1px solid #E05252",borderRadius:8,padding:"8px 10px",margin:"6px 0"}}>
+              <strong>Step 5 — most common mistake:</strong> "Execute as" = <strong>Me</strong>. "Who has access" = <strong>Anyone</strong> — NOT "Anyone with Google account". Wrong choice = Google login page = app cannot connect.
+            </div>
+            <strong>Step 6</strong> — Click <strong>Deploy</strong> → authorize when asked (it is your own script)<br/>
+            <div style={{background:"#FEE2E2",border:"1px solid #E05252",borderRadius:8,padding:"8px 10px",margin:"6px 0"}}>
+              <strong>Step 7 — copy the correct URL:</strong> The URL must end in <strong>/exec</strong> — NOT /dev. The /dev URL requires a Google login. Copy the <strong>Web app URL</strong> from the deployment dialog.
+            </div>
+            <strong>Step 8</strong> — Paste the URL below, tap <strong>Test Connection</strong>, confirm it says "Connected", then save<br/>
+            <strong>Step 9</strong> — Both spreadsheets must be set to <strong>"Anyone with the link can edit"</strong>
+          </div>
+        )}
+
+        <label className="lbl">Web App URL</label>
+        <input className="inp sm" style={{display:"block",width:"100%",marginBottom:4,borderColor:urlTrimmed?(urlLooksValid?"#50DC78":"#E05252"):"#E5E5E5"}}
+          placeholder="https://script.google.com/macros/s/…/exec"
+          value={webAppUrl}
+          onChange={e=>{setWebAppUrl(e.target.value);setTestResult(null);}}
+        />
+        {urlHasDev&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:8}}>⚠️ URL ends in /dev — this will never work. Copy the Web app URL (ends in /exec) from your deployment.</div>}
+        {urlTrimmed&&!urlLooksValid&&!urlHasDev&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:8}}>⚠️ URL must start with https://script.google.com/macros/s/ and end with /exec</div>}
+        {urlLooksValid&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:8}}>✓ URL format looks correct ({urlTrimmed.length} characters)</div>}
+        {urlTrimmed&&webAppUrl!==urlTrimmed&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:8}}>⚠️ Invisible spaces detected and will be stripped on save</div>}
+        {urlTrimmed&&<div style={{marginBottom:12}}>
+          <a href={urlTrimmed} target="_blank" rel="noreferrer" style={{fontSize:12,color:"#1E40AF",fontWeight:700}}>🌐 Open URL in browser tab →</a>
+          <div style={{fontSize:11,color:"#888",marginTop:3}}>Should show: <code style={{background:"#F0F0F0",padding:"1px 4px",borderRadius:3}}>{"{"}"ok":true,"msg":"Sheets bridge is live"{"}"}</code>. If it asks you to log in, "Who has access" is set wrong.</div>
+        </div>}
+
+        <button className="btn sec" style={{marginTop:0,marginBottom:8}} onClick={runTest} disabled={testing||!urlTrimmed}>{testing?"Testing…":"🔍 Test Connection"}</button>
+        {testResult&&(
+          <div style={{background:testResult.ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${testResult.ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 12px",marginBottom:8,fontSize:12,color:testResult.ok?"#065F46":"#7F1D1D",lineHeight:1.8,whiteSpace:"pre-wrap"}}>
+            {testResult.msg||testResult.err||""}
+          </div>
+        )}
+
+        <label className="lbl">Payroll Spreadsheet ID</label>
+        <input className="inp sm" style={{display:"block",width:"100%",marginBottom:4,borderColor:payrollId?(payrollIdValid?"#50DC78":"#E05252"):"#E5E5E5"}} placeholder="Paste the spreadsheet ID or the full URL" value={payrollId} onChange={e=>setPayrollId(e.target.value)}/>
+        {payrollId&&!payrollIdValid&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ Doesn't look like a valid spreadsheet ID. Paste the full spreadsheet URL and we'll extract it automatically.</div>}
+        {payrollId&&payrollIdValid&&cleanPayrollId!==payrollId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ Will save ID: <code style={{background:"#F0F0F0",padding:"1px 4px",borderRadius:3}}>{cleanPayrollId}</code></div>}
+        {payrollId&&payrollIdValid&&cleanPayrollId===payrollId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ ID looks valid</div>}
+        <div style={{fontSize:11,color:"#888",marginBottom:14}}>Paste the full sheet URL or just the ID — we auto-extract it</div>
+
+        <label className="lbl">Takings Spreadsheet ID</label>
+        <input className="inp sm" style={{display:"block",width:"100%",marginBottom:4,borderColor:takingsId?(takingsIdValid?"#50DC78":"#E05252"):"#E5E5E5"}} placeholder="Paste the spreadsheet ID or the full URL" value={takingsId} onChange={e=>setTakingsId(e.target.value)}/>
+        {takingsId&&!takingsIdValid&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ Doesn't look like a valid spreadsheet ID. Paste the full spreadsheet URL and we'll extract it automatically.</div>}
+        {takingsId&&takingsIdValid&&cleanTakingsId!==takingsId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ Will save ID: <code style={{background:"#F0F0F0",padding:"1px 4px",borderRadius:3}}>{cleanTakingsId}</code></div>}
+        {takingsId&&takingsIdValid&&cleanTakingsId===takingsId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ ID looks valid</div>}
+        <div style={{fontSize:11,color:"#888",marginBottom:14}}>Paste the full sheet URL or just the ID — we auto-extract it</div>
+
+        <label className="lbl">Clock Log Spreadsheet ID</label>
+        <input className="inp sm" style={{display:"block",width:"100%",marginBottom:4,borderColor:clockLogId?(clockLogId.length>20?"#50DC78":"#E05252"):"#E5E5E5"}} placeholder="Paste the ID or full URL of Ming's clock log sheet" value={clockLogId} onChange={e=>setClockLogId(e.target.value)}/>
+        <div style={{fontSize:11,color:"#888",marginBottom:14}}>The spreadsheet for daily clock log auto-push (Ming's clock log)</div>
+
+        {/* Test whether the IDs actually open real spreadsheets */}
+        {urlLooksValid&&(cleanPayrollId||cleanTakingsId)&&(
+          <div style={{marginBottom:14}}>
+            <button className="btn sec" style={{marginTop:0}} onClick={testIds} disabled={testing}>
+              {testing?"Testing…":"🧪 Test Spreadsheet IDs (try a test write)"}
+            </button>
+            <div style={{fontSize:11,color:"#888",marginTop:6}}>This writes one test row to a "TestConnection" tab — confirms your spreadsheet IDs are correct before saving.</div>
+          </div>
+        )}
+
+        <label className="lbl">Welcome Message for Staff</label>
+        <textarea className="lognote" rows={3} style={{marginBottom:14,fontSize:14}} placeholder="e.g. Welcome back! Remember: Friday is early close at 10pm." value={welcomeMsg} onChange={e=>setWelcomeMsg(e.target.value)}/>
+        <div style={{fontSize:11,color:"#888",marginBottom:14}}>This message shows to all staff when they log in. Leave blank to show nothing.</div>
+
+        <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Save & Connect"}</button>
+        <button className="btn sec" onClick={onClose}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 function ManagerApp({onLogout}){
   const[tab,setTab]=useState("staff");
   const[msg,setMsg]=useState("");
@@ -2004,325 +2324,6 @@ function ManagerApp({onLogout}){
   }
 
   // ── Payroll card (shared for FOH and kitchen) ──
-  function PayrollCard({name,icon,sid,payType,rate,shiftRate,nightRate,weeklyFixed,calcFn,isKitchen,kitchenId,cardMode,cardFixed,staffId}){
-    const p=calcFn();const ex=getExtras(sid);
-    const[showOverride,setShowOverride]=useState(!!(ex.manualTotal&&ex.manualTotal!==""));
-    const[localCardFixed,setLocalCardFixed]=useState(cardFixed||"0");
-    // Local input state — avoids re-rendering whole list on every keystroke (fix for scroll-jump bug)
-    const[lFull,setLFull]=useState(ex.manualFull||"");
-    const[lNight,setLNight]=useState(ex.manualNight||"");
-    const[lHrs,setLHrs]=useState(ex.manualHrs||"");
-    const[lTips,setLTips]=useState(ex.tips||"");
-    const[lExtraTime,setLExtraTime]=useState(ex.extraTime||"");
-    const[lCash,setLCash]=useState(ex.manualCash||"");
-    const[lCard,setLCard]=useState(ex.manualCard||"");
-    const[lTotal,setLTotal]=useState(ex.manualTotal||"");
-    const[countsEdited,setCountsEdited]=useState(false); // only show card warning after counts are edited
-    useEffect(()=>{setLocalCardFixed(cardFixed||"0");},[cardFixed]);
-    // Sync all local inputs when extras changes (e.g. after manager taps Load week)
-    useEffect(()=>{
-      setLFull(ex.manualFull||"");
-      setLNight(ex.manualNight||"");
-      setLHrs(ex.manualHrs||"");
-      setLTips(ex.tips||p.autoTips||"");
-      setLExtraTime(ex.extraTime||"");
-      setLCash(ex.manualCash||"");
-      setLCard(ex.manualCard||"");
-      setLTotal(ex.manualTotal||"");
-    },[ex.manualFull,ex.manualNight,ex.manualHrs,ex.tips,ex.manualCash,ex.manualCard,ex.manualTotal,ex.extraTime,p.autoTips]);
-    return(
-      <div className="paycard">
-        <div className="phead">
-          <div className="pname">{icon} {name}{p.isOverride&&<span className="chip a" style={{marginLeft:6}}>Manual</span>}</div>
-          <div className="ptotal">£{p.total}</div>
-        </div>
-        <div className="pbody">
-          {/* Edit Counts — show only what's relevant for this staff member's pay type */}
-          <div style={{background:"#FFF5EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
-            <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>EDIT COUNTS <span style={{fontWeight:400}}>(blank = auto from rota/clock)</span></div>
-            <div style={{display:"flex",gap:8}}>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Full Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>{setLFull(e.target.value);setCountsEdited(true);}} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualFull:e.target.value}))}/></div>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Night Shifts</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lNight} onChange={e=>{setLNight(e.target.value);setCountsEdited(true);}} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualNight:e.target.value}))}/></div>
-              <div style={{flex:1}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>Hours</div><input type="number" min="0" step="0.5" className="inp sm" style={{width:"100%"}} placeholder="0" value={lHrs} onChange={e=>{setLHrs(e.target.value);setCountsEdited(true);}} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>
-            </div>
-          </div>
-          <div className="row"><span>Hours</span><span className="rowb">{p.hrs}h × £{rate} = £{(parseFloat(p.hrs||0)*parseFloat(rate||0)).toFixed(2)}</span></div>
-          {!isKitchen&&p.autoOvertimeHrs>0&&<div className="row" style={{background:"#FEF3C7"}}><span>⏱ {p.autoOvertimeLabel}</span><span className="rowb" style={{color:"#78350F"}}>info only</span></div>}
-          {!isKitchen&&p.sickDays>0&&(lFull||lNight||lHrs)&&<div className="row" style={{background:"#FEE2E2"}}><span>🤒 Sick days excluded</span><span className="rowb" style={{color:"#7F1D1D"}}>{p.sickDays} shift(s)</span></div>}
-          {p.autoDeductions&&p.autoDeductions.filter(d=>d.auto).map((d,i)=><div key={"ad"+i} className="row" style={{background:"#FEE2E2"}}><span style={{fontSize:11}}>📉 {d.label}</span><span className="rowb" style={{color:"#7F1D1D"}}>-£{parseFloat(d.amount).toFixed(2)}</span></div>)}
-          {isKitchen?(<>
-            <div className="row"><span>💵 Fixed Cash <span style={{fontSize:10,color:"#aaa"}}>(± adj)</span></span><span className="rowb">£{r2(parseFloat(p.fixedCash)+parseFloat(p.addT)-parseFloat(p.dedT)).toFixed(2)}</span></div>
-            <div className="row"><span>💳 Fixed Card</span><span className="rowb">£{p.fixedCard}</span></div>
-            <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS</div><KitchenAdjustmentsRow sid={sid} rate={rate} shiftRate={shiftRate} nightRate={nightRate} setExtrasState={setExtrasState} getExtras={getExtras}/></div>
-            <div className="divider"/>
-            <div className="row"><span>Total Additions</span><span className="rowb" style={{color:"#065F46"}}>+£{p.addT}</span></div>
-            <div className="row"><span>Total Deductions</span><span className="rowb" style={{color:"#E05252"}}>-£{p.dedT}</span></div>
-            <div className="row"><span style={{fontWeight:800}}>Kitchen Total</span><span style={{fontWeight:900,color:"#E8620A",fontSize:15}}>£{p.total}</span></div>
-          </>):(<>
-            <div className="row"><span>Full Day shifts</span><span className="rowb">{p.full} × £{shiftRate} = £{(p.full*parseFloat(shiftRate||0)).toFixed(2)}</span></div>
-            <div className="row"><span>Night shifts</span><span className="rowb">{p.night} × £{nightRate} = £{(p.night*parseFloat(nightRate||0)).toFixed(2)}</span></div>
-            <div className="row"><span>Tips (£) {!isKitchen&&p.autoTips!=="0.00"&&<span style={{fontSize:10,color:"#aaa"}}>(auto: £{p.autoTips})</span>}</span><input type="number" className="mini" min="0" placeholder={!isKitchen?p.autoTips:"0.00"} value={lTips} onChange={e=>setLTips(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,tips:e.target.value}))}/></div>
-            <div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ADJUSTMENTS</div><AdjustmentsRow sid={sid} rate={rate} shiftRate={shiftRate} nightRate={nightRate}/></div>
-          </>)}
-          <div className="divider"/>
-          {!isKitchen&&(<>
-            {p.cardExceeds&&(
-            <div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
-              <div style={{fontSize:12,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Fixed card amount is more than was earned</div>
-              <div style={{fontSize:11,color:"#991B1B",marginBottom:8}}>Fixed at £{parseFloat(cardFixed||0).toFixed(2)} but only £{p.grossTotal.toFixed(2)} was earned this week. Please correct the amount below.</div>
-              <button className="btn danger" style={{marginTop:0,padding:"7px"}} onClick={()=>{const el=document.getElementById(isKitchen?`cf-pk-${kitchenId}`:`cf-ps-${staffId}`);el?.focus();el?.scrollIntoView({behavior:"smooth",block:"center"});}}>Edit Fixed Amount</button>
-            </div>
-          )}
-          <div style={{background:"#FFF5EF",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
-            <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:8}}>CARD PAYMENT</div>
-            <div className="toggle" style={{marginBottom:cardMode==="fixed"?10:0,width:"100%"}}>
-              <button className={`tgl${cardMode==="fixed"?" on":""}`} style={{flex:1}} onClick={async()=>{if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardMode:"fixed"}:x));await db.from("kitchen_staff").update({card_mode:"fixed"}).eq("id",kitchenId);}else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"fixed"}:x));await db.from("staff").update({card_mode:"fixed"}).eq("id",staffId);}}}>Fixed £</button>
-              <button className={`tgl${cardMode==="cash"?" on":""}`} style={{flex:1}} onClick={async()=>{if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardMode:"cash"}:x));await db.from("kitchen_staff").update({card_mode:"cash"}).eq("id",kitchenId);}else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"cash"}:x));await db.from("staff").update({card_mode:"cash"}).eq("id",staffId);}}}>All Cash</button>
-              <button className={`tgl${cardMode==="card"?" on":""}`} style={{flex:1}} onClick={async()=>{if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardMode:"card"}:x));await db.from("kitchen_staff").update({card_mode:"card"}).eq("id",kitchenId);}else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardMode:"card"}:x));await db.from("staff").update({card_mode:"card"}).eq("id",staffId);}}}>All Card</button>
-            </div>
-            {cardMode==="fixed"&&(
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <span style={{fontSize:12,color:"#555"}}>Fixed card amount (£)</span>
-                <input id={isKitchen?`cf-pk-${kitchenId}`:`cf-ps-${staffId}`} type="number" className="mini" min="0" placeholder="0.00" value={localCardFixed} onChange={e=>setLocalCardFixed(e.target.value)} onBlur={async e=>{
-                  checkCardWarning(name,e.target.value,p.grossTotal,isKitchen?`cf-pk-${kitchenId}`:`cf-ps-${staffId}`);
-                  if(isKitchen){setKitchenStaff(p=>p.map(x=>x.id===kitchenId?{...x,cardFixed:e.target.value}:x));await db.from("kitchen_staff").update({card_fixed:e.target.value}).eq("id",kitchenId);}
-                  else{setStaff(p=>p.map(x=>x.id===staffId?{...x,cardFixed:e.target.value}:x));await db.from("staff").update({card_fixed:e.target.value}).eq("id",staffId);}
-                }}/>
-              </div>
-            )}
-            <div style={{fontSize:10,color:"#aaa",marginTop:6}}>{cardMode==="fixed"?"Card never exceeds what was earned — rest is cash":cardMode==="cash"?"Entire amount paid in cash":"Entire amount paid by card"}</div>
-          </div>
-          <div className="row"><span>💵 Cash <span style={{fontSize:10,color:"#aaa"}}>(base − card)</span></span><span className="rowb">£{p.baseCash}</span></div>
-          <div className="row"><span>💳 Card <span style={{fontSize:10,color:"#aaa"}}>(fixed)</span></span><span className="rowb">£{p.cardAmt}</span></div>
-          <div className="row"><span>➕ Additions</span><span className="rowb" style={{color:"#065F46"}}>+£{p.addT}</span></div>
-          <div className="row"><span>➖ Deductions</span><span className="rowb" style={{color:"#E05252"}}>-£{p.dedT}</span></div>
-          <div className="row"><span style={{fontWeight:800}}>Salary Total</span><span style={{fontWeight:900,color:"#E8620A",fontSize:15}}>£{p.total}</span></div>
-          </>)}
-          {!isKitchen&&<div className="row" style={{borderTop:"1px dashed #E5E5E5",marginTop:4,paddingTop:4}}><span>💳 Tips (card) {p.autoTips!=="0.00"&&!ex.tips&&<span style={{fontSize:10,color:"#aaa"}}>(auto from takings)</span>}</span><span className="rowb" style={{color:"#50DC78"}}>£{p.tips}</span></div>}
-          {/* Manual override — overrides ALL exported values including shifts/hours */}
-          <button style={{marginTop:8,background:showOverride?"#FEF3C7":"#F0F0F0",border:"none",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:700,cursor:"pointer",width:"100%",color:showOverride?"#78350F":"#555"}} onClick={()=>setShowOverride(v=>!v)}>
-            {showOverride?"▲ Hide Override":"✏️ Override Exported Values (shifts, hours, cash, card, total)"}
-          </button>
-          {showOverride&&<div className="override-box">
-            <div style={{fontSize:11,color:"#78350F",marginBottom:8,fontWeight:700}}>These values replace everything in the spreadsheet export. Leave blank to use calculated values.</div>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-              {payType==="shift"&&<><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>FULL SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lFull} onChange={e=>setLFull(e.target.value)}/></div><div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>NIGHT SHIFTS</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0" value={lNight} onChange={e=>setLNight(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualNight:e.target.value}))}/></div></>}
-              {payType==="hourly"&&<div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>HOURS</div><input type="number" min="0" step="0.25" className="inp sm" style={{width:"100%"}} placeholder="0" value={lHrs} onChange={e=>setLHrs(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualHrs:e.target.value}))}/></div>}
-              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CASH £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCash} onChange={e=>setLCash(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualCash:e.target.value}))}/></div>
-              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>CARD £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lCard} onChange={e=>setLCard(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualCard:e.target.value}))}/></div>
-              <div style={{flex:1,minWidth:60}}><div style={{fontSize:10,color:"#aaa",marginBottom:3}}>TOTAL £</div><input type="number" min="0" className="inp sm" style={{width:"100%"}} placeholder="0.00" value={lTotal} onChange={e=>setLTotal(e.target.value)} onBlur={e=>setExtrasState(sid,ex=>({...ex,manualTotal:e.target.value}))}/></div>
-            </div>
-            <button className="btn danger" style={{marginTop:8,padding:"8px"}} onClick={()=>{updateExtras(sid,ex=>({...ex,manualCash:"",manualCard:"",manualTotal:"",manualFull:"",manualNight:"",manualHrs:""}));setLCash("");setLCard("");setLTotal("");setLFull("");setLNight("");setLHrs("");}}>Clear All Overrides</button>
-          </div>}
-        </div>
-      </div>
-    );
-  }
-
-  // ── Modals ──
-  function AddStaffModal({onClose}){
-    const[type,setType]=useState("foh"); // "foh" | "kitchen"
-    const[name,setName]=useState("");const[code,setCode]=useState("");const[rate,setRate]=useState("");const[shiftRate,setSR]=useState("");const[nightRate,setNR]=useState("");const[cardFixed,setCF]=useState("0");const[err,setErr]=useState("");const[saving,setSaving]=useState(false);
-    async function save(){
-      setErr("");if(!name.trim())return setErr("Enter a name");
-      setSaving(true);
-      if(type==="foh"){
-        if(!/^\d{4}$/.test(code)){setSaving(false);return setErr("Code must be 4 digits");}
-        const{data:newStaff,error}=await db.from("staff").insert({id:code,name:name.trim(),code,pay_type:"hourly",rate:rate||"0",shift_rate:shiftRate||"0",night_rate:nightRate||"0",card_fixed:cardFixed||"0",card_mode:"fixed"}).select().single();
-        if(error){setSaving(false);return setErr(error.code==="23505"?"Code already taken":error.message);}
-        setStaff(p=>[...p,{...newStaff,payType:"hourly",rate:rate||"0",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardFixed:cardFixed||"0",cardMode:"fixed",tipsPct:"0"}].sort((a,b)=>a.name.localeCompare(b.name)));
-        t("✅ "+name.trim()+" (FOH) added");
-      }else{
-        const{data,error}=await db.from("kitchen_staff").insert({name:name.trim(),cash_card:"cash",pay_type:"hourly",shift_rate:shiftRate||"0",night_rate:nightRate||"0",rate:rate||"0",card_mode:"fixed",card_fixed:cardFixed||"0"}).select().single();
-        if(error){setSaving(false);return setErr(error.message);}
-        setKitchenStaff(p=>[...p,{...data,payType:"hourly",shiftRate:shiftRate||"0",nightRate:nightRate||"0",cardMode:"fixed",cardFixed:cardFixed||"0"}]);
-        t("✅ "+name.trim()+" (Kitchen) added");
-      }
-      onClose();setSaving(false);
-    }
-    return(
-      <div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}>
-        <div className="stitle">➕ Add Staff Member</div>
-        <label className="lbl">Staff Type</label>
-        <div className="toggle" style={{marginBottom:14}}>
-          <button className={`tgl${type==="foh"?" on":""}`} onClick={()=>{setType("foh");setErr("");}}>👤 Front of House</button>
-          <button className={`tgl${type==="kitchen"?" on":""}`} onClick={()=>{setType("kitchen");setErr("");}}>👨‍🍳 Kitchen</button>
-        </div>
-        <label className="lbl">Full Name</label>
-        <input className="inp" placeholder={type==="foh"?"e.g. Amy Chen":"e.g. Marco"} value={name} onChange={e=>setName(e.target.value)}/>
-        {type==="foh"&&<>
-          <label className="lbl">4-Digit Login Code</label>
-          <input className="inp code" type="password" inputMode="numeric" maxLength={4} placeholder="••••" value={code} onChange={e=>setCode(e.target.value)}/>
-        </>}
-        <div style={{display:"flex",gap:8}}>
-          <div style={{flex:1}}><label className="lbl">£/HR</label><input className="inp" type="number" placeholder="0.00" value={rate} onChange={e=>setRate(e.target.value)}/></div>
-          <div style={{flex:1}}><label className="lbl">Full Shift £</label><input className="inp" type="number" placeholder="0.00" value={shiftRate} onChange={e=>setSR(e.target.value)}/></div>
-          <div style={{flex:1}}><label className="lbl">Night £</label><input className="inp" type="number" placeholder="0.00" value={nightRate} onChange={e=>setNR(e.target.value)}/></div>
-        </div>
-        <label className="lbl">Fixed Card Payment (£)</label>
-        <input className="inp" type="number" placeholder="0.00" value={cardFixed} onChange={e=>setCF(e.target.value)}/>
-        {err&&<div className="err">{err}</div>}
-        <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Add Staff Member"}</button>
-        <button className="btn sec" onClick={onClose}>Cancel</button>
-      </div></div>
-    );
-  }
-
-  function PinModal({onClose}){
-    const[curr,setCurr]=useState("");const[n1,setN1]=useState("");const[n2,setN2]=useState("");const[err,setErr]=useState("");const[saving,setSaving]=useState(false);
-    async function save(){setErr("");setSaving(true);const{data}=await db.from("app_settings").select("value").eq("key","manager_pin").maybeSingle();if(curr!==(data?.value||"00000000")){setErr("Current PIN wrong");setSaving(false);return;}if(!/^\d{8}$/.test(n1)){setErr("New PIN must be 8 digits");setSaving(false);return;}if(n1!==n2){setErr("PINs don't match");setSaving(false);return;}await db.from("app_settings").upsert({key:"manager_pin",value:n1});t("✅ PIN updated!");onClose();setSaving(false);}
-    return(<div className="overlay" onClick={onClose}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">🔒 Change Manager PIN</div><label className="lbl">Current PIN</label><input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={curr} onChange={e=>setCurr(e.target.value)}/><label className="lbl">New PIN</label><input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={n1} onChange={e=>setN1(e.target.value)}/><label className="lbl">Confirm New PIN</label><input className="inp code" type="password" inputMode="numeric" maxLength={8} placeholder="••••••••" value={n2} onChange={e=>setN2(e.target.value)}/>{err&&<div className="err">{err}</div>}<button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Change PIN"}</button><button className="btn sec" onClick={onClose}>Cancel</button></div></div>);
-  }
-
-  function SettingsModal({onClose}){
-    const[webAppUrl,setWebAppUrl]=useState(gsConfig.webAppUrl||"");
-    const[payrollId,setPayrollId]=useState(gsConfig.payrollId||"");
-    const[takingsId,setTakingsId]=useState(gsConfig.takingsId||"");
-    const[clockLogId,setClockLogId]=useState(gsConfig.clockLogId||"");
-    const[welcomeMsg,setWelcomeMsg]=useState(gsConfig.welcomeMsg||"");
-    const[saving,setSaving]=useState(false);
-    const[showScript,setShowScript]=useState(false);
-    const[testing,setTesting]=useState(false);
-    const[testResult,setTestResult]=useState(null);
-
-    const urlTrimmed=webAppUrl.trim();
-    const urlLooksValid=urlTrimmed.startsWith("https://script.google.com/macros/s/")&&urlTrimmed.endsWith("/exec");
-    const urlHasDev=urlTrimmed.endsWith("/dev");
-
-    // Auto-extract spreadsheet ID if user pastes full URL
-    function extractSheetId(val){
-      const v=val.trim();
-      const m=v.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-      if(m)return m[1];
-      // if it looks like just an ID already (no slashes, no spaces)
-      if(/^[a-zA-Z0-9_-]+$/.test(v))return v;
-      return v;
-    }
-    const cleanPayrollId=extractSheetId(payrollId);
-    const cleanTakingsId=extractSheetId(takingsId);
-    const payrollIdValid=/^[a-zA-Z0-9_-]{20,}$/.test(cleanPayrollId);
-    const takingsIdValid=/^[a-zA-Z0-9_-]{20,}$/.test(cleanTakingsId);
-
-    async function save(){
-      setSaving(true);
-      await saveGsConfig({webAppUrl:urlTrimmed,payrollId:cleanPayrollId,takingsId:cleanTakingsId,clockLogId:clockLogId.trim(),welcomeMsg:welcomeMsg.trim()});
-      setSaving(false);onClose();
-    }
-    async function runTest(){setTesting(true);setTestResult(null);const r=await testWebApp(urlTrimmed);setTestResult(r);setTesting(false);}
-    async function testIds(){
-      setTesting(true);setTestResult(null);
-      const results=[];
-      for(const[label,id] of [["Payroll",cleanPayrollId],["Takings",cleanTakingsId],["Clock Log",clockLogId.trim()]]){
-        if(!id){results.push(`${label}: no ID entered`);continue;}
-        const payload=encodeURIComponent(JSON.stringify({
-          spreadsheetId:id,tab:"TestConnection",
-          rows:[["Test",label,new Date().toLocaleString()]],
-          startRow:1,clear:true,ts:Date.now()
-        }));
-        try{
-          const res=await fetch(`${urlTrimmed}?payload=${payload}`,{method:"GET",cache:"no-store"});
-          const data=await res.json().catch(()=>null);
-          if(data&&data.ok){
-            results.push(`✅ ${label} ID works — tabs in that sheet: [${(data.sheets||[]).join(", ")}]`);
-          }else{
-            results.push(`❌ ${label} ID FAILED — "${data?.error||"no response"}" — ID used: "${id}"`);
-          }
-        }catch(e){results.push(`❌ ${label}: network error — ${e.message}`);}
-      }
-      setTestResult({ok:results.every(r=>r.startsWith("✅")),msg:results.join("\n\n")});
-      setTesting(false);
-    }
-
-    const scriptCode=`function doGet(e) {\n  if (!e.parameter || !e.parameter.payload) {\n    return ContentService.createTextOutput(JSON.stringify({ok:true,msg:"Sheets bridge is live"})).setMimeType(ContentService.MimeType.JSON);\n  }\n  try {\n    var body = JSON.parse(e.parameter.payload);\n    var ss = SpreadsheetApp.openById(body.spreadsheetId);\n    var sheet = ss.getSheetByName(body.tab);\n    if (!sheet) sheet = ss.insertSheet(body.tab);\n    // getInfo mode: return current row count without writing\n    if (body.getInfo) {\n      var sheets = ss.getSheets().map(function(s){return s.getName();});\n      return ContentService.createTextOutput(JSON.stringify({ok:true,rowCount:sheet.getLastRow(),sheets:sheets})).setMimeType(ContentService.MimeType.JSON);\n    }\n    if (body.clear) sheet.clearContents();\n    var rows = body.rows || [];\n    var written = 0;\n    if (rows.length > 0) {\n      var startRow = body.startRow || 1;\n      var maxCols = 0;\n      for (var i = 0; i < rows.length; i++) if (rows[i].length > maxCols) maxCols = rows[i].length;\n      for (var j = 0; j < rows.length; j++) {\n        while (rows[j].length < maxCols) rows[j].push("");\n      }\n      sheet.getRange(startRow, 1, rows.length, maxCols).setValues(rows);\n      written = rows.length;\n    }\n    SpreadsheetApp.flush();\n    var sheets = ss.getSheets().map(function(s){return s.getName();});\n    return ContentService.createTextOutput(JSON.stringify({ok:true,written:written,tab:body.tab,sheets:sheets,startRow:body.startRow||1})).setMimeType(ContentService.MimeType.JSON);\n  } catch (err) {\n    return ContentService.createTextOutput(JSON.stringify({ok:false,error:err.message,spreadsheetId:body?body.spreadsheetId:"unknown",tab:body?body.tab:"unknown"})).setMimeType(ContentService.MimeType.JSON);\n  }\n}\n\nfunction doPost(e) { return doGet(e); }`;
-
-    return(
-      <div className="overlay" onClick={onClose}>
-        <div className="sheet" onClick={e=>e.stopPropagation()}>
-          <div className="stitle">🔗 Google Sheets</div>
-          <div className="ssub2">Saved permanently in Supabase — set once, never lost</div>
-
-          <button className="btn sec" style={{marginTop:0,marginBottom:14}} onClick={()=>setShowScript(v=>!v)}>{showScript?"▲ Hide setup steps":"▼ Show 3-minute setup steps"}</button>
-          {showScript&&(
-            <div style={{background:"#FFF5EF",borderRadius:10,padding:"12px 13px",fontSize:12,color:"#444",marginBottom:14,lineHeight:1.8}}>
-              <strong>Step 1</strong> — Go to <strong>script.google.com</strong> → click <strong>New project</strong><br/>
-              <strong>Step 2</strong> — Delete everything in the editor, paste in this code:
-              <textarea readOnly className="lognote" rows={12} style={{fontFamily:"monospace",fontSize:10,marginTop:6,marginBottom:6,background:"#fff"}} value={scriptCode} onClick={e=>e.target.select()}/>
-              <button className="btn sm" style={{marginBottom:10}} onClick={()=>{navigator.clipboard.writeText(scriptCode);t("📋 Script copied!");}}>📋 Copy Script</button><br/>
-              <strong>Step 3</strong> — Click <strong>Deploy</strong> (top right) → <strong>New deployment</strong><br/>
-              <strong>Step 4</strong> — Click ⚙️ gear next to "Select type" → choose <strong>Web app</strong><br/>
-              <div style={{background:"#FEE2E2",border:"1px solid #E05252",borderRadius:8,padding:"8px 10px",margin:"6px 0"}}>
-                <strong>Step 5 — most common mistake:</strong> "Execute as" = <strong>Me</strong>. "Who has access" = <strong>Anyone</strong> — NOT "Anyone with Google account". Wrong choice = Google login page = app cannot connect.
-              </div>
-              <strong>Step 6</strong> — Click <strong>Deploy</strong> → authorize when asked (it is your own script)<br/>
-              <div style={{background:"#FEE2E2",border:"1px solid #E05252",borderRadius:8,padding:"8px 10px",margin:"6px 0"}}>
-                <strong>Step 7 — copy the correct URL:</strong> The URL must end in <strong>/exec</strong> — NOT /dev. The /dev URL requires a Google login. Copy the <strong>Web app URL</strong> from the deployment dialog.
-              </div>
-              <strong>Step 8</strong> — Paste the URL below, tap <strong>Test Connection</strong>, confirm it says "Connected", then save<br/>
-              <strong>Step 9</strong> — Both spreadsheets must be set to <strong>"Anyone with the link can edit"</strong>
-            </div>
-          )}
-
-          <label className="lbl">Web App URL</label>
-          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:4,borderColor:urlTrimmed?(urlLooksValid?"#50DC78":"#E05252"):"#E5E5E5"}}
-            placeholder="https://script.google.com/macros/s/…/exec"
-            value={webAppUrl}
-            onChange={e=>{setWebAppUrl(e.target.value);setTestResult(null);}}
-          />
-          {urlHasDev&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:8}}>⚠️ URL ends in /dev — this will never work. Copy the Web app URL (ends in /exec) from your deployment.</div>}
-          {urlTrimmed&&!urlLooksValid&&!urlHasDev&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:8}}>⚠️ URL must start with https://script.google.com/macros/s/ and end with /exec</div>}
-          {urlLooksValid&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:8}}>✓ URL format looks correct ({urlTrimmed.length} characters)</div>}
-          {urlTrimmed&&webAppUrl!==urlTrimmed&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:8}}>⚠️ Invisible spaces detected and will be stripped on save</div>}
-          {urlTrimmed&&<div style={{marginBottom:12}}>
-            <a href={urlTrimmed} target="_blank" rel="noreferrer" style={{fontSize:12,color:"#1E40AF",fontWeight:700}}>🌐 Open URL in browser tab →</a>
-            <div style={{fontSize:11,color:"#888",marginTop:3}}>Should show: <code style={{background:"#F0F0F0",padding:"1px 4px",borderRadius:3}}>{"{"}"ok":true,"msg":"Sheets bridge is live"{"}"}</code>. If it asks you to log in, "Who has access" is set wrong.</div>
-          </div>}
-
-          <button className="btn sec" style={{marginTop:0,marginBottom:8}} onClick={runTest} disabled={testing||!urlTrimmed}>{testing?"Testing…":"🔍 Test Connection"}</button>
-          {testResult&&(
-            <div style={{background:testResult.ok?"#D1FAE5":"#FEE2E2",border:`1.5px solid ${testResult.ok?"#50DC78":"#E05252"}`,borderRadius:10,padding:"10px 12px",marginBottom:8,fontSize:12,color:testResult.ok?"#065F46":"#7F1D1D",lineHeight:1.8,whiteSpace:"pre-wrap"}}>
-              {testResult.msg||testResult.err||""}
-            </div>
-          )}
-
-          <label className="lbl">Payroll Spreadsheet ID</label>
-          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:4,borderColor:payrollId?(payrollIdValid?"#50DC78":"#E05252"):"#E5E5E5"}} placeholder="Paste the spreadsheet ID or the full URL" value={payrollId} onChange={e=>setPayrollId(e.target.value)}/>
-          {payrollId&&!payrollIdValid&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ Doesn't look like a valid spreadsheet ID. Paste the full spreadsheet URL and we'll extract it automatically.</div>}
-          {payrollId&&payrollIdValid&&cleanPayrollId!==payrollId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ Will save ID: <code style={{background:"#F0F0F0",padding:"1px 4px",borderRadius:3}}>{cleanPayrollId}</code></div>}
-          {payrollId&&payrollIdValid&&cleanPayrollId===payrollId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ ID looks valid</div>}
-          <div style={{fontSize:11,color:"#888",marginBottom:14}}>Paste the full sheet URL or just the ID — we auto-extract it</div>
-
-          <label className="lbl">Takings Spreadsheet ID</label>
-          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:4,borderColor:takingsId?(takingsIdValid?"#50DC78":"#E05252"):"#E5E5E5"}} placeholder="Paste the spreadsheet ID or the full URL" value={takingsId} onChange={e=>setTakingsId(e.target.value)}/>
-          {takingsId&&!takingsIdValid&&<div style={{color:"#E05252",fontSize:11,fontWeight:700,marginBottom:4}}>⚠️ Doesn't look like a valid spreadsheet ID. Paste the full spreadsheet URL and we'll extract it automatically.</div>}
-          {takingsId&&takingsIdValid&&cleanTakingsId!==takingsId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ Will save ID: <code style={{background:"#F0F0F0",padding:"1px 4px",borderRadius:3}}>{cleanTakingsId}</code></div>}
-          {takingsId&&takingsIdValid&&cleanTakingsId===takingsId.trim()&&<div style={{color:"#065F46",fontSize:11,fontWeight:700,marginBottom:4}}>✓ ID looks valid</div>}
-          <div style={{fontSize:11,color:"#888",marginBottom:14}}>Paste the full sheet URL or just the ID — we auto-extract it</div>
-
-          <label className="lbl">Clock Log Spreadsheet ID</label>
-          <input className="inp sm" style={{display:"block",width:"100%",marginBottom:4,borderColor:clockLogId?(clockLogId.length>20?"#50DC78":"#E05252"):"#E5E5E5"}} placeholder="Paste the ID or full URL of Ming's clock log sheet" value={clockLogId} onChange={e=>setClockLogId(e.target.value)}/>
-          <div style={{fontSize:11,color:"#888",marginBottom:14}}>The spreadsheet for daily clock log auto-push (Ming's clock log)</div>
-
-          {/* Test whether the IDs actually open real spreadsheets */}
-          {urlLooksValid&&(cleanPayrollId||cleanTakingsId)&&(
-            <div style={{marginBottom:14}}>
-              <button className="btn sec" style={{marginTop:0}} onClick={testIds} disabled={testing}>
-                {testing?"Testing…":"🧪 Test Spreadsheet IDs (try a test write)"}
-              </button>
-              <div style={{fontSize:11,color:"#888",marginTop:6}}>This writes one test row to a "TestConnection" tab — confirms your spreadsheet IDs are correct before saving.</div>
-            </div>
-          )}
-
-          <label className="lbl">Welcome Message for Staff</label>
-          <textarea className="lognote" rows={3} style={{marginBottom:14,fontSize:14}} placeholder="e.g. Welcome back! Remember: Friday is early close at 10pm." value={welcomeMsg} onChange={e=>setWelcomeMsg(e.target.value)}/>
-          <div style={{fontSize:11,color:"#888",marginBottom:14}}>This message shows to all staff when they log in. Leave blank to show nothing.</div>
-
-          <button className="btn" onClick={save} disabled={saving}>{saving?"Saving…":"Save & Connect"}</button>
-          <button className="btn sec" onClick={onClose}>Cancel</button>
-        </div>
-      </div>
-    );
-  }
-
   if(loading)return<Loading text="Loading manager data…"/>;
   const{cash:totCash,card:totCard,gross:totGross}=payTotals();
   const gsReady=!!(gsConfig.webAppUrl&&gsConfig.payrollId&&gsConfig.takingsId);
