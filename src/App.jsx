@@ -223,6 +223,8 @@ body{font-family:'Inter',sans-serif;background:#FFF5EF;-webkit-tap-highlight-col
 .asub{font-size:14px;color:#888;margin-bottom:24px;line-height:1.6;}
 .lbl{font-size:13px;font-weight:700;color:#888;margin-bottom:5px;display:block;text-transform:uppercase;letter-spacing:.5px;}
 .inp{width:100%;padding:14px;border:2px solid #E5E5E5;border-radius:12px;font-size:16px;font-family:inherit;margin-bottom:14px;outline:none;transition:border-color .2s;background:#fff;}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}
+input[type=number]{-moz-appearance:textfield;}
 .inp:focus{border-color:#E8620A;}.inp.code{font-size:26px;letter-spacing:8px;font-weight:800;text-align:center;color:#1A1A2E;}
 .inp.sm{padding:9px 11px;font-size:13px;margin-bottom:0;border-radius:9px;}
 .inp.time{padding:8px 9px;font-size:12px;margin-bottom:0;flex:1;border-radius:8px;}
@@ -270,9 +272,9 @@ body{font-family:'Inter',sans-serif;background:#FFF5EF;-webkit-tap-highlight-col
 .toast{position:fixed;top:24px;left:50%;transform:translateX(-50%);background:#E8620A;color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;font-weight:700;z-index:999;white-space:normal;max-width:88vw;text-align:center;word-break:break-word;animation:fio 15s forwards;pointer-events:none;}
 @keyframes fio{0%{opacity:0;top:10px}3%{opacity:1;top:24px}88%{opacity:1}100%{opacity:0}}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;z-index:200;}
-.sheet{background:#fff;border-radius:24px 24px 0 0;padding:24px 20px 44px;width:100%;max-width:430px;max-height:90vh;overflow-y:auto;}
-.stitle{font-size:19px;font-weight:900;color:#1A1A2E;margin-bottom:4px;}
-.ssub2{font-size:13px;color:#888;margin-bottom:14px;}
+.sheet{background:#1A1A2E;color:#fff;background:#fff;border-radius:24px 24px 0 0;padding:24px 20px 44px;width:100%;max-width:430px;max-height:90vh;overflow-y:auto;}
+.stitle{color:#fff;font-size:19px;font-weight:900;color:#1A1A2E;margin-bottom:4px;}
+.ssub2{color:rgba(255,255,255,.8);font-size:13px;color:#888;margin-bottom:14px;}
 .toggle{display:flex;border:2px solid #E5E5E5;border-radius:10px;overflow:hidden;width:fit-content;}
 .tgl{padding:6px 13px;border:none;background:#fff;font-size:12px;font-weight:700;cursor:pointer;color:#888;}
 .tgl.on{background:#E8620A;color:#fff;}
@@ -660,59 +662,8 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
       </div>}
 
       {tab==="clock"&&<div className="body">
-        <div className="sec">Clock In / Out</div>
-        {/* Info banner for hourly staff */}
-        {parseFloat(user.shiftRate||0)===0&&parseFloat(user.rate||0)>0&&(
-          <div style={{background:"#FFF5EF",border:"1.5px solid #E8620A",borderRadius:11,padding:"10px 13px",marginBottom:12,fontSize:13,color:"#E8620A",lineHeight:1.7}}>
-            <strong>Hourly-paid staff:</strong> Select your break time before clocking out. If finishing early or staying late, you'll be asked why.
-          </div>
-        )}
-        {/* Clock card */}
-        <div className="clkcard">
-          <div className="clktime">{now.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}</div>
-          <div className="clkdate">{now.toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long"})}</div>
-          <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:"● Not clocked in"}</div>
-          {clockedIn&&parseFloat(user.rate||0)>0&&(
-            <div style={{margin:"10px 0 0"}}>
-              <div style={{fontSize:13,color:"rgba(255,255,255,.7)",marginBottom:6}}>Break time</div>
-              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                {[0,0.5,1,1.5,2,2.5,3].map(v=><button key={v} className={`tgl${parseFloat(breakTime)===v?" on":""}`} style={{padding:"6px 10px",fontSize:12,background:parseFloat(breakTime)===v?"#E8620A":"rgba(255,255,255,.15)",color:"#fff",border:"none",borderRadius:7}} onClick={()=>setBreakTime(String(v))}>{v===0?"None":v+"hr"}</button>)}
-              </div>
-            </div>
-          )}
-          <div className="clkbtns" style={{marginTop:14}}>
-            {(()=>{
-              const todayRota=rota.find(sh=>sh.date===todayISO());
-              const isOff=!todayRota||todayRota.type==="Off";
-              if(isOff&&!clockedIn)return<div style={{fontSize:13,color:"rgba(255,255,255,.7)",textAlign:"center",padding:"10px 0"}}>📅 Not scheduled today — contact your manager if this is incorrect.</div>;
-              return(<>
-                <button className="clkbtn in" onClick={clockIn} disabled={clockedIn}>🟢 Clock In</button>
-                <button className="clkbtn out" onClick={clockOut} disabled={!clockedIn||logs.some(l=>l.date===todayISO()&&l.note==="sick_leave")}>🔴 Clock Out</button>
-              </>);
-            })()}
-          </div>
-          {/* Back-stamp option — shown when not clocked in and scheduled today */}
-          {!clockedIn&&(()=>{
-            const todayRota=rota.find(sh=>sh.date===todayISO());
-            if(!todayRota||todayRota.type==="Off")return null;
-            let startTime="";
-            if(todayRota.type==="Full Day (11am–close)")startTime="11:00";
-            else if(todayRota.type==="Night (5:30pm–close)")startTime="17:30";
-            else if(todayRota.customIn)startTime=todayRota.customIn;
-            if(!startTime)return null;
-            return(<div style={{marginTop:10,borderTop:"1px solid rgba(255,255,255,.1)",paddingTop:10}}>
-              <div style={{fontSize:11,color:"rgba(255,255,255,.5)",marginBottom:6,textAlign:"center"}}>Forgot to clock in at your start time?</div>
-              <button style={{width:"100%",padding:"10px",borderRadius:10,border:"1.5px solid rgba(255,255,255,.3)",background:"rgba(255,255,255,.1)",color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer"}} onClick={async()=>{
-                const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:startTime,note:"back-stamped"}).select().single();
-                if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(startTime);t("✅ Back-stamped to "+startTime);}
-                else t("❌ "+error.message);
-              }}>⏪ Back-stamp to {startTime}</button>
-            </div>);
-          })()}
-        </div>
-        {/* 7-day log */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-          <div className="sec" style={{margin:0}}>Weekly Log</div>
+          <div className="sec" style={{margin:0}}>My Clock Log</div>
           <div style={{display:"flex",gap:6}}>
             <button className="btn sm sec" style={{padding:"5px 10px"}} onClick={()=>setStaffClockWeek(addDays(staffClockWeek,-7))}>‹</button>
             <span style={{fontSize:12,color:"#888",alignSelf:"center"}}>{fmtDate(staffClockWeek)}–{fmtDate(addDays(staffClockWeek,6))}</span>
@@ -735,35 +686,8 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
             }
           </div>);
         })}
-        {lateModal&&<div className="overlay"><div className="sheet">
-          <div className="stitle">⏰ Late Clock-Out</div>
-          <div className="ssub2">You're clocking out later than your scheduled end time. Which applies?</div>
-          <button className="btn" onClick={()=>doClockOut("forgot")}>🕐 I forgot to clock out earlier</button>
-          <button className="btn sec" onClick={()=>doClockOut("overtime")}>⏱ I was working extra time</button>
-          <button className="btn sec" onClick={()=>setLateModal(false)}>Cancel</button>
-        </div></div>}
-        {earlyModal==="confirm"&&<div className="overlay"><div className="sheet">
-          <div className="stitle">🌙 Finishing Early?</div>
-          <div className="ssub2">You're clocking out before your scheduled end time. Is it quiet and your manager is happy for you to finish now?</div>
-          <button className="btn" onClick={()=>{setEarlyModal(null);doClockOut("left_early");}}>Yes, finishing early</button>
-          <button className="btn sec" onClick={()=>setEarlyModal(null)}>Cancel — stay clocked in</button>
-        </div></div>}
-        {earlyModal==="blocked"&&<div className="overlay"><div className="sheet">
-          <div className="stitle">⚠️ Cannot Clock Out</div>
-          <div className="ssub2">You're trying to clock out more than 1 hour early. If you're unwell and need to leave, please <strong>call the manager</strong> — they will clock you out and record a sick leave note.</div>
-          <button className="btn sec" onClick={()=>setEarlyModal(null)}>OK</button>
-        </div></div>}
-        {checklistModal&&<div className="overlay"><div className="sheet"><div className="stitle">🔒 End-of-Shift Checklist</div><div className="ssub2">Please check all items before clocking out.</div>
-          {CHECKLIST_ITEMS.map(item=><div key={item.key} onClick={()=>setChecklist(p=>({...p,[item.key]:!p[item.key]}))} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 0",borderBottom:"1px solid #F0F0F0",cursor:"pointer"}}>
-            <div style={{width:24,height:24,borderRadius:6,border:`2px solid ${checklist[item.key]?"#E8620A":"#E5E5E5"}`,background:checklist[item.key]?"#E8620A":"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-              {checklist[item.key]&&<span style={{color:"#fff",fontSize:14,fontWeight:900}}>✓</span>}
-            </div>
-            <span style={{fontSize:14,color:checklist[item.key]?"#1A1A2E":"#888"}}>{item.label}</span>
-          </div>)}
-          <button className="btn" style={{marginTop:14,opacity:checklistDone?1:.5}} disabled={!checklistDone} onClick={()=>{setChecklistModal(false);doActualClockOut();}}>Confirm & Clock Out</button>
-          <button className="btn sec" onClick={()=>setChecklistModal(false)}>Cancel</button>
-        </div></div>}
       </div>}
+
       {tab==="rota"&&<div className="body"><div className="sec">My Rota</div>
         <div style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:11,padding:"10px 13px",marginBottom:12,fontSize:12,color:"#1E40AF",lineHeight:1.7}}>
           📅 <strong>Check your rota every Wednesday</strong> and accept or reject by <strong>Friday</strong>. Also don't forget to report any absence or block the days you cannot work. For any emergency, contact the manager directly.
@@ -971,6 +895,7 @@ function ManagerApp({onLogout}){
   const[kpiCompare,setKpiCompare]=useState("none");
   const[payrollLoaded,setPayrollLoaded]=useState(false);
   const[expandedSummaryStaff,setExpandedSummaryStaff]=useState(new Set());
+  const[bankTransferView,setBankTransferView]=useState(null);
   const[pushedClockDates,setPushedClockDates]=useState(()=>{try{return new Set(JSON.parse(localStorage.getItem("pushedClockDates")||"[]"));}catch{return new Set();}});
   const clockLogDrafts=React.useRef({}); // {logId: {time_in, time_out, note}} — local edits before Confirm
   // Accumulated clock log history stored in localStorage — written as full history on each push
@@ -1756,6 +1681,7 @@ function ManagerApp({onLogout}){
     });
     setExtras(emptyExtras);
     setClearKey(k=>k+1);
+    setPayrollLoaded(false);
     // Push clock log for the full payroll week (all 7 days, sorted by date)
     if(gsConfig.clockLogId){
       t("⏳ Pushing Clock Log for week…");
@@ -2640,6 +2566,9 @@ function ManagerApp({onLogout}){
                   }
                   return(<button className="btn sm" style={{marginTop:6,background:"#FEE2E2",color:"#7F1D1D"}} onClick={async()=>{
                     if(!window.confirm(`Mark ${s.name} as sick leave on ${dispDate(dateForEntry,true)}?`))return;
+                    // Block if staff already clocked in that day
+                    const alreadyClockedIn=sLogsAll.some(l=>l.date===dateForEntry&&l.time_in&&l.note!=="sick_leave");
+                    if(alreadyClockedIn)return t(`⚠️ Cannot mark emergency absence — ${s.name} has already clocked in today. Ask them to clock out first.`);
                     const{data,error}=await db.from("clock_logs").insert({staff_id:s.id,staff_name:s.name,date:dateForEntry,time_in:"",time_out:"",note:"sick_leave"}).select().single();
                     if(!error){
                       setClockLogs(p=>[data,...p]);
@@ -2838,7 +2767,44 @@ function ManagerApp({onLogout}){
                 <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
                   <input type="month" className="inp sm" style={{flex:1}} value={payrollMonth} onChange={e=>setPayrollMonth(e.target.value)}/>
                 </div>
-                <button className="expbtn p" style={{background:"#2C3E6B"}} onClick={exportPayrollMonthly}>🔗 Push to PayrollMonthly Tab</button>
+                <button className="expbtn p" style={{background:"#2C3E6B"}} onClick={async()=>{
+  // Show bank transfer view
+  const allEx2=(await db.from("payroll_extras").select("*")).data||[];
+  const month=payrollMonth;
+  const monthStart=month+"-01";
+  const monthEnd=new Date(month.split("-")[0],month.split("-")[1],0).toISOString().split("T")[0];
+  const people=[...staff.map(s=>({id:s.id,name:s.name,monthlyCard:parseFloat(s.monthlyCard||0),tipsPct:parseFloat(s.tipsPct||0),type:"FOH"})),...kitchenStaff.map(k=>({id:kId(k.id),name:k.name,monthlyCard:parseFloat(k.monthlyCard||0),tipsPct:0,type:"Kitchen"}))];
+  const transfers=people.map(p=>{
+    const weekExs=allEx2.filter(e=>e.staff_id===p.id);
+    const tips=weekExs.reduce((a,e)=>a+parseFloat(e.tips||0),0);
+    return{...p,total:r2(p.monthlyCard+tips)};
+  }).filter(p=>p.total>0);
+  setBankTransferView(transfers);
+}}>💳 View Monthly Bank Transfer</button>
+{bankTransferView&&(<div className="overlay" onClick={()=>setBankTransferView(null)}><div className="sheet" onClick={e=>e.stopPropagation()} style={{maxWidth:480,width:"100%"}}>
+  <div className="stitle">💳 Monthly Bank Transfers</div>
+  <div className="ssub2" style={{marginBottom:12}}>{payrollMonth} — card payments + tips</div>
+  {bankTransferView.map(p=><div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid rgba(255,255,255,.1)"}}>
+    <div><div style={{fontWeight:800}}>{p.name}</div><div style={{fontSize:12,opacity:.7}}>{p.type} · Card: £{p.monthlyCard} + Tips: £{r2(p.total-p.monthlyCard)}</div></div>
+    <div style={{fontWeight:900,fontSize:16,color:"#50DC78"}}>£{p.total}</div>
+  </div>)}
+  <div style={{marginTop:16,paddingTop:12,borderTop:"1px solid rgba(255,255,255,.2)"}}>
+    <div style={{fontWeight:800,marginBottom:4}}>Total bank transfers: £{r2(bankTransferView.reduce((a,p)=>a+p.total,0))}</div>
+    <button className="btn" style={{marginTop:8,background:"#50DC78",color:"#1A1A2E"}} onClick={async()=>{
+      const ts=new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"2-digit",hour:"2-digit",minute:"2-digit"});
+      const monthlyRows=await buildPayrollMonthly(payrollMonth,null);
+      if(monthlyRows&&monthlyRows.length>1){
+        // Add payment_date column
+        const hdrWithDate=[...monthlyRows[0],"Payment Date"];
+        const rowsWithDate=monthlyRows.slice(1).map(r=>[...r,ts]);
+        const wr=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",[hdrWithDate,...rowsWithDate]);
+        if(wr.ok){setBankTransferView(null);t("✅ PayrollMonthly pushed with payment date "+ts);}
+        else t("❌ Monthly push failed: "+wr.err);
+      }else t("⚠️ No monthly data to push");
+    }}>✓ Payment Made — Push to Monthly Sheet</button>
+    <button className="btn sec" style={{marginTop:8}} onClick={()=>setBankTransferView(null)}>Close</button>
+  </div>
+</div></div>)}
               </div>
             </div>
           </>
@@ -2871,7 +2837,7 @@ function ManagerApp({onLogout}){
               {absences.filter(a=>a.is_cancelled&&!a.manager_seen).map(a=>(
                 <div key={a.id} style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:12,padding:"10px 13px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <div><div style={{fontWeight:800,color:"#7F1D1D",fontSize:13}}>{a.staff_name}</div><div style={{fontSize:12,color:"#991B1B",marginTop:2}}>{dispDate(a.date,true)} — {a.period} (cancelled by staff)</div></div>
-                  <button onClick={async()=>{await db.from("absences").update({manager_seen:true}).eq("id",a.id);setAbsences(p=>p.map(x=>x.id===a.id?{...x,manager_seen:true}:x));}} style={{background:"none",border:"1.5px solid #E05252",borderRadius:8,padding:"4px 10px",cursor:"pointer",fontSize:11,color:"#7F1D1D",fontWeight:700}}>✓ Seen</button>
+                  <button onClick={async()=>{await db.from("absences").update({manager_seen:true}).eq("id",a.id);setAbsences(p=>p.filter(x=>x.id!==a.id));}} style={{background:"none",border:"1.5px solid #E05252",borderRadius:8,padding:"4px 10px",cursor:"pointer",fontSize:11,color:"#7F1D1D",fontWeight:700}}>✓ Seen</button>
                 </div>
               ))}
             </div>)}
