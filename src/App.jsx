@@ -519,7 +519,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   }
   async function clockIn(){
     // Sick leave block
-    if(logs.some(l=>l.date===todayISO()&&l.note==="sick_leave"))return t("🤒 You've been marked as sick leave today — contact your manager.");
+    if(logs.some(l=>l.date===todayISO()&&l.note==="sick_leave")||rota.some(sh=>sh.date===todayISO()&&sh.type==="Sick Leave"))return t("🤒 You've been marked as sick leave today — contact your manager.");
     // Once-per-day restriction
     const todayDone=logs.find(l=>l.date===todayISO()&&l.time_in&&l.time_out);
     if(todayDone)return t("⚠️ You've already clocked in and out today. Contact your manager if you need a correction.");
@@ -773,7 +773,7 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
         <div style={{background:"#FEF3C7",border:"1.5px solid #F59E0B",borderRadius:11,padding:"11px 13px",marginBottom:12,fontSize:13,color:"#78350F",lineHeight:1.7}}>
           ⚠️ <strong>Need to report an absence within the next 7 days?</strong> Please call or message the manager directly — do not use this form for urgent absences.
         </div>
-        <div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work. Dates 7+ days away can be reported here.</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={addDays(todayISO(),1)} onChange={e=>setAbsDate(e.target.value)}/>{absLessThan7Days&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 7 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is within the next 7 days. Please <strong>call or message the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod}>Send to Manager</button></div>{absences.length>0&&<>{<div className="sec">Reported</div>}{absences.map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><button onClick={async()=>{if(new Date(a.date+"T12:00:00")<=new Date(todayISO()+"T12:00:00"))return t("⚠️ Cannot cancel a past absence");const{error}=await db.from("absences").update({is_cancelled:true}).eq("id",a.id);if(!error){setAbsences(p=>p.map(x=>x.id===a.id?{...x,is_cancelled:true}:x));t("✅ Absence cancelled — manager notified");}else t("❌ "+error.message);}} style={{background:"none",border:"1.5px solid #E05252",borderRadius:8,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#E05252",fontWeight:700}}>✕ Cancel</button></div>)}</> }</div>}
+        <div className="abscard"><div style={{fontSize:14,fontWeight:800,color:"#1A1A2E",marginBottom:4}}>📅 Can't come in?</div><div style={{fontSize:12,color:"#888",marginBottom:12}}>Pick the date and when you can't work. Dates 7+ days away can be reported here.</div><label className="lbl">Which day?</label><input type="date" className="inp sm" style={{display:"block",width:"100%",marginBottom:12}} value={absDate} min={addDays(todayISO(),1)} onChange={e=>setAbsDate(e.target.value)}/>{absLessThan7Days&&<div style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:11,padding:"11px 13px",marginBottom:12}}><div style={{fontSize:13,fontWeight:800,color:"#7F1D1D",marginBottom:4}}>⚠️ Less than 7 days notice</div><div style={{fontSize:12,color:"#991B1B",lineHeight:1.6}}>This date is within the next 7 days. Please <strong>call or message the manager directly</strong> as soon as possible.</div></div>}<label className="lbl" style={{marginBottom:7}}>Which part?</label><div className="peribtns">{["Morning","Evening","Full Day"].map(p=><button key={p} className={`pbtn${absPeriod===p?" sel":""}`} onClick={()=>setAbsPeriod(p)}>{p==="Morning"?"🌅":p==="Evening"?"🌙":"☀️"}<br/>{p}</button>)}</div><button className="btn" style={{marginTop:10}} onClick={reportAbsence} disabled={!absDate||!absPeriod}>Send to Manager</button></div>{absences.filter(a=>!a.is_cancelled).length>0&&<>{<div className="sec">Reported</div>}{absences.filter(a=>!a.is_cancelled).map(a=><div key={a.id} style={{background:"#FFF5EF",borderRadius:12,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}><div><div style={{fontSize:13,fontWeight:700,color:"#1A1A2E"}}>{dispDate(a.date,true)}</div><div style={{fontSize:11,color:"#aaa"}}>{a.period}</div></div><button onClick={async()=>{if(new Date(a.date+"T12:00:00")<=new Date(todayISO()+"T12:00:00"))return t("⚠️ Cannot cancel a past absence");const{error}=await db.from("absences").update({is_cancelled:true}).eq("id",a.id);if(!error){setAbsences(p=>p.map(x=>x.id===a.id?{...x,is_cancelled:true}:x));t("✅ Absence cancelled — manager notified");}else t("❌ "+error.message);}} style={{background:"none",border:"1.5px solid #E05252",borderRadius:8,padding:"3px 9px",cursor:"pointer",fontSize:11,color:"#E05252",fontWeight:700}}>✕ Cancel</button></div>)}</> }</div>}
       {tab==="takings"&&<div className="body">
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
           <div className="sec" style={{margin:0}}>📊 Daily Takings</div>
@@ -2340,6 +2340,7 @@ function ManagerApp({onLogout}){
 
   if(loading)return<Loading text="Loading manager data…"/>;
   const newCount=takings.filter(s=>s.is_new).length;
+  const cancelledAbsCount=absences.filter(a=>a.is_cancelled&&!a.manager_seen).length;
   const{cash:totCash,card:totCard,gross:totGross}=payTotals();
   const gsReady=!!(gsConfig.webAppUrl&&gsConfig.payrollId&&gsConfig.takingsId);
 
@@ -2356,7 +2357,7 @@ function ManagerApp({onLogout}){
       </div>
 
       <div className="mtabs">
-        {[{id:"staff",label:"👥 Staff"},{id:"rota",label:"📋 Rota"+(rejections.length>0?" ("+rejections.length+")":"")},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:"📊 Takings"+(newCount>0?" ("+newCount+")":"")},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:"📅 Absences"},{id:"kpi",label:"📈 KPI"}]
+        {[{id:"staff",label:"👥 Staff"},{id:"rota",label:"📋 Rota"+(rejections.length>0?" ("+rejections.length+")":"")},{id:"clock",label:"⏱ Clock"},{id:"payroll",label:"💷 Payroll"},{id:"takings",label:"📊 Takings"+(newCount>0?" ("+newCount+")":"")},{id:"expenses",label:"🧾 Expenses"},{id:"absence",label:"📅 Absences"+(cancelledAbsCount>0?" ("+cancelledAbsCount+")":"")},{id:"kpi",label:"📈 KPI"}]
           .map(tb=><button key={tb.id} className={`mtab${tab===tb.id?" on":""}${tb.id==="rota"&&rejections.length>0?" rej":""}`} onClick={()=>setTab(tb.id)}>{tb.label}</button>)}
       </div>
 
@@ -2631,8 +2632,8 @@ function ManagerApp({onLogout}){
                       // We restore to "Full Day (11am–close)" as safe default; manager can adjust
                       const rotaEntry=(rota[s.id]||[]).find(d=>d.date===dateForEntry);
                       if(rotaEntry?.rowId){
-                        await db.from("rota").update({shift_type:"Full Day (11am–close)"}).eq("id",rotaEntry.rowId);
-                        setRota(p=>({...p,[s.id]:(p[s.id]||[]).map(d=>d.date===dateForEntry?{...d,type:"Full Day (11am–close)"}:d)}));
+                        await db.from("rota").update({shift_type:"Off"}).eq("id",rotaEntry.rowId);
+                        setRota(p=>({...p,[s.id]:(p[s.id]||[]).map(d=>d.date===dateForEntry?{...d,type:"Off"}:d)}));
                       }
                       t(`✅ ${s.name} sick leave cancelled — rota restored, clock in/out re-enabled`);
                     }}>✅ Cancel Sick Leave for {dispDate(dateForEntry)}</button>);
@@ -2865,6 +2866,15 @@ function ManagerApp({onLogout}){
         {tab==="absence"&&(
           <>
             <div className="sec">Absences</div>
+            {cancelledAbsCount>0&&(<div style={{marginBottom:12}}>
+              <div style={{fontSize:13,fontWeight:800,color:"#E05252",marginBottom:8}}>🔔 Staff cancelled {cancelledAbsCount} absence(s)</div>
+              {absences.filter(a=>a.is_cancelled&&!a.manager_seen).map(a=>(
+                <div key={a.id} style={{background:"#FEE2E2",border:"1.5px solid #E05252",borderRadius:12,padding:"10px 13px",marginBottom:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div><div style={{fontWeight:800,color:"#7F1D1D",fontSize:13}}>{a.staff_name}</div><div style={{fontSize:12,color:"#991B1B",marginTop:2}}>{dispDate(a.date,true)} — {a.period} (cancelled by staff)</div></div>
+                  <button onClick={async()=>{await db.from("absences").update({manager_seen:true}).eq("id",a.id);setAbsences(p=>p.map(x=>x.id===a.id?{...x,manager_seen:true}:x));}} style={{background:"none",border:"1.5px solid #E05252",borderRadius:8,padding:"4px 10px",cursor:"pointer",fontSize:11,color:"#7F1D1D",fontWeight:700}}>✓ Seen</button>
+                </div>
+              ))}
+            </div>)}
             <button className="btn navy" style={{marginBottom:14}} onClick={()=>{setAbsModal(true);setAbsStaff("");setAbsDate("");setAbsPeriod("");}}>+ Log Absence for Staff</button>
             {absences.length===0?<div className="empty"><div className="emptyicon">📅</div><div className="emptytxt">No absences reported</div></div>
               :absences.map(a=><div key={a.id} style={{background:"#FFF8EC",border:"1.5px solid #E8620A",borderRadius:12,padding:"10px 13px",marginBottom:9,display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><div style={{fontWeight:800,color:"#1A1A2E",fontSize:13}}>👤 {a.staff_name}</div><div style={{fontSize:12,color:"#888",marginTop:2}}>{dispDate(a.date,true)} — {a.period}</div></div><button onClick={async()=>{await db.from("absences").delete().eq("id",a.id);setAbsences(p=>p.filter(x=>x.id!==a.id));}} style={{background:"none",border:"none",cursor:"pointer",fontSize:15,color:"#ccc"}}>🗑️</button></div>)}
