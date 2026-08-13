@@ -269,10 +269,10 @@ input[type=number]{-moz-appearance:textfield;}
 .peribtns{display:flex;gap:6px;margin-bottom:12px;}
 .pbtn{flex:1;padding:10px 4px;border:2px solid #E5E5E5;border-radius:10px;background:#fff;font-size:12px;font-weight:700;color:#1A1A2E;cursor:pointer;text-align:center;}
 .pbtn.sel{border-color:#E8620A;background:#FFF8EC;}
-.toast{position:fixed;top:24px;left:50%;transform:translateX(-50%);background:#E8620A;color:#fff;padding:10px 18px;border-radius:20px;font-size:13px;font-weight:700;z-index:999;white-space:normal;max-width:88vw;text-align:center;word-break:break-word;animation:fio 15s forwards;pointer-events:none;}
+.toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#E8620A;color:#fff;padding:10px 16px;border-radius:20px;font-size:13px;font-weight:700;z-index:999;white-space:normal;max-width:92vw;text-align:center;word-break:break-word;word-wrap:break-word;animation:fio 15s forwards;pointer-events:none;}
 @keyframes fio{0%{opacity:0;top:10px}3%{opacity:1;top:24px}88%{opacity:1}100%{opacity:0}}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;z-index:200;}
-.sheet{background:#1A1A2E;color:#fff;background:#fff;border-radius:24px 24px 0 0;padding:24px 20px 44px;width:100%;max-width:430px;max-height:90vh;overflow-y:auto;}
+.sheet{background:#1A1A2E;color:#fff;max-height:90vh;overflow-y:auto;background:#fff;border-radius:24px 24px 0 0;padding:24px 20px 44px;width:100%;max-width:430px;max-height:90vh;overflow-y:auto;}
 .stitle{color:#fff;font-size:19px;font-weight:900;color:#1A1A2E;margin-bottom:4px;}
 .ssub2{color:rgba(255,255,255,.8);font-size:13px;color:#888;margin-bottom:14px;}
 .toggle{display:flex;border:2px solid #E5E5E5;border-radius:10px;overflow:hidden;width:fit-content;}
@@ -325,7 +325,7 @@ input[type=number]{-moz-appearance:textfield;}
 .tmsg-d{font-size:12px;color:#047857;}
 .tmsg.new{background:#FFF8EC;border-color:#E8620A;}
 .tmsg.new .tmsg-h{color:#78350F;}.tmsg.new .tmsg-d{color:#92400E;}
-.notif{background:linear-gradient(135deg,#E8620A,#E8940A);border-radius:14px;padding:14px;margin-bottom:14px;cursor:pointer;}
+.notif{background:linear-gradient(135deg,#E8620A,#E8940A);border-radius:14px;padding:14px;margin-bottom:14px;cursor:pointer;;word-wrap:break-word;overflow-wrap:break-word}
 .notif-t{font-size:14px;font-weight:900;color:#1A1A2E;margin-bottom:3px;}
 .notif-s{font-size:12px;color:rgba(26,39,68,.7);}
 .warn{background:#FEE2E2;border:2px solid #E05252;border-radius:13px;padding:12px 14px;margin-bottom:12px;}
@@ -1750,7 +1750,7 @@ function ManagerApp({onLogout}){
 
   async function pushClockLog(date){
     if(!gsConfig.webAppUrl||!gsConfig.clockLogId)return;
-    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Override At"];
+    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Lost Hours (hrs)","Override At"];
     const rows=[hdr];
     const dayLogs=clockLogs.filter(l=>l.date===date);
     dayLogs.forEach(l=>{
@@ -1792,7 +1792,15 @@ function ManagerApp({onLogout}){
       })();
       const overrideDate=l.override_at?new Date(l.override_at):null;
       const overrideLabel=(overrideDate&&overrideDate.getFullYear()>2020)?overrideDate.toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
-      rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",overrideLabel]);
+      // Compute lost hours for left_early notes on custom shifts
+        let lostHrs="";
+        if((l.note||"").includes("left_early")&&rotaEntry&&rotaEntry.customOut&&l.time_out){
+          const[eH,eM]=rotaEntry.customOut.split(":").map(Number);
+          const[oH,oM]=l.time_out.split(":").map(Number);
+          const diffMins=(eH*60+eM)-(oH*60+oM);
+          if(diffMins>10)lostHrs=roundHrs025(diffMins/60)+"h";
+        }
+        rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",lostHrs,overrideLabel]);
     });
     if(rows.length>1){
       // Accumulate this day's rows in localStorage history keyed by date
@@ -1800,7 +1808,7 @@ function ManagerApp({onLogout}){
       hist[date]=rows.slice(1); // store data rows (no header) keyed by ISO date
       localStorage.setItem("clockLogHistory",JSON.stringify(hist));
       // Build full accumulated history sorted by date
-      const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Override At"];
+      const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Lost Hours (hrs)","Override At"];
       const allDataRows=Object.keys(hist).sort().flatMap(d=>hist[d]);
       const allRows=[hdr,...allDataRows];
       const result=await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",allRows);
@@ -1813,7 +1821,7 @@ function ManagerApp({onLogout}){
   // Push a full week of clock logs (all 7 days) sorted by date — called after payroll push
   async function pushClockLogWeek(weekStart){
     if(!gsConfig.webAppUrl||!gsConfig.clockLogId)return{ok:false,err:"Clock log sheet not configured"};
-    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Override At"];
+    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Lost Hours (hrs)","Override At"];
     const rows=[hdr];
     const dates=weekDates(weekStart); // 7 ISO dates Sun-Sat
     dates.forEach(date=>{
@@ -1853,7 +1861,15 @@ function ManagerApp({onLogout}){
       })();
         const overrideDate=l.override_at?new Date(l.override_at):null;
         const overrideLabel=(overrideDate&&overrideDate.getFullYear()>2020)?overrideDate.toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
-        rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",overrideLabel]);
+        // Compute lost hours for left_early notes on custom shifts
+        let lostHrs="";
+        if((l.note||"").includes("left_early")&&rotaEntry&&rotaEntry.customOut&&l.time_out){
+          const[eH,eM]=rotaEntry.customOut.split(":").map(Number);
+          const[oH,oM]=l.time_out.split(":").map(Number);
+          const diffMins=(eH*60+eM)-(oH*60+oM);
+          if(diffMins>10)lostHrs=roundHrs025(diffMins/60)+"h";
+        }
+        rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",lostHrs,overrideLabel]);
       });
     });
     if(rows.length<=1)return{ok:true,written:0};
@@ -2778,7 +2794,7 @@ function ManagerApp({onLogout}){
     const weekExs=allEx2.filter(e=>e.staff_id===p.id);
     const tips=weekExs.reduce((a,e)=>a+parseFloat(e.tips||0),0);
     return{...p,total:r2(p.monthlyCard+tips)};
-  }).filter(p=>p.total>0);
+  });
   setBankTransferView(transfers);
 }}>💳 View Monthly Bank Transfer</button>
 {bankTransferView&&(<div className="overlay" onClick={()=>setBankTransferView(null)}><div className="sheet" onClick={e=>e.stopPropagation()} style={{maxWidth:480,width:"100%"}}>
