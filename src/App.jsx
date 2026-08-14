@@ -930,6 +930,7 @@ function ManagerApp({onLogout}){
   const[expandedSummaryStaff,setExpandedSummaryStaff]=useState(new Set());
   const[bankTransferView,setBankTransferView]=useState(null);
   const[pushedClockDates,setPushedClockDates]=useState(()=>{try{return new Set(JSON.parse(localStorage.getItem("pushedClockDates")||"[]"));}catch{return new Set();}});
+  const[lastClockPush,setLastClockPush]=useState(()=>{try{return localStorage.getItem("lastClockPush")||"";}catch{return"";}});
   const clockLogDrafts=React.useRef({}); // {logId: {time_in, time_out, note}} — local edits before Confirm
   // Accumulated clock log history stored in localStorage — written as full history on each push
   const clockLogHistoryRef=React.useRef((()=>{try{return JSON.parse(localStorage.getItem("clockLogHistory")||"{}");}catch{return{};}})());
