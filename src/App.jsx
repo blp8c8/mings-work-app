@@ -472,6 +472,8 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const assigned=effectiveTakingsPerson===user.id;
   const[clockTick,setClockTick]=useState(0);
   useEffect(()=>{const i=setInterval(()=>setClockTick(x=>x+1),20000);return()=>clearInterval(i);},[]);
+  const[clockTick,setClockTick]=useState(0);
+  useEffect(()=>{const i=setInterval(()=>setClockTick(x=>x+1),20000);return()=>clearInterval(i);},[]);
   const now=new Date();
   function t(m){setMsg(m);setTimeout(()=>setMsg(""),15000);}
   useEffect(()=>{loadData();},[]);
@@ -541,6 +543,22 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   }
   // Back-stamp: clock in retroactively at the rota's scheduled start time.
   // Same guards as clockIn (sick leave, once-per-day, rota confirmed) — only the timestamp differs.
+  async function backStamp(startTime){
+    if(!startTime)return clockIn();
+    if(logs.some(l=>l.date===todayISO()&&l.note==="sick_leave")||rota.some(sh=>sh.date===todayISO()&&sh.type==="Sick Leave"))return t("🤒 You've been marked as sick leave today — contact your manager.");
+    if(logs.find(l=>l.date===todayISO()&&l.time_in&&l.time_out))return t("⚠️ You've already clocked in and out today. Contact your manager if you need a correction.");
+    if(logs.find(l=>l.date===todayISO()&&l.time_in&&!l.time_out))return t("⚠️ You're already clocked in.");
+    const todayRota=rota.find(sh=>sh.date===todayISO());
+    if(todayRota&&todayRota.type!=="Off"){
+      const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
+      const isConfirmed=confirmedKeysRef.current.has(todayDayName)||confirmations.some(r=>r.day===todayDayName);
+      if(!isConfirmed)return t("⚠️ Please confirm your rota shift first (Rota tab → ✓ OK).");
+    }
+    const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:startTime,note:"back-stamped"}).select().single();
+    if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(startTime);t("✅ Back-stamped to "+startTime);}
+    else t("❌ "+error.message);
+  }
+  // Back-stamp: clock in retroactively at the rota's scheduled start time.
   async function backStamp(startTime){
     if(!startTime)return clockIn();
     if(logs.some(l=>l.date===todayISO()&&l.note==="sick_leave")||rota.some(sh=>sh.date===todayISO()&&sh.type==="Sick Leave"))return t("🤒 You've been marked as sick leave today — contact your manager.");
@@ -706,6 +724,47 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
               if(!startTime)return null;
               const[sh2,sm2]=startTime.split(":").map(Number);
               if(now.getHours()*60+now.getMinutes()<sh2*60+sm2+10)return null; // only once you're actually late
+              return(<button onClick={()=>backStamp(startTime)} style={{width:"100%",marginTop:9,padding:"11px",borderRadius:11,border:"1.5px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.08)",color:"#fff",fontSize:12.5,fontWeight:800,cursor:"pointer"}}>⏪ Forgot to clock in? Back-stamp to {startTime}</button>);
+            })()}
+            {todayLogs.length>0&&<div className="clkhist">
+              {todayLogs.map(l=>(<div key={l.id} className="clkrow">
+                <span>{l.time_in} → {l.time_out||"active"}{(l.note||"").includes("back-stamped")?" · back-stamped":""}</span>
+                <span>{l.time_out?Math.max(0,parseHrs(l.time_in,l.time_out)-parseFloat(l.break_time||0)).toFixed(1)+"h":"—"}</span>
+              </div>))}
+            </div>}
+          </div>);
+        })()}
+        {/* ── Clock In / Out card ── */}
+        {(()=>{
+          const todayLogs=logs.filter(l=>l.date===todayISO());
+          const todayDone=todayLogs.some(l=>l.time_in&&l.time_out);
+          const todayRota=rota.find(sh=>sh.date===todayISO());
+          const isSick=todayRota?.type==="Sick Leave"||todayLogs.some(l=>l.note==="sick_leave");
+          const showBreak=clockedIn&&(user.pay_type||"hourly")==="hourly";
+          return(<div className="clkcard">
+            <div className="clktime">{nowTime()}</div>
+            <div className="clkdate">{dispDate(todayISO(),true)}{todayRota&&todayRota.type!=="Off"?" · "+shiftLabel(todayRota):""}</div>
+            <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:todayDone?"✓ Shift complete":"○ Not clocked in"}</div>
+            {showBreak&&<div style={{marginBottom:14}}>
+              <div style={{fontSize:10,fontWeight:800,letterSpacing:".5px",textTransform:"uppercase",color:"rgba(255,255,255,.45)",marginBottom:6}}>Break taken today</div>
+              <div style={{display:"flex",gap:5}}>
+                {["0","0.5","1","1.5","2"].map(b=>(
+                  <button key={b} onClick={()=>setBreakTime(b)} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",cursor:"pointer",fontSize:12,fontWeight:800,background:breakTime===b?"#E8620A":"rgba(255,255,255,.12)",color:breakTime===b?"#fff":"rgba(255,255,255,.55)"}}>{b==="0"?"None":b+"h"}</button>
+                ))}
+              </div>
+            </div>}
+            <div className="clkbtns">
+              <button className="clkbtn in" disabled={clockedIn||todayDone||isSick} onClick={clockIn}>⏰ Clock In</button>
+              <button className="clkbtn out" disabled={!clockedIn} onClick={clockOut}>👋 Clock Out</button>
+            </div>
+            {!clockedIn&&!todayDone&&!isSick&&todayRota&&todayRota.type!=="Off"&&(()=>{
+              let startTime="";
+              if(todayRota.type==="Full Day (11am–close)")startTime="11:00";
+              else if(todayRota.type==="Night (5:30pm–close)")startTime="17:30";
+              else if(todayRota.customIn)startTime=todayRota.customIn;
+              if(!startTime)return null;
+              const[sh2,sm2]=startTime.split(":").map(Number);
+              if(now.getHours()*60+now.getMinutes()<sh2*60+sm2+10)return null;
               return(<button onClick={()=>backStamp(startTime)} style={{width:"100%",marginTop:9,padding:"11px",borderRadius:11,border:"1.5px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.08)",color:"#fff",fontSize:12.5,fontWeight:800,cursor:"pointer"}}>⏪ Forgot to clock in? Back-stamp to {startTime}</button>);
             })()}
             {todayLogs.length>0&&<div className="clkhist">
@@ -1554,6 +1613,19 @@ function ManagerApp({onLogout}){
   }
 
   if(loading)return<Loading text="Loading manager data…"/>;
+
+  // Calculate totals for the payroll week
+  function payTotals(){
+    const weekTakings=takings.filter(t=>t.date>=weekRange.start&&t.date<=weekRange.end);
+    let cash=0,card=0,tips=0;
+    weekTakings.forEach(t=>{
+      if(t.sales_cash)cash+=parseFloat(t.sales_cash||0);
+      if(t.sales_card)card+=parseFloat(t.sales_card||0);
+      if(t.tips_card)tips+=parseFloat(t.tips_card||0);
+    });
+    return{cash:r2(cash),card:r2(card),fhTips:r2(tips),gross:r2(cash+card)};
+  }
+
   const newCount=takings.filter(s=>s.is_new).length;
   const cancelledAbsCount=absences.filter(a=>a.is_cancelled&&!a.manager_seen).length;
   const{cash:totCash,card:totCard,gross:totGross}=payTotals();
