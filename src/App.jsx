@@ -630,38 +630,6 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
           <div style={{fontSize:14,lineHeight:1.6}}>{user.welcomeMsg}</div>
         </div>}
         {assigned&&!submitted&&<div className="notif" onClick={()=>setTab("takings")}><div className="notif-t">📊 You're today's Takings Person!</div><div className="notif-s">Tap to record today's takings →</div></div>}
-        {/* Forgot to clock in banner */}
-        {!logs.some(l=>l.date===todayISO()&&l.time_in)&&(()=>{
-          const todayRota=rota.find(sh=>sh.date===todayISO());
-          if(!todayRota||todayRota.type==="Off")return null;
-          const now=new Date();
-          const nowMins=now.getHours()*60+now.getMinutes();
-          let startMins=null;
-          if(todayRota.type==="Full Day (11am–close)")startMins=11*60;
-          else if(todayRota.type==="Night (5:30pm–close)")startMins=17*60+30;
-          else if(todayRota.type==="Custom"&&todayRota.customIn){const[h,m]=todayRota.customIn.split(":").map(Number);startMins=h*60+m;}
-          if(startMins===null||nowMins<startMins+10)return null;
-          return(<div style={{background:"#FFF5EF",border:"2px solid #E8620A",borderRadius:13,padding:"13px 15px",marginBottom:12}}>
-            <div style={{fontSize:14,fontWeight:800,color:"#E8620A",marginBottom:6}}>⏰ Did you forget to clock in?</div>
-            <div style={{fontSize:13,color:"#555",marginBottom:10}}>You're scheduled to work today but haven't clocked in yet.</div>
-            <div style={{display:"flex",gap:8}}>
-              <button className="btn sm" style={{flex:1,background:"#E8620A",color:"#fff"}} onClick={clockIn}>Clock in now</button>
-              <button className="btn sm sec" style={{flex:1}} onClick={async()=>{
-                const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
-                const isConfirmed=confirmedKeysRef.current.has(todayDayName)||confirmations.some(r=>r.day===todayDayName);
-                if(!isConfirmed)return t("⚠️ Please confirm your rota shift first (Rota tab → ✓ OK).");
-                let startTime="";
-                if(todayRota.type==="Full Day (11am–close)")startTime="11:00";
-                else if(todayRota.type==="Night (5:30pm–close)")startTime="17:30";
-                else if(todayRota.customIn)startTime=todayRota.customIn;
-                if(!startTime)return clockIn();
-                const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:startTime,note:"back-stamped"}).select().single();
-                if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(startTime);t("✅ Back-stamped to "+startTime);}
-                else t("❌ "+error.message);
-              }}>Back-stamp to {todayRota.type==="Full Day (11am–close)"?"11:00":todayRota.type==="Night (5:30pm–close)"?"17:30":todayRota.customIn||"start"}</button>
-            </div>
-          </div>);
-        })()}
         {/* ── Clock In / Out card ── */}
         {(()=>{
           const todayLogs=logs.filter(l=>l.date===todayISO());
@@ -675,10 +643,27 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
           const notRotad=!todayRota||todayRota.type==="Off";
           const notConfirmed=!notRotad&&!isConfirmed;
           const blockClockIn=(notRotad||notConfirmed)&&!isSick;
+          // "Forgot to clock in?" — assigned+confirmed, not clocked in yet today, and 10+ min past scheduled start
+          let startTime="";
+          let isLate=false;
+          if(!blockClockIn&&!clockedIn&&!todayDone&&!isSick&&todayRota){
+            const nowMins=now.getHours()*60+now.getMinutes();
+            let startMins=null;
+            if(todayRota.type==="Full Day (11am–close)"){startMins=11*60;startTime="11:00";}
+            else if(todayRota.type==="Night (5:30pm–close)"){startMins=17*60+30;startTime="17:30";}
+            else if(todayRota.type==="Custom"&&todayRota.customIn){const[h,m]=todayRota.customIn.split(":").map(Number);startMins=h*60+m;startTime=todayRota.customIn;}
+            if(startMins!==null&&nowMins>=startMins+10)isLate=true;
+          }
+          async function backStampNow(){
+            if(!startTime)return clockIn();
+            const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:startTime,note:"back-stamped"}).select().single();
+            if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(startTime);t("✅ Back-stamped to "+startTime);}
+            else t("❌ "+error.message);
+          }
           return(<div className="clkcard">
             <div className="clktime">{nowTime()}</div>
             <div className="clkdate">{dispDate(todayISO(),true)}{todayRota&&todayRota.type!=="Off"?" · "+shiftLabel(todayRota):""}</div>
-            <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:todayDone?"✓ Shift complete":notRotad?"🚫 Not rota'd today":notConfirmed?"⚠️ Rota not confirmed":"○ Not clocked in"}</div>
+            <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:todayDone?"✓ Shift complete":notRotad?"🚫 Not rota'd today":notConfirmed?"⚠️ Rota not confirmed":isLate?"⏰ Forgot to clock in?":"○ Not clocked in"}</div>
             {showBreak&&<div style={{marginBottom:14}}>
               <div style={{fontSize:10,fontWeight:800,letterSpacing:".5px",textTransform:"uppercase",color:"rgba(255,255,255,.45)",marginBottom:6}}>Break taken today</div>
               <div style={{display:"flex",gap:5}}>
@@ -687,10 +672,17 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
                 ))}
               </div>
             </div>}
-            <div className="clkbtns">
-              <button className="clkbtn in" disabled={clockedIn||todayDone||isSick||blockClockIn} onClick={clockIn}>⏰ Clock In</button>
-              <button className="clkbtn out" disabled={!clockedIn} onClick={clockOut}>👋 Clock Out</button>
-            </div>
+            {isLate?(
+              <div className="clkbtns">
+                <button className="clkbtn in" onClick={clockIn}>⏰ Clock In Now</button>
+                <button className="clkbtn" style={{flex:1,padding:13,borderRadius:11,border:"none",fontSize:13,fontWeight:800,cursor:"pointer",background:"rgba(255,255,255,.14)",color:"#fff"}} onClick={backStampNow}>⏪ Back-stamp {startTime}</button>
+              </div>
+            ):(
+              <div className="clkbtns">
+                <button className="clkbtn in" disabled={clockedIn||todayDone||isSick||blockClockIn} onClick={clockIn}>⏰ Clock In</button>
+                <button className="clkbtn out" disabled={!clockedIn} onClick={clockOut}>👋 Clock Out</button>
+              </div>
+            )}
             {blockClockIn&&!todayDone&&!clockedIn&&<div style={{fontSize:11.5,color:"rgba(255,255,255,.55)",textAlign:"center",marginTop:9}}>
               {notRotad?"You're not scheduled to work today.":"Confirm today's shift in the Rota tab first."}
             </div>}
