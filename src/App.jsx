@@ -470,8 +470,6 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[loading,setLoading]=useState(true);
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const assigned=effectiveTakingsPerson===user.id;
-  const[clockTick,setClockTick]=useState(0);
-  useEffect(()=>{const i=setInterval(()=>setClockTick(x=>x+1),20000);return()=>clearInterval(i);},[]);
   const now=new Date();
   function t(m){setMsg(m);setTimeout(()=>setMsg(""),15000);}
   useEffect(()=>{loadData();},[]);
@@ -658,37 +656,6 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
                 else t("❌ "+error.message);
               }}>Back-stamp to {todayRota.type==="Full Day (11am–close)"?"11:00":todayRota.type==="Night (5:30pm–close)"?"17:30":todayRota.customIn||"start"}</button>
             </div>
-          </div>);
-        })()}
-        {/* ── Clock In / Out card ── */}
-        {(()=>{
-          const todayLogs=logs.filter(l=>l.date===todayISO());
-          const todayDone=todayLogs.some(l=>l.time_in&&l.time_out);
-          const todayRota=rota.find(sh=>sh.date===todayISO());
-          const isSick=todayRota?.type==="Sick Leave"||todayLogs.some(l=>l.note==="sick_leave");
-          const showBreak=clockedIn&&(user.pay_type||"hourly")==="hourly";
-          return(<div className="clkcard">
-            <div className="clktime">{nowTime()}</div>
-            <div className="clkdate">{dispDate(todayISO(),true)}{todayRota&&todayRota.type!=="Off"?" · "+shiftLabel(todayRota):""}</div>
-            <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:todayDone?"✓ Shift complete":"○ Not clocked in"}</div>
-            {showBreak&&<div style={{marginBottom:14}}>
-              <div style={{fontSize:10,fontWeight:800,letterSpacing:".5px",textTransform:"uppercase",color:"rgba(255,255,255,.45)",marginBottom:6}}>Break taken today</div>
-              <div style={{display:"flex",gap:5}}>
-                {["0","0.5","1","1.5","2"].map(b=>(
-                  <button key={b} onClick={()=>setBreakTime(b)} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",cursor:"pointer",fontSize:12,fontWeight:800,background:breakTime===b?"#E8620A":"rgba(255,255,255,.12)",color:breakTime===b?"#fff":"rgba(255,255,255,.55)"}}>{b==="0"?"None":b+"h"}</button>
-                ))}
-              </div>
-            </div>}
-            <div className="clkbtns">
-              <button className="clkbtn in" disabled={clockedIn||todayDone||isSick} onClick={clockIn}>⏰ Clock In</button>
-              <button className="clkbtn out" disabled={!clockedIn} onClick={clockOut}>👋 Clock Out</button>
-            </div>
-            {todayLogs.length>0&&<div className="clkhist">
-              {todayLogs.map(l=>(<div key={l.id} className="clkrow">
-                <span>{l.time_in} → {l.time_out||"active"}{(l.note||"").includes("back-stamped")?" · back-stamped":""}</span>
-                <span>{l.time_out?Math.max(0,parseHrs(l.time_in,l.time_out)-parseFloat(l.break_time||0)).toFixed(1)+"h":"—"}</span>
-              </div>))}
-            </div>}
           </div>);
         })()}
         <div className="sec">This Week</div>{RotaList()}
@@ -930,7 +897,6 @@ function ManagerApp({onLogout}){
   const[expandedSummaryStaff,setExpandedSummaryStaff]=useState(new Set());
   const[bankTransferView,setBankTransferView]=useState(null);
   const[pushedClockDates,setPushedClockDates]=useState(()=>{try{return new Set(JSON.parse(localStorage.getItem("pushedClockDates")||"[]"));}catch{return new Set();}});
-  const[lastClockPush,setLastClockPush]=useState(()=>{try{return localStorage.getItem("lastClockPush")||"";}catch{return"";}});
   const clockLogDrafts=React.useRef({}); // {logId: {time_in, time_out, note}} — local edits before Confirm
   // Accumulated clock log history stored in localStorage — written as full history on each push
   const clockLogHistoryRef=React.useRef((()=>{try{return JSON.parse(localStorage.getItem("clockLogHistory")||"{}");}catch{return{};}})());
