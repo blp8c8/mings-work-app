@@ -1010,6 +1010,7 @@ function ManagerApp({onLogout}){
   const[clockDate,setClockDate]=useState(()=>todayISO());
   const[clockShowAll,setClockShowAll]=useState(false);
   const[cardWarning,setCardWarning]=useState(null); // {name, entered, total, focusId}
+  const[lastClockPush,setLastClockPush]=useState(()=>{try{return localStorage.getItem("lastClockPush")||"";}catch{return"";}});
   function checkCardWarning(name,entered,grossTotal,focusId){
     const val=parseFloat(entered||0);
     if(val>grossTotal+0.001){setCardWarning({name,entered:val.toFixed(2),total:grossTotal.toFixed(2),focusId});}
