@@ -470,10 +470,6 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[loading,setLoading]=useState(true);
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const assigned=effectiveTakingsPerson===user.id;
-  const[clockTick,setClockTick]=useState(0);
-  useEffect(()=>{const i=setInterval(()=>setClockTick(x=>x+1),20000);return()=>clearInterval(i);},[]);
-  const[clockTick,setClockTick]=useState(0);
-  useEffect(()=>{const i=setInterval(()=>setClockTick(x=>x+1),20000);return()=>clearInterval(i);},[]);
   const now=new Date();
   function t(m){setMsg(m);setTimeout(()=>setMsg(""),15000);}
   useEffect(()=>{loadData();},[]);
@@ -539,39 +535,6 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     const time=nowTime();
     const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:time,note:""}).select().single();
     if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(time);t("✅ Clocked in at "+time);}
-    else t("❌ "+error.message);
-  }
-  // Back-stamp: clock in retroactively at the rota's scheduled start time.
-  // Same guards as clockIn (sick leave, once-per-day, rota confirmed) — only the timestamp differs.
-  async function backStamp(startTime){
-    if(!startTime)return clockIn();
-    if(logs.some(l=>l.date===todayISO()&&l.note==="sick_leave")||rota.some(sh=>sh.date===todayISO()&&sh.type==="Sick Leave"))return t("🤒 You've been marked as sick leave today — contact your manager.");
-    if(logs.find(l=>l.date===todayISO()&&l.time_in&&l.time_out))return t("⚠️ You've already clocked in and out today. Contact your manager if you need a correction.");
-    if(logs.find(l=>l.date===todayISO()&&l.time_in&&!l.time_out))return t("⚠️ You're already clocked in.");
-    const todayRota=rota.find(sh=>sh.date===todayISO());
-    if(todayRota&&todayRota.type!=="Off"){
-      const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
-      const isConfirmed=confirmedKeysRef.current.has(todayDayName)||confirmations.some(r=>r.day===todayDayName);
-      if(!isConfirmed)return t("⚠️ Please confirm your rota shift first (Rota tab → ✓ OK).");
-    }
-    const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:startTime,note:"back-stamped"}).select().single();
-    if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(startTime);t("✅ Back-stamped to "+startTime);}
-    else t("❌ "+error.message);
-  }
-  // Back-stamp: clock in retroactively at the rota's scheduled start time.
-  async function backStamp(startTime){
-    if(!startTime)return clockIn();
-    if(logs.some(l=>l.date===todayISO()&&l.note==="sick_leave")||rota.some(sh=>sh.date===todayISO()&&sh.type==="Sick Leave"))return t("🤒 You've been marked as sick leave today — contact your manager.");
-    if(logs.find(l=>l.date===todayISO()&&l.time_in&&l.time_out))return t("⚠️ You've already clocked in and out today. Contact your manager if you need a correction.");
-    if(logs.find(l=>l.date===todayISO()&&l.time_in&&!l.time_out))return t("⚠️ You're already clocked in.");
-    const todayRota=rota.find(sh=>sh.date===todayISO());
-    if(todayRota&&todayRota.type!=="Off"){
-      const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
-      const isConfirmed=confirmedKeysRef.current.has(todayDayName)||confirmations.some(r=>r.day===todayDayName);
-      if(!isConfirmed)return t("⚠️ Please confirm your rota shift first (Rota tab → ✓ OK).");
-    }
-    const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:startTime,note:"back-stamped"}).select().single();
-    if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(startTime);t("✅ Back-stamped to "+startTime);}
     else t("❌ "+error.message);
   }
   async function doClockOut(noteType){
@@ -682,97 +645,17 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
             <div style={{fontSize:13,color:"#555",marginBottom:10}}>You're scheduled to work today but haven't clocked in yet.</div>
             <div style={{display:"flex",gap:8}}>
               <button className="btn sm" style={{flex:1,background:"#E8620A",color:"#fff"}} onClick={clockIn}>Clock in now</button>
-              <button className="btn sm sec" style={{flex:1}} onClick={()=>{
+              <button className="btn sm sec" style={{flex:1}} onClick={async()=>{
                 let startTime="";
                 if(todayRota.type==="Full Day (11am–close)")startTime="11:00";
                 else if(todayRota.type==="Night (5:30pm–close)")startTime="17:30";
                 else if(todayRota.customIn)startTime=todayRota.customIn;
-                backStamp(startTime);
+                if(!startTime)return clockIn();
+                const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:startTime,note:"back-stamped"}).select().single();
+                if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(startTime);t("✅ Back-stamped to "+startTime);}
+                else t("❌ "+error.message);
               }}>Back-stamp to {todayRota.type==="Full Day (11am–close)"?"11:00":todayRota.type==="Night (5:30pm–close)"?"17:30":todayRota.customIn||"start"}</button>
             </div>
-          </div>);
-        })()}
-        {/* ── Clock In / Out card ── */}
-        {(()=>{
-          const todayLogs=logs.filter(l=>l.date===todayISO());
-          const todayDone=todayLogs.some(l=>l.time_in&&l.time_out);
-          const todayRota=rota.find(sh=>sh.date===todayISO());
-          const isSick=todayRota?.type==="Sick Leave"||todayLogs.some(l=>l.note==="sick_leave");
-          const showBreak=clockedIn&&(user.pay_type||"hourly")==="hourly";
-          return(<div className="clkcard">
-            <div className="clktime">{nowTime()}</div>
-            <div className="clkdate">{dispDate(todayISO(),true)}{todayRota&&todayRota.type!=="Off"?" · "+shiftLabel(todayRota):""}</div>
-            <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:todayDone?"✓ Shift complete":"○ Not clocked in"}</div>
-            {showBreak&&<div style={{marginBottom:14}}>
-              <div style={{fontSize:10,fontWeight:800,letterSpacing:".5px",textTransform:"uppercase",color:"rgba(255,255,255,.45)",marginBottom:6}}>Break taken today</div>
-              <div style={{display:"flex",gap:5}}>
-                {["0","0.5","1","1.5","2"].map(b=>(
-                  <button key={b} onClick={()=>setBreakTime(b)} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",cursor:"pointer",fontSize:12,fontWeight:800,background:breakTime===b?"#E8620A":"rgba(255,255,255,.12)",color:breakTime===b?"#fff":"rgba(255,255,255,.55)"}}>{b==="0"?"None":b+"h"}</button>
-                ))}
-              </div>
-            </div>}
-            <div className="clkbtns">
-              <button className="clkbtn in" disabled={clockedIn||todayDone||isSick} onClick={clockIn}>⏰ Clock In</button>
-              <button className="clkbtn out" disabled={!clockedIn} onClick={clockOut}>👋 Clock Out</button>
-            </div>
-            {/* ⏪ Back-stamp — clock in retroactively to the scheduled start time */}
-            {!clockedIn&&!todayDone&&!isSick&&todayRota&&todayRota.type!=="Off"&&(()=>{
-              let startTime="";
-              if(todayRota.type==="Full Day (11am–close)")startTime="11:00";
-              else if(todayRota.type==="Night (5:30pm–close)")startTime="17:30";
-              else if(todayRota.customIn)startTime=todayRota.customIn;
-              if(!startTime)return null;
-              const[sh2,sm2]=startTime.split(":").map(Number);
-              if(now.getHours()*60+now.getMinutes()<sh2*60+sm2+10)return null; // only once you're actually late
-              return(<button onClick={()=>backStamp(startTime)} style={{width:"100%",marginTop:9,padding:"11px",borderRadius:11,border:"1.5px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.08)",color:"#fff",fontSize:12.5,fontWeight:800,cursor:"pointer"}}>⏪ Forgot to clock in? Back-stamp to {startTime}</button>);
-            })()}
-            {todayLogs.length>0&&<div className="clkhist">
-              {todayLogs.map(l=>(<div key={l.id} className="clkrow">
-                <span>{l.time_in} → {l.time_out||"active"}{(l.note||"").includes("back-stamped")?" · back-stamped":""}</span>
-                <span>{l.time_out?Math.max(0,parseHrs(l.time_in,l.time_out)-parseFloat(l.break_time||0)).toFixed(1)+"h":"—"}</span>
-              </div>))}
-            </div>}
-          </div>);
-        })()}
-        {/* ── Clock In / Out card ── */}
-        {(()=>{
-          const todayLogs=logs.filter(l=>l.date===todayISO());
-          const todayDone=todayLogs.some(l=>l.time_in&&l.time_out);
-          const todayRota=rota.find(sh=>sh.date===todayISO());
-          const isSick=todayRota?.type==="Sick Leave"||todayLogs.some(l=>l.note==="sick_leave");
-          const showBreak=clockedIn&&(user.pay_type||"hourly")==="hourly";
-          return(<div className="clkcard">
-            <div className="clktime">{nowTime()}</div>
-            <div className="clkdate">{dispDate(todayISO(),true)}{todayRota&&todayRota.type!=="Off"?" · "+shiftLabel(todayRota):""}</div>
-            <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:todayDone?"✓ Shift complete":"○ Not clocked in"}</div>
-            {showBreak&&<div style={{marginBottom:14}}>
-              <div style={{fontSize:10,fontWeight:800,letterSpacing:".5px",textTransform:"uppercase",color:"rgba(255,255,255,.45)",marginBottom:6}}>Break taken today</div>
-              <div style={{display:"flex",gap:5}}>
-                {["0","0.5","1","1.5","2"].map(b=>(
-                  <button key={b} onClick={()=>setBreakTime(b)} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",cursor:"pointer",fontSize:12,fontWeight:800,background:breakTime===b?"#E8620A":"rgba(255,255,255,.12)",color:breakTime===b?"#fff":"rgba(255,255,255,.55)"}}>{b==="0"?"None":b+"h"}</button>
-                ))}
-              </div>
-            </div>}
-            <div className="clkbtns">
-              <button className="clkbtn in" disabled={clockedIn||todayDone||isSick} onClick={clockIn}>⏰ Clock In</button>
-              <button className="clkbtn out" disabled={!clockedIn} onClick={clockOut}>👋 Clock Out</button>
-            </div>
-            {!clockedIn&&!todayDone&&!isSick&&todayRota&&todayRota.type!=="Off"&&(()=>{
-              let startTime="";
-              if(todayRota.type==="Full Day (11am–close)")startTime="11:00";
-              else if(todayRota.type==="Night (5:30pm–close)")startTime="17:30";
-              else if(todayRota.customIn)startTime=todayRota.customIn;
-              if(!startTime)return null;
-              const[sh2,sm2]=startTime.split(":").map(Number);
-              if(now.getHours()*60+now.getMinutes()<sh2*60+sm2+10)return null;
-              return(<button onClick={()=>backStamp(startTime)} style={{width:"100%",marginTop:9,padding:"11px",borderRadius:11,border:"1.5px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.08)",color:"#fff",fontSize:12.5,fontWeight:800,cursor:"pointer"}}>⏪ Forgot to clock in? Back-stamp to {startTime}</button>);
-            })()}
-            {todayLogs.length>0&&<div className="clkhist">
-              {todayLogs.map(l=>(<div key={l.id} className="clkrow">
-                <span>{l.time_in} → {l.time_out||"active"}{(l.note||"").includes("back-stamped")?" · back-stamped":""}</span>
-                <span>{l.time_out?Math.max(0,parseHrs(l.time_in,l.time_out)-parseFloat(l.break_time||0)).toFixed(1)+"h":"—"}</span>
-              </div>))}
-            </div>}
           </div>);
         })()}
         <div className="sec">This Week</div>{RotaList()}
@@ -889,43 +772,6 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
           </div>
         );
       })()}
-      {/* ── Clocked out LATE on a custom shift: forgot, or genuine overtime? ── */}
-      {lateModal&&<div className="overlay" onClick={()=>setLateModal(false)}><div className="sheet" onClick={e=>e.stopPropagation()}>
-        <div className="stitle">⏰ You're past your shift end</div>
-        <div className="ssub2">It's more than 15 minutes after your scheduled finish. Which one was it?</div>
-        <button className="btn sec" style={{marginTop:0}} onClick={()=>doClockOut("forgot")}>😅 I forgot to clock out</button>
-        <button className="btn green" onClick={()=>doClockOut("overtime")}>💪 I worked extra hours</button>
-        <button className="btn sec" onClick={()=>setLateModal(false)}>Cancel</button>
-      </div></div>}
-
-      {/* ── Clocking out EARLY on a custom shift ── */}
-      {earlyModal&&<div className="overlay" onClick={()=>setEarlyModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}>
-        {earlyModal==="blocked"?<>
-          <div className="stitle">🚫 Too early to clock out</div>
-          <div className="ssub2">You're more than an hour before your scheduled finish time. Please speak to the manager if you need to leave early — they can adjust your hours.</div>
-          <button className="btn sec" style={{marginTop:0}} onClick={()=>setEarlyModal(null)}>OK</button>
-        </>:<>
-          <div className="stitle">⚠️ Leaving before your shift ends?</div>
-          <div className="ssub2">You're clocking out early. This will be flagged to the manager on your clock log.</div>
-          <button className="btn danger" style={{marginTop:0}} onClick={()=>doClockOut("early")}>Yes, clock out now</button>
-          <button className="btn sec" onClick={()=>setEarlyModal(null)}>Cancel</button>
-        </>}
-      </div></div>}
-
-      {/* ── End-of-shift lock-up checklist (takings person only) ── */}
-      {checklistModal&&<div className="overlay" onClick={()=>setChecklistModal(false)}><div className="sheet" onClick={e=>e.stopPropagation()}>
-        <div className="stitle">🔒 End-of-shift checklist</div>
-        <div className="ssub2">Tick every item before you clock out.</div>
-        {CHECKLIST_ITEMS.map(it=>(
-          <button key={it.key} onClick={()=>setChecklist(p=>({...p,[it.key]:!p[it.key]}))} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"12px 13px",marginBottom:7,borderRadius:11,border:checklist[it.key]?"2px solid #50DC78":"2px solid #E5E5E5",background:checklist[it.key]?"#ECFDF5":"#fff",cursor:"pointer",textAlign:"left"}}>
-            <span style={{fontSize:16}}>{checklist[it.key]?"✅":"⬜"}</span>
-            <span style={{fontSize:14,fontWeight:700,color:"#1A1A2E"}}>{it.label}</span>
-          </button>
-        ))}
-        <button className="btn green" disabled={!checklistDone} onClick={()=>{setChecklistModal(false);doActualClockOut();}}>Confirm &amp; Clock Out</button>
-        <button className="btn sec" onClick={()=>setChecklistModal(false)}>Cancel</button>
-      </div></div>}
-
       {rejectModal!==null&&<div className="overlay" onClick={()=>setRejectModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">Can't work {DAYS_MON[rejectModal]}?</div><div className="ssub2">Tell the manager why (optional)</div><textarea className="lognote" rows={3} placeholder="e.g. Doctor appointment…" value={rejectReason} onChange={e=>setRejectReason(e.target.value)}/><button className="btn danger" style={{marginTop:12}} onClick={rejectShift}>Send Rejection</button><button className="btn sec" onClick={()=>setRejectModal(null)}>Cancel</button></div></div>}
     </div>
   );
@@ -1069,60 +915,12 @@ function ManagerApp({onLogout}){
   const[clockDate,setClockDate]=useState(()=>todayISO());
   const[clockShowAll,setClockShowAll]=useState(false);
   const[cardWarning,setCardWarning]=useState(null); // {name, entered, total, focusId}
-  const[lastClockPush,setLastClockPush]=useState(()=>{try{return localStorage.getItem("lastClockPush")||"";}catch{return"";}});
   function checkCardWarning(name,entered,grossTotal,focusId){
     const val=parseFloat(entered||0);
     if(val>grossTotal+0.001){setCardWarning({name,entered:val.toFixed(2),total:grossTotal.toFixed(2),focusId});}
   }
 
   function t(m){setMsg(m);setTimeout(()=>setMsg(""),15000);}
-
-  async function loadAll(){
-    setLoading(true);
-    const[staffR,rotaR,absR,clockR,rejR,takingsR,expensesR,kitchenStaffR,gsConfigR]=await Promise.all([
-      db.from("staff").select("*"),
-      db.from("rota").select("*"),
-      db.from("absences").select("*"),
-      db.from("clock_logs").select("*"),
-      db.from("rejections").select("*"),
-      db.from("takings").select("*"),
-      db.from("expenses").select("*"),
-      db.from("kitchen_staff").select("*"),
-      db.from("app_settings").select("key,value"),
-    ]);
-    setStaff(staffR.data||[]);
-    setAbsences(absR.data||[]);
-    setClockLogs(clockR.data||[]);
-    setRejections(rejR.data||[]);
-    setTakings(takingsR.data||[]);
-    setExpenses(expensesR.data||[]);
-    setKitchenStaff(kitchenStaffR.data||[]);
-    // Build rota map: {staffId: [{date, jsDay, type, customIn, customOut, rowId}]}
-    const rotaByStaff={};
-    (rotaR.data||[]).forEach(row=>{
-      if(!rotaByStaff[row.staff_id])rotaByStaff[row.staff_id]=[];
-      rotaByStaff[row.staff_id].push({
-        date:row.week_start?(new Date(row.week_start).toISOString().split("T")[0]):row.date,
-        jsDay:row.day_index||0,
-        type:row.shift_type||"Off",
-        customIn:row.custom_in||"",
-        customOut:row.custom_out||"",
-        rowId:row.id
-      });
-    });
-    setRota(rotaByStaff);
-    // Load GS config
-    const config={webAppUrl:"",payrollId:"",takingsId:"",clockLogId:"",welcomeMsg:""};
-    (gsConfigR.data||[]).forEach(row=>{
-      if(row.key==="gs_web_app_url")config.webAppUrl=row.value||"";
-      else if(row.key==="payroll_sheet_id")config.payrollId=row.value||"";
-      else if(row.key==="takings_sheet_id")config.takingsId=row.value||"";
-      else if(row.key==="clock_log_sheet_id")config.clockLogId=row.value||"";
-      else if(row.key==="manager_welcome_message")config.welcomeMsg=row.value||"";
-    });
-    setGsConfig(config);
-    setLoading(false);
-  }
 
   useEffect(()=>{loadAll();},[]);
   useEffect(()=>{if(staff.length)loadRota();},[rotaMon,staff.length]);
@@ -1613,19 +1411,6 @@ function ManagerApp({onLogout}){
   }
 
   if(loading)return<Loading text="Loading manager data…"/>;
-
-  // Calculate totals for the payroll week
-  function payTotals(){
-    const weekTakings=takings.filter(t=>t.date>=weekRange.start&&t.date<=weekRange.end);
-    let cash=0,card=0,tips=0;
-    weekTakings.forEach(t=>{
-      if(t.sales_cash)cash+=parseFloat(t.sales_cash||0);
-      if(t.sales_card)card+=parseFloat(t.sales_card||0);
-      if(t.tips_card)tips+=parseFloat(t.tips_card||0);
-    });
-    return{cash:r2(cash),card:r2(card),fhTips:r2(tips),gross:r2(cash+card)};
-  }
-
   const newCount=takings.filter(s=>s.is_new).length;
   const cancelledAbsCount=absences.filter(a=>a.is_cancelled&&!a.manager_seen).length;
   const{cash:totCash,card:totCard,gross:totGross}=payTotals();
