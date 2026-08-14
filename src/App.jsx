@@ -527,13 +527,12 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     // Once-per-day restriction
     const todayDone=logs.find(l=>l.date===todayISO()&&l.time_in&&l.time_out);
     if(todayDone)return t("⚠️ You've already clocked in and out today. Contact your manager if you need a correction.");
-    // Must have confirmed today's rota shift
+    // Must be assigned a rota shift today, and must have confirmed it — clock in/out is blocked otherwise
     const todayRota=rota.find(sh=>sh.date===todayISO());
-    if(todayRota&&todayRota.type!=="Off"){
-      const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
-      const currentWeekSun=snapToSunday(todayISO());const todayWeekKey=todayDayName+"|"+currentWeekSun;const isConfirmed=confirmedKeysRef.current.has(todayDayName)||confirmations.some(r=>r.day===todayDayName);
-      if(!isConfirmed)return t("⚠️ Please confirm your rota shift first (Rota tab → ✓ OK).");
-    }
+    if(!todayRota||todayRota.type==="Off")return t("🚫 You're not rota'd to work today. Contact your manager if this is wrong.");
+    const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
+    const isConfirmed=confirmedKeysRef.current.has(todayDayName)||confirmations.some(r=>r.day===todayDayName);
+    if(!isConfirmed)return t("⚠️ Please confirm your rota shift first (Rota tab → ✓ OK).");
     const time=nowTime();
     const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:time,note:""}).select().single();
     if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(time);t("✅ Clocked in at "+time);}
@@ -648,6 +647,9 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
             <div style={{display:"flex",gap:8}}>
               <button className="btn sm" style={{flex:1,background:"#E8620A",color:"#fff"}} onClick={clockIn}>Clock in now</button>
               <button className="btn sm sec" style={{flex:1}} onClick={async()=>{
+                const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
+                const isConfirmed=confirmedKeysRef.current.has(todayDayName)||confirmations.some(r=>r.day===todayDayName);
+                if(!isConfirmed)return t("⚠️ Please confirm your rota shift first (Rota tab → ✓ OK).");
                 let startTime="";
                 if(todayRota.type==="Full Day (11am–close)")startTime="11:00";
                 else if(todayRota.type==="Night (5:30pm–close)")startTime="17:30";
@@ -667,10 +669,16 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
           const todayRota=rota.find(sh=>sh.date===todayISO());
           const isSick=todayRota?.type==="Sick Leave"||todayLogs.some(l=>l.note==="sick_leave");
           const showBreak=clockedIn&&(user.pay_type||"hourly")==="hourly";
+          // Clock in/out is only available once a rota shift is assigned for today AND confirmed
+          const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
+          const isConfirmed=confirmedKeysRef.current.has(todayDayName)||confirmations.some(r=>r.day===todayDayName);
+          const notRotad=!todayRota||todayRota.type==="Off";
+          const notConfirmed=!notRotad&&!isConfirmed;
+          const blockClockIn=(notRotad||notConfirmed)&&!isSick;
           return(<div className="clkcard">
             <div className="clktime">{nowTime()}</div>
             <div className="clkdate">{dispDate(todayISO(),true)}{todayRota&&todayRota.type!=="Off"?" · "+shiftLabel(todayRota):""}</div>
-            <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:todayDone?"✓ Shift complete":"○ Not clocked in"}</div>
+            <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:todayDone?"✓ Shift complete":notRotad?"🚫 Not rota'd today":notConfirmed?"⚠️ Rota not confirmed":"○ Not clocked in"}</div>
             {showBreak&&<div style={{marginBottom:14}}>
               <div style={{fontSize:10,fontWeight:800,letterSpacing:".5px",textTransform:"uppercase",color:"rgba(255,255,255,.45)",marginBottom:6}}>Break taken today</div>
               <div style={{display:"flex",gap:5}}>
@@ -680,9 +688,12 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
               </div>
             </div>}
             <div className="clkbtns">
-              <button className="clkbtn in" disabled={clockedIn||todayDone||isSick} onClick={clockIn}>⏰ Clock In</button>
+              <button className="clkbtn in" disabled={clockedIn||todayDone||isSick||blockClockIn} onClick={clockIn}>⏰ Clock In</button>
               <button className="clkbtn out" disabled={!clockedIn} onClick={clockOut}>👋 Clock Out</button>
             </div>
+            {blockClockIn&&!todayDone&&!clockedIn&&<div style={{fontSize:11.5,color:"rgba(255,255,255,.55)",textAlign:"center",marginTop:9}}>
+              {notRotad?"You're not scheduled to work today.":"Confirm today's shift in the Rota tab first."}
+            </div>}
             {todayLogs.length>0&&<div className="clkhist">
               {todayLogs.map(l=>(<div key={l.id} className="clkrow">
                 <span>{l.time_in} → {l.time_out||"active"}{(l.note||"").includes("back-stamped")?" · back-stamped":""}</span>
