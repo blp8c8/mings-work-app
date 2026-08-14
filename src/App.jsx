@@ -1018,6 +1018,53 @@ function ManagerApp({onLogout}){
 
   function t(m){setMsg(m);setTimeout(()=>setMsg(""),15000);}
 
+  async function loadAll(){
+    setLoading(true);
+    const[staffR,rotaR,absR,clockR,rejR,takingsR,expensesR,kitchenStaffR,gsConfigR]=await Promise.all([
+      db.from("staff").select("*"),
+      db.from("rota").select("*"),
+      db.from("absences").select("*"),
+      db.from("clock_logs").select("*"),
+      db.from("rejections").select("*"),
+      db.from("takings").select("*"),
+      db.from("expenses").select("*"),
+      db.from("kitchen_staff").select("*"),
+      db.from("app_settings").select("key,value"),
+    ]);
+    setStaff(staffR.data||[]);
+    setAbsences(absR.data||[]);
+    setClockLogs(clockR.data||[]);
+    setRejections(rejR.data||[]);
+    setTakings(takingsR.data||[]);
+    setExpenses(expensesR.data||[]);
+    setKitchenStaff(kitchenStaffR.data||[]);
+    // Build rota map: {staffId: [{date, jsDay, type, customIn, customOut, rowId}]}
+    const rotaByStaff={};
+    (rotaR.data||[]).forEach(row=>{
+      if(!rotaByStaff[row.staff_id])rotaByStaff[row.staff_id]=[];
+      rotaByStaff[row.staff_id].push({
+        date:row.week_start?(new Date(row.week_start).toISOString().split("T")[0]):row.date,
+        jsDay:row.day_index||0,
+        type:row.shift_type||"Off",
+        customIn:row.custom_in||"",
+        customOut:row.custom_out||"",
+        rowId:row.id
+      });
+    });
+    setRota(rotaByStaff);
+    // Load GS config
+    const config={webAppUrl:"",payrollId:"",takingsId:"",clockLogId:"",welcomeMsg:""};
+    (gsConfigR.data||[]).forEach(row=>{
+      if(row.key==="gs_web_app_url")config.webAppUrl=row.value||"";
+      else if(row.key==="payroll_sheet_id")config.payrollId=row.value||"";
+      else if(row.key==="takings_sheet_id")config.takingsId=row.value||"";
+      else if(row.key==="clock_log_sheet_id")config.clockLogId=row.value||"";
+      else if(row.key==="manager_welcome_message")config.welcomeMsg=row.value||"";
+    });
+    setGsConfig(config);
+    setLoading(false);
+  }
+
   useEffect(()=>{loadAll();},[]);
   useEffect(()=>{if(staff.length)loadRota();},[rotaMon,staff.length]);
   useEffect(()=>{if(kitchenStaff.length)loadKitchenHours();},[weekRange.start,kitchenStaff.length]);
