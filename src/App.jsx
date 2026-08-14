@@ -470,6 +470,8 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[loading,setLoading]=useState(true);
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const assigned=effectiveTakingsPerson===user.id;
+  const[clockTick,setClockTick]=useState(0);
+  useEffect(()=>{const i=setInterval(()=>setClockTick(x=>x+1),20000);return()=>clearInterval(i);},[]);
   const now=new Date();
   function t(m){setMsg(m);setTimeout(()=>setMsg(""),15000);}
   useEffect(()=>{loadData();},[]);
@@ -535,6 +537,23 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
     const time=nowTime();
     const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:time,note:""}).select().single();
     if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(time);t("✅ Clocked in at "+time);}
+    else t("❌ "+error.message);
+  }
+  // Back-stamp: clock in retroactively at the rota's scheduled start time.
+  // Same guards as clockIn (sick leave, once-per-day, rota confirmed) — only the timestamp differs.
+  async function backStamp(startTime){
+    if(!startTime)return clockIn();
+    if(logs.some(l=>l.date===todayISO()&&l.note==="sick_leave")||rota.some(sh=>sh.date===todayISO()&&sh.type==="Sick Leave"))return t("🤒 You've been marked as sick leave today — contact your manager.");
+    if(logs.find(l=>l.date===todayISO()&&l.time_in&&l.time_out))return t("⚠️ You've already clocked in and out today. Contact your manager if you need a correction.");
+    if(logs.find(l=>l.date===todayISO()&&l.time_in&&!l.time_out))return t("⚠️ You're already clocked in.");
+    const todayRota=rota.find(sh=>sh.date===todayISO());
+    if(todayRota&&todayRota.type!=="Off"){
+      const todayDayName=DAYS_MON[new Date(todayISO()+"T12:00:00").getDay()];
+      const isConfirmed=confirmedKeysRef.current.has(todayDayName)||confirmations.some(r=>r.day===todayDayName);
+      if(!isConfirmed)return t("⚠️ Please confirm your rota shift first (Rota tab → ✓ OK).");
+    }
+    const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:startTime,note:"back-stamped"}).select().single();
+    if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(startTime);t("✅ Back-stamped to "+startTime);}
     else t("❌ "+error.message);
   }
   async function doClockOut(noteType){
@@ -645,17 +664,56 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
             <div style={{fontSize:13,color:"#555",marginBottom:10}}>You're scheduled to work today but haven't clocked in yet.</div>
             <div style={{display:"flex",gap:8}}>
               <button className="btn sm" style={{flex:1,background:"#E8620A",color:"#fff"}} onClick={clockIn}>Clock in now</button>
-              <button className="btn sm sec" style={{flex:1}} onClick={async()=>{
+              <button className="btn sm sec" style={{flex:1}} onClick={()=>{
                 let startTime="";
                 if(todayRota.type==="Full Day (11am–close)")startTime="11:00";
                 else if(todayRota.type==="Night (5:30pm–close)")startTime="17:30";
                 else if(todayRota.customIn)startTime=todayRota.customIn;
-                if(!startTime)return clockIn();
-                const{data,error}=await db.from("clock_logs").insert({staff_id:user.id,staff_name:user.name,date:todayISO(),time_in:startTime,note:"back-stamped"}).select().single();
-                if(!error){setLogs(p=>[data,...p]);setClockedIn(true);setClockInTime(startTime);t("✅ Back-stamped to "+startTime);}
-                else t("❌ "+error.message);
+                backStamp(startTime);
               }}>Back-stamp to {todayRota.type==="Full Day (11am–close)"?"11:00":todayRota.type==="Night (5:30pm–close)"?"17:30":todayRota.customIn||"start"}</button>
             </div>
+          </div>);
+        })()}
+        {/* ── Clock In / Out card ── */}
+        {(()=>{
+          const todayLogs=logs.filter(l=>l.date===todayISO());
+          const todayDone=todayLogs.some(l=>l.time_in&&l.time_out);
+          const todayRota=rota.find(sh=>sh.date===todayISO());
+          const isSick=todayRota?.type==="Sick Leave"||todayLogs.some(l=>l.note==="sick_leave");
+          const showBreak=clockedIn&&(user.pay_type||"hourly")==="hourly";
+          return(<div className="clkcard">
+            <div className="clktime">{nowTime()}</div>
+            <div className="clkdate">{dispDate(todayISO(),true)}{todayRota&&todayRota.type!=="Off"?" · "+shiftLabel(todayRota):""}</div>
+            <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:todayDone?"✓ Shift complete":"○ Not clocked in"}</div>
+            {showBreak&&<div style={{marginBottom:14}}>
+              <div style={{fontSize:10,fontWeight:800,letterSpacing:".5px",textTransform:"uppercase",color:"rgba(255,255,255,.45)",marginBottom:6}}>Break taken today</div>
+              <div style={{display:"flex",gap:5}}>
+                {["0","0.5","1","1.5","2"].map(b=>(
+                  <button key={b} onClick={()=>setBreakTime(b)} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",cursor:"pointer",fontSize:12,fontWeight:800,background:breakTime===b?"#E8620A":"rgba(255,255,255,.12)",color:breakTime===b?"#fff":"rgba(255,255,255,.55)"}}>{b==="0"?"None":b+"h"}</button>
+                ))}
+              </div>
+            </div>}
+            <div className="clkbtns">
+              <button className="clkbtn in" disabled={clockedIn||todayDone||isSick} onClick={clockIn}>⏰ Clock In</button>
+              <button className="clkbtn out" disabled={!clockedIn} onClick={clockOut}>👋 Clock Out</button>
+            </div>
+            {/* ⏪ Back-stamp — clock in retroactively to the scheduled start time */}
+            {!clockedIn&&!todayDone&&!isSick&&todayRota&&todayRota.type!=="Off"&&(()=>{
+              let startTime="";
+              if(todayRota.type==="Full Day (11am–close)")startTime="11:00";
+              else if(todayRota.type==="Night (5:30pm–close)")startTime="17:30";
+              else if(todayRota.customIn)startTime=todayRota.customIn;
+              if(!startTime)return null;
+              const[sh2,sm2]=startTime.split(":").map(Number);
+              if(now.getHours()*60+now.getMinutes()<sh2*60+sm2+10)return null; // only once you're actually late
+              return(<button onClick={()=>backStamp(startTime)} style={{width:"100%",marginTop:9,padding:"11px",borderRadius:11,border:"1.5px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.08)",color:"#fff",fontSize:12.5,fontWeight:800,cursor:"pointer"}}>⏪ Forgot to clock in? Back-stamp to {startTime}</button>);
+            })()}
+            {todayLogs.length>0&&<div className="clkhist">
+              {todayLogs.map(l=>(<div key={l.id} className="clkrow">
+                <span>{l.time_in} → {l.time_out||"active"}{(l.note||"").includes("back-stamped")?" · back-stamped":""}</span>
+                <span>{l.time_out?Math.max(0,parseHrs(l.time_in,l.time_out)-parseFloat(l.break_time||0)).toFixed(1)+"h":"—"}</span>
+              </div>))}
+            </div>}
           </div>);
         })()}
         <div className="sec">This Week</div>{RotaList()}
@@ -772,6 +830,43 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
           </div>
         );
       })()}
+      {/* ── Clocked out LATE on a custom shift: forgot, or genuine overtime? ── */}
+      {lateModal&&<div className="overlay" onClick={()=>setLateModal(false)}><div className="sheet" onClick={e=>e.stopPropagation()}>
+        <div className="stitle">⏰ You're past your shift end</div>
+        <div className="ssub2">It's more than 15 minutes after your scheduled finish. Which one was it?</div>
+        <button className="btn sec" style={{marginTop:0}} onClick={()=>doClockOut("forgot")}>😅 I forgot to clock out</button>
+        <button className="btn green" onClick={()=>doClockOut("overtime")}>💪 I worked extra hours</button>
+        <button className="btn sec" onClick={()=>setLateModal(false)}>Cancel</button>
+      </div></div>}
+
+      {/* ── Clocking out EARLY on a custom shift ── */}
+      {earlyModal&&<div className="overlay" onClick={()=>setEarlyModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}>
+        {earlyModal==="blocked"?<>
+          <div className="stitle">🚫 Too early to clock out</div>
+          <div className="ssub2">You're more than an hour before your scheduled finish time. Please speak to the manager if you need to leave early — they can adjust your hours.</div>
+          <button className="btn sec" style={{marginTop:0}} onClick={()=>setEarlyModal(null)}>OK</button>
+        </>:<>
+          <div className="stitle">⚠️ Leaving before your shift ends?</div>
+          <div className="ssub2">You're clocking out early. This will be flagged to the manager on your clock log.</div>
+          <button className="btn danger" style={{marginTop:0}} onClick={()=>doClockOut("early")}>Yes, clock out now</button>
+          <button className="btn sec" onClick={()=>setEarlyModal(null)}>Cancel</button>
+        </>}
+      </div></div>}
+
+      {/* ── End-of-shift lock-up checklist (takings person only) ── */}
+      {checklistModal&&<div className="overlay" onClick={()=>setChecklistModal(false)}><div className="sheet" onClick={e=>e.stopPropagation()}>
+        <div className="stitle">🔒 End-of-shift checklist</div>
+        <div className="ssub2">Tick every item before you clock out.</div>
+        {CHECKLIST_ITEMS.map(it=>(
+          <button key={it.key} onClick={()=>setChecklist(p=>({...p,[it.key]:!p[it.key]}))} style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"12px 13px",marginBottom:7,borderRadius:11,border:checklist[it.key]?"2px solid #50DC78":"2px solid #E5E5E5",background:checklist[it.key]?"#ECFDF5":"#fff",cursor:"pointer",textAlign:"left"}}>
+            <span style={{fontSize:16}}>{checklist[it.key]?"✅":"⬜"}</span>
+            <span style={{fontSize:14,fontWeight:700,color:"#1A1A2E"}}>{it.label}</span>
+          </button>
+        ))}
+        <button className="btn green" disabled={!checklistDone} onClick={()=>{setChecklistModal(false);doActualClockOut();}}>Confirm &amp; Clock Out</button>
+        <button className="btn sec" onClick={()=>setChecklistModal(false)}>Cancel</button>
+      </div></div>}
+
       {rejectModal!==null&&<div className="overlay" onClick={()=>setRejectModal(null)}><div className="sheet" onClick={e=>e.stopPropagation()}><div className="stitle">Can't work {DAYS_MON[rejectModal]}?</div><div className="ssub2">Tell the manager why (optional)</div><textarea className="lognote" rows={3} placeholder="e.g. Doctor appointment…" value={rejectReason} onChange={e=>setRejectReason(e.target.value)}/><button className="btn danger" style={{marginTop:12}} onClick={rejectShift}>Send Rejection</button><button className="btn sec" onClick={()=>setRejectModal(null)}>Cancel</button></div></div>}
     </div>
   );
@@ -925,971 +1020,7 @@ function ManagerApp({onLogout}){
   useEffect(()=>{loadAll();},[]);
   useEffect(()=>{if(staff.length)loadRota();},[rotaMon,staff.length]);
   useEffect(()=>{if(kitchenStaff.length)loadKitchenHours();},[weekRange.start,kitchenStaff.length]);
-  useEffect(()=>{
-    // Reload payroll_extras for the new week so cards auto-fill
-    db.from("payroll_extras").select("*").eq("week_start",weekRange.start).then(({data})=>{
-      if(!data)return;
-      setExtras(p=>{
-        const em={...p};
-        data.forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",extraTime:e.extra_time||"",id:e.id,ws:e.week_start};});
-        return em;
-      });
-    });
-  },[weekRange.start]);
-
-  async function loadAll(){
-    setLoading(true);
-    const[staffR,absR,logR,rejR,takR,expR,kitR,defR,ovR,extR,gsR]=await Promise.all([
-      db.from("staff").select("*").order("name"),
-      db.from("absences").select("*").order("date",{ascending:false}),
-      db.from("clock_logs").select("*").order("date",{ascending:false}),
-      db.from("rejections").select("*"),
-      db.from("takings").select("*").order("date",{ascending:false}),
-      db.from("expenses").select("*").order("date",{ascending:false}),
-      db.from("kitchen_staff").select("*").order("name"),
-      db.from("takings_defaults").select("*"),
-      db.from("takings_assignment").select("staff_id").eq("date",todayISO()).maybeSingle(),
-      db.from("payroll_extras").select("*"),
-      db.from("app_settings").select("key,value").in("key",["gs_webapp_url","gs_payroll_id","gs_takings_id","gs_clocklog_id","manager_pin","welcome_message"]),
-    ]);
-    setStaff((staffR.data||[]).map(s=>({...s,payType:s.pay_type,rate:s.rate,shiftRate:s.shift_rate,nightRate:s.night_rate,cardFixed:s.card_fixed||"0",cardMode:s.card_mode||"fixed",tipsPct:s.tips_pct||"0",monthlyCard:s.monthly_card||"0"})));
-    setAbsences(absR.data||[]);setClockLogs(logR.data||[]);setRejections(rejR.data||[]);
-    setTakings(takR.data||[]);setExpenses(expR.data||[]);
-    setKitchenStaff((kitR.data||[]).map(k=>({...k,payType:k.pay_type||"hourly",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0",cardMode:k.card_mode||"fixed",cardFixed:k.card_fixed||"0",monthlyCard:k.monthly_card||"0",weeklyFixed:k.weekly_fixed||"0",fixedCash:k.fixed_cash||"0"})));
-    setTodayOverride(ovR.data?.staff_id||null);
-    const staffIds=new Set((staffR.data||[]).map(s=>s.id));
-    const dd={};(defR.data||[]).forEach(r=>{if(staffIds.has(r.staff_id))dd[r.day_of_week]=r.staff_id;});setTakingDefaults(dd);
-    const em={};
-    (extR.data||[]).forEach(e=>{em[e.staff_id]={tips:e.tips,additions:e.additions||[],deductions:e.deductions||[],notes:e.notes||[],manualFull:e.manual_full||"",manualNight:e.manual_night||"",manualHrs:e.manual_hrs||"",manualCash:e.manual_cash||"",manualCard:e.manual_card||"",manualTotal:e.manual_total||"",extraTime:e.extra_time||"",id:e.id,ws:e.week_start};});
-    setExtras(em);
-    const gsRows=gsR.data||[];
-    setGsConfig({webAppUrl:gsRows.find(r=>r.key==="gs_webapp_url")?.value||"",payrollId:gsRows.find(r=>r.key==="gs_payroll_id")?.value||"",takingsId:gsRows.find(r=>r.key==="gs_takings_id")?.value||"",clockLogId:gsRows.find(r=>r.key==="gs_clocklog_id")?.value||"",welcomeMsg:gsRows.find(r=>r.key==="welcome_message")?.value||""});
-    setLoading(false);
-  }
-
-  async function loadRota(){
-    if(!staff.length)return;
-    const monStart=addDays(rotaMon,1);
-    const{data}=await db.from("rota").select("*").in("week_start",[rotaMon,monStart]);
-    const rm={};
-    staff.forEach(s=>{rm[s.id]=weekDates(rotaMon).map(dateISO=>{const jsDay=new Date(dateISO+"T12:00:00").getDay();const row=(data||[]).find(r=>r.staff_id===s.id&&r.day_index===jsDay);return{date:dateISO,jsDay,type:row?.shift_type||"Off",customIn:row?.custom_in||"",customOut:row?.custom_out||"",rowId:row?.id};});});
-    setRota(rm);
-  }
-
-  async function loadKitchenHours(){
-    const ws=weekRange.start;const ids=kitchenStaff.map(k=>k.id);if(!ids.length)return;
-    const{data}=await db.from("kitchen_weekly_hours").select("*").in("kitchen_staff_id",ids).eq("week_start",ws);
-    const hm={};(data||[]).forEach(r=>{hm[r.kitchen_staff_id]={id:r.id,hours:r.hours};});setKitchenHours(hm);
-  }
-
-  async function saveGsConfig(cfg){
-    setGsConfig(cfg);
-    for(const[key,value]of[["gs_webapp_url",cfg.webAppUrl],["gs_payroll_id",cfg.payrollId],["gs_takings_id",cfg.takingsId],["gs_clocklog_id",cfg.clockLogId||""],["welcome_message",cfg.welcomeMsg||""]]){
-      await db.from("app_settings").upsert({key,value});
-    }
-    t("✅ Google Sheets config saved!");
-  }
-
-  // ── Rota ──
-  // setShift: local state only — DB write happens when manager presses Send
-  function setShift(sId,dayIdx,field,val){
-    const days=rota[sId]||[];const day=days[dayIdx];if(!day)return;
-    const updated={...day,[field]:val,_unsaved:true};
-    setRota(p=>({...p,[sId]:p[sId].map((d,i)=>i===dayIdx?updated:d)}));
-  }
-
-  // sendRota: saves all 7 days for one staff member to DB, then clears confirmation
-  async function sendRota(sId){
-    const days=rota[sId]||[];
-    const changed=days.filter(d=>d._unsaved);
-    if(changed.length===0){t("No changes to send");return;}
-    const saves=changed.map(async(day)=>{
-      const payload={staff_id:sId,day_index:day.jsDay,week_start:rotaMon,shift_type:day.type,custom_in:day.customIn||null,custom_out:day.customOut||null};
-      if(day.rowId){
-        await db.from("rota").update(payload).eq("id",day.rowId);
-        return{...day,_unsaved:false};
-      }else{
-        const{data}=await db.from("rota").insert(payload).select().single();
-        return{...day,...(data?{rowId:data.id}:{}),_unsaved:false};
-      }
-    });
-    const savedDays=await Promise.all(saves);
-    // Update only the changed days in rota state
-    setRota(p=>({...p,[sId]:p[sId].map(d=>{const updated=savedDays.find(u=>u.jsDay===d.jsDay);return updated||d;})}));
-    // Delete confirmations only for the changed days so staff re-confirms only those
-    await Promise.all(changed.map(day=>db.from("confirmations").delete().eq("staff_id",sId).eq("day",DAYS_MON[day.jsDay])));
-    const s=staff.find(x=>x.id===sId);
-    const changedNames=changed.map(d=>DAYS_MON[d.jsDay]).join(", ");
-    t(`✅ ${s?.name?.split(" ")[0]||"Staff"}: ${changedNames} sent — staff must re-confirm those days`);
-  }
-
-  // ── Takings defaults ──
-  async function saveTakingDefault(staffId,dow,assign){
-    if(assign){
-      const{data:existing}=await db.from("takings_defaults").select("id").eq("day_of_week",dow).maybeSingle();
-      if(existing)await db.from("takings_defaults").update({staff_id:staffId}).eq("id",existing.id);
-      else await db.from("takings_defaults").insert({staff_id:staffId,day_of_week:dow});
-      setTakingDefaults(p=>({...p,[dow]:staffId}));
-    }else{
-      await db.from("takings_defaults").delete().eq("day_of_week",dow).eq("staff_id",staffId);
-      setTakingDefaults(p=>{const n={...p};if(n[dow]===staffId)delete n[dow];return n;});
-    }
-  }
-  async function saveTodayOverride(staffId){
-    setTodayOverride(staffId||null);
-    const{data:existing}=await db.from("takings_assignment").select("id").eq("date",todayISO()).maybeSingle();
-    if(staffId){if(existing)await db.from("takings_assignment").update({staff_id:staffId}).eq("date",todayISO());else await db.from("takings_assignment").insert({staff_id:staffId,date:todayISO()});}
-    else{if(existing)await db.from("takings_assignment").delete().eq("date",todayISO());}
-    t("✅ Today's assignment saved");
-  }
-  const todayDow=new Date().getDay();
-  const effectiveTodayPerson=todayOverride||takingDefaults[todayDow]||null;
-  function staffAssignedDays(staffId){return Object.entries(takingDefaults).filter(([,sid])=>sid===staffId).map(([dow])=>parseInt(dow));}
-
-  // ── Payroll extras ──
-  function getExtras(sid){return extras[sid]||{tips:"",additions:[],deductions:[],notes:[],manualFull:"",manualNight:"",manualHrs:"",manualCash:"",manualCard:"",manualTotal:"",extraTime:"",tipsPaid:false,id:null,ws:null};}
-  // State-only update — called from PayrollCard inputs so calcPay recomputes immediately.
-  // Does NOT write to DB. DB write only happens in exportPayroll flush.
-  function setExtrasState(sid,fn){
-    setExtras(p=>({...p,[sid]:fn(p[sid]||getExtras(sid))}));
-  }
-  // Full upsert to DB — only called from exportPayroll flush on Push.
-  async function updateExtras(sid,fn){
-    const next=fn(getExtras(sid));setExtras(p=>({...p,[sid]:next}));
-    const ws=weekRange.start;
-    const payload={staff_id:sid,week_start:ws,tips:next.tips||"0",additions:next.additions||[],deductions:next.deductions||[],notes:next.notes||[],manual_full:next.manualFull||null,manual_night:next.manualNight||null,manual_hrs:next.manualHrs||null,manual_cash:next.manualCash||null,manual_card:next.manualCard||null,manual_total:next.manualTotal||null,extra_time:next.extraTime||null};
-    const{data}=await db.from("payroll_extras").upsert(payload,{onConflict:"staff_id,week_start"}).select().single();
-    if(data)setExtras(p=>({...p,[sid]:{...next,id:data.id,ws}}));
-  }
-
-  // ── Pay calculations ──
-  // Shared card-split logic for FOH and kitchen. Never silently invents money:
-  // if a fixed card amount is bigger than what was actually earned, we flag it
-  // (cardExceeds) instead of quietly capping it and moving on — the manager
-  // must be shown a warning and correct the fixed amount themselves.
-  function splitCard(mode,fixedAmt,total){
-    if(mode==="cash")return{cardAmt:0,cashAmt:total,exceeds:false};
-    if(mode==="card")return{cardAmt:total,cashAmt:0,exceeds:false};
-    const fixed=parseFloat(fixedAmt||0);
-    const exceeds=fixed>total+0.001; // small epsilon for float rounding
-    const cardAmt=exceeds?total:fixed; // still can't show more card than was earned
-    return{cardAmt,cashAmt:Math.max(0,total-cardAmt),exceeds};
-  }
-
-  function calcPay(s){
-    const ex=getExtras(s.id);
-    const hasShiftRate=parseFloat(s.shiftRate||0)>0||parseFloat(s.nightRate||0)>0;
-    const myRota=rota[s.id]||[];
-    const logsInRange=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=weekRange.start&&l.date<=weekRange.end);
-
-    // ── Shift-paid staff ──
-    // Only count shifts where staff actually clocked in AND out (not just rota-scheduled)
-    const sickDates=new Set(logsInRange.filter(l=>l.note==="sick_leave").map(l=>l.date));
-    const clockedDates=new Set(logsInRange.filter(l=>l.time_in&&l.time_out).map(l=>l.date));
-    const autoFull=myRota.filter(sh=>sh?.type==="Full Day (11am–close)"&&!sickDates.has(sh.date)&&clockedDates.has(sh.date)).length;
-    const autoNight=myRota.filter(sh=>sh?.type==="Night (5:30pm–close)"&&!sickDates.has(sh.date)&&clockedDates.has(sh.date)).length;
-    const full=ex.manualFull!==""&&ex.manualFull!=null?parseFloat(ex.manualFull):(hasShiftRate&&payrollLoaded?autoFull:0);
-    const night=ex.manualNight!==""&&ex.manualNight!=null?parseFloat(ex.manualNight):(hasShiftRate&&payrollLoaded?autoNight:0);
-
-    // ── Hourly-only staff ──
-    let autoHrs=0;let autoOvertimeHrs=0;let autoOvertimeLabel="";
-    if(!hasShiftRate){
-      const dailyRaw={};
-      logsInRange.forEach(l=>{
-        // If note="forgot" (forgot to clock out), use rota scheduled hours, not actual
-        const dayRota=myRota.find(sh=>sh.date===l.date);
-        const forgotClockOut=(l.note||"").includes("forgot");
-        if(forgotClockOut&&dayRota&&dayRota.type==="Custom"&&dayRota.customIn&&dayRota.customOut){
-          dailyRaw[l.date]=(dailyRaw[l.date]||0)+Math.max(0,parseHrs(dayRota.customIn,dayRota.customOut)-parseFloat(l.break_time||0));
-          return;
-        }
-        // Cap start time at rota scheduled start — early clock-ins are not paid
-        let effectiveIn=l.time_in;
-        if(dayRota&&effectiveIn){
-          let schedStart=null;
-          if(dayRota.type==="Full Day (11am–close)")schedStart="11:00";
-          else if(dayRota.type==="Night (5:30pm–close)")schedStart="17:30";
-          else if(dayRota.type==="Custom"&&dayRota.customIn)schedStart=dayRota.customIn;
-          if(schedStart){
-            const[sH,sM]=schedStart.split(":").map(Number);
-            const[iH,iM]=effectiveIn.split(":").map(Number);
-            if(iH*60+iM<sH*60+sM)effectiveIn=schedStart; // clamp to scheduled start
-          }
-        }
-        dailyRaw[l.date]=(dailyRaw[l.date]||0)+Math.max(0,parseHrs(effectiveIn,l.time_out)-parseFloat(l.break_time||0));
-      });
-      autoHrs=Object.values(dailyRaw).reduce((a,dayHrs)=>a+roundHrsUp(dayHrs),0);
-      // Overtime: compute scheduled hours from rota, compare to clock hours
-      let scheduledHrs=0;
-      myRota.forEach(sh=>{
-        if(sh.date<weekRange.start||sh.date>weekRange.end)return;
-        if(sh.type==="Full Day (11am–close)")scheduledHrs+=12; // 11:00-23:00
-        else if(sh.type==="Night (5:30pm–close)")scheduledHrs+=5.5; // 17:30-23:00
-        else if(sh.type==="Custom"&&sh.customIn&&sh.customOut){scheduledHrs+=parseHrs(sh.customIn,sh.customOut);}
-      });
-      // Only mark overtime if a clock log note says overtime
-      const overtimeLogs=logsInRange.filter(l=>l.note==="overtime");
-      if(overtimeLogs.length>0&&scheduledHrs>0){
-        const overtimeRaw=Math.max(0,autoHrs-scheduledHrs);
-        autoOvertimeHrs=roundHrs025(overtimeRaw);
-        if(autoOvertimeHrs>0)autoOvertimeLabel=`Overtime: ${autoOvertimeHrs}h`;
-      }
-    }
-    const hrs=ex.manualHrs!==""&&ex.manualHrs!=null?parseFloat(ex.manualHrs):autoHrs;
-
-    // ── Auto-deduction for shift-paid left_early / late ──
-    // For each shift day where clock log has left_early note, calculate deficit hours
-    let autoDeductions=[...(ex.deductions||[])];
-    if(hasShiftRate){
-      myRota.forEach(sh=>{
-        if(!sh.date||sh.date<weekRange.start||sh.date>weekRange.end)return;
-        const dayLog=logsInRange.find(l=>l.date===sh.date&&l.note==="left_early");
-        if(!dayLog||!dayLog.time_out)return;
-        // Get scheduled end time for this shift
-        let schedEnd=null;
-        if(sh.type==="Full Day (11am–close)")schedEnd="23:00";
-        else if(sh.type==="Night (5:30pm–close)")schedEnd="23:00";
-        else if(sh.type==="Custom"&&sh.customOut)schedEnd=sh.customOut;
-        if(!schedEnd)return;
-        const [eH,eM]=schedEnd.split(":").map(Number);
-        const [oH,oM]=dayLog.time_out.split(":").map(Number);
-        const diffMins=(eH*60+eM)-(oH*60+oM);
-        if(diffMins>0){
-          const dedHrs=roundHrs025(diffMins/60);
-          if(dedHrs>0){
-            const dedLabel=`Left early ${dispDate(sh.date)} (-${dedHrs}h)`;
-            // Only auto-add if not already in deductions
-            if(!autoDeductions.some(d=>d.label===dedLabel)){
-              autoDeductions=[...autoDeductions,{label:dedLabel,amount:String(r2(dedHrs*parseFloat(s.rate||0))),auto:true}];
-            }
-          }
-        }
-      });
-    }
-
-    const weekTakings=takings.filter(tk=>tk.date>=weekRange.start&&tk.date<=weekRange.end);
-    const weekTipsTotal=weekTakings.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0)+parseFloat(tk.tips_card||0),0);
-    const autoTips=r2(weekTipsTotal*parseFloat(s.tipsPct||0)/100);
-    const tips=ex.tips!==""&&ex.tips!=null?parseFloat(ex.tips||0):autoTips;
-    const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    const dedT=autoDeductions.reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    const base=hrs*parseFloat(s.rate||0)+full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
-    const salaryTotal=Math.max(0,base+addT-dedT);
-    const cardMode=s.cardMode||"fixed";
-    const{cardAmt:calcCard,cashAmt:calcCash,exceeds}=splitCard(cardMode,s.cardFixed,salaryTotal);
-    const isOverride=!!(ex.manualTotal&&ex.manualTotal!=="");
-    const salaryFinal=isOverride?parseFloat(ex.manualTotal):salaryTotal;
-    const cardAmt=ex.manualCard&&ex.manualCard!==""?parseFloat(ex.manualCard):calcCard;
-    const cashAmt=ex.manualCash&&ex.manualCash!==""?parseFloat(ex.manualCash):calcCash;
-    return{full,night,hrs:typeof hrs==="number"?hrs.toFixed(2):hrs,base:base.toFixed(2),baseCash:Math.max(0,base-parseFloat(s.cardFixed||0)).toFixed(2),tips:tips.toFixed(2),autoTips:autoTips.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:salaryFinal.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt:cashAmt.toFixed(2),isOverride,grossTotal:salaryTotal,cardExceeds:!isOverride&&cardMode==="fixed"&&exceeds,autoOvertimeHrs,autoOvertimeLabel,sickDays:sickDates.size,autoDeductions};
-  }
-
-  function calcKitchenPay(k){
-    const sid=kId(k.id);const ex=getExtras(sid);
-    const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-    const fixedCash=parseFloat(ex.manualCash!==""&&ex.manualCash!=null?ex.manualCash:k.fixedCash||0);
-    const fixedCard=parseFloat(ex.manualCard!==""&&ex.manualCard!=null?ex.manualCard:k.cardFixed||0);
-    const total=r2(Math.max(0,fixedCash+fixedCard+addT-dedT));
-    const isOverride=!!(ex.manualTotal&&ex.manualTotal!=="");
-    const finalTotal=isOverride?parseFloat(ex.manualTotal):total;
-    return{fixedCash:fixedCash.toFixed(2),fixedCard:fixedCard.toFixed(2),cashAmt:fixedCash.toFixed(2),cardAmt:fixedCard.toFixed(2),addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:finalTotal.toFixed(2),grossTotal:total,isOverride};
-  }
-
-  function payTotals(){
-    let fhCash=0,fhCard=0,fhTips=0,kcCash=0,kcCard=0;
-    staff.forEach(s=>{const p=calcPay(s);fhCash+=parseFloat(p.cashAmt);fhCard+=parseFloat(p.cardAmt);fhTips+=parseFloat(p.tips);});
-    kitchenStaff.forEach(k=>{const p=calcKitchenPay(k);kcCash+=parseFloat(p.cashAmt);kcCard+=parseFloat(p.cardAmt);});
-    const totCash=fhCash+kcCash,totCard=fhCard+kcCard;
-    return{
-      fhCash:fhCash.toFixed(2),fhCard:fhCard.toFixed(2),fhTips:fhTips.toFixed(2),
-      kcCash:kcCash.toFixed(2),kcCard:kcCard.toFixed(2),
-      cash:totCash.toFixed(2),card:totCard.toFixed(2),
-      gross:(totCash+totCard).toFixed(2)
-    };
-  }
-
-  // ── Kitchen ──
-  async function addKitchen(){
-    if(!newKName.trim())return t("Please enter a name");
-    const{data,error}=await db.from("kitchen_staff").insert({name:newKName.trim(),cash_card:"cash",pay_type:"hourly",shift_rate:"0",night_rate:"0",rate:"0",card_mode:"fixed",card_fixed:"0"}).select().single();
-    if(!error){setKitchenStaff(p=>[...p,{...data,payType:"hourly",shiftRate:"0",nightRate:"0",cardMode:"fixed",cardFixed:"0"}]);setNewKName("");t("✅ "+data.name+" added");}
-    else t("❌ "+error.message);
-  }
-  async function updKitchenField(id,field,val){
-    setKitchenStaff(p=>p.map(k=>k.id===id?{...k,[field]:val}:k));
-    await db.from("kitchen_staff").update({[field]:val}).eq("id",id);
-  }
-  async function updKitchenHours(kitchenId,hours){
-    const ws=weekRange.start;const existing=kitchenHours[kitchenId];
-    setKitchenHours(p=>({...p,[kitchenId]:{...p[kitchenId],hours}}));
-    if(existing?.id){await db.from("kitchen_weekly_hours").update({hours}).eq("id",existing.id);}
-    else{const{data}=await db.from("kitchen_weekly_hours").insert({kitchen_staff_id:kitchenId,week_start:ws,hours}).select().single();if(data)setKitchenHours(p=>({...p,[kitchenId]:{id:data.id,hours}}));}
-  }
-  async function delKitchen(id){setKitchenStaff(p=>p.filter(k=>k.id!==id));await db.from("kitchen_staff").delete().eq("id",id);}
-
-  // ── Remove FOH staff ──
-  async function removeStaff(s){
-    if(!window.confirm(`Remove ${s.name} and ALL their history (clock logs, rota, absences, payroll data)? This cannot be undone.`))return;
-    const{error}=await db.from("staff").delete().eq("id",s.id);
-    if(!error){
-      setStaff(p=>p.filter(x=>x.id!==s.id));
-      // Cascade delete all related records
-      await Promise.all([
-        db.from("takings_defaults").delete().eq("staff_id",s.id),
-        db.from("clock_logs").delete().eq("staff_id",s.id),
-        db.from("rota").delete().eq("staff_id",s.id),
-        db.from("confirmations").delete().eq("staff_id",s.id),
-        db.from("rejections").delete().eq("staff_id",s.id),
-        db.from("absences").delete().eq("staff_id",s.id),
-        db.from("payroll_extras").delete().eq("staff_id",s.id),
-      ]);
-      setTakingDefaults(p=>{const n={...p};Object.keys(n).forEach(k=>{if(n[k]===s.id)delete n[k];});return n;});
-      setClockLogs(p=>p.filter(l=>l.staff_id!==s.id));
-      setAbsences(p=>p.filter(a=>a.staff_id!==s.id));
-      setRejections(p=>p.filter(r=>r.staff_id!==s.id));
-      t(`✅ ${s.name} and all their history removed`);
-    }else t("❌ "+error.message);
-  }
-
-  // ── Expenses ──
-  async function addExpense(desc,amount,payType,date){
-    const{data,error}=await db.from("expenses").insert({description:desc,amount:parseFloat(amount),pay_type:payType,date}).select().single();
-    if(!error)setExpenses(p=>[data,...p]);return{error};
-  }
-  async function delExpense(id){setExpenses(p=>p.filter(e=>e.id!==id));await db.from("expenses").delete().eq("id",id);}
-  async function updateExpense(id,fields){
-    const{error}=await db.from("expenses").update(fields).eq("id",id);
-    if(!error)setExpenses(p=>p.map(e=>e.id===id?{...e,...fields}:e));
-    return{error};
-  }
-
-  // ── Takings overwrite ──
-  async function upsertTakings(date,vals,note){
-    const existing=takings.find(s=>s.date===date);
-    if(existing){
-      const safeVals={};Object.keys(vals).forEach(k=>{safeVals[k]=typeof vals[k]==="number"?r2(vals[k]):vals[k];});
-      const{error}=await db.from("takings").update({...safeVals,note,is_new:false}).eq("id",existing.id);
-      if(!error){
-        const updated=[...takings.map(x=>x.id===existing.id?{...x,...vals,note,is_new:false}:x)];
-        setTakings(updated);
-        return{ok:true,updatedTakings:updated};
-      }
-      return{ok:false,err:error.message};
-    }else{
-      const safeVals2={};Object.keys(vals).forEach(k=>{safeVals2[k]=typeof vals[k]==="number"?r2(vals[k]):vals[k];});
-      const{data,error}=await db.from("takings").insert({staff_id:"manager",staff_name:"Manager",date,...safeVals2,note,is_new:false}).select().single();
-      if(!error){
-        const updated=[data,...takings];
-        setTakings(updated);
-        return{ok:true,updatedTakings:updated};
-      }
-      return{ok:false,err:error.message};
-    }
-  }
-
-  // ── Auto-push single day to Daily sheet with fresh data ──
-  async function autoPushDay(date, freshTakings){
-    if(!gsConfig.webAppUrl||!gsConfig.takingsId)return;
-    const takingsToUse=freshTakings||takings;
-    // Build complete Daily and Weekly from fresh data
-    function buildDailyFresh(){
-      const dates=[...new Set([...takingsToUse.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
-      const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)","Other Expenses Cash (£)","Other Expenses Card (£)","Other Expense Notes"];
-      function rowForDate(d){
-        const sub=takingsToUse.find(s=>s.date===d)||{};
-        const dayExp=expenses.filter(e=>e.date===d);
-        const otherExpCash=dayExp.filter(e=>e.pay_type==="cash").reduce((s,e)=>s+e.amount,0);
-        const otherExpCard=dayExp.filter(e=>e.pay_type==="card").reduce((s,e)=>s+e.amount,0);
-        const otherExpNotes=dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ");
-        const shopExp=parseFloat(sub.shop_expense||0);
-        const dep=parseFloat(sub.deposit_receipt||0);
-        const depPay=sub.deposit_pay_type||"cash";
-        const depCash=depPay==="cash"?dep:0; const depCard=depPay==="card"?dep:0;
-        const vp=parseFloat(sub.voucher_purchase||0);
-        const vpPay=sub.voucher_pay_type||"cash";
-        const vpCash=vpPay==="cash"?vp:0; const vpCard=vpPay==="card"?vp:0;
-        const cash=parseFloat(sub.cash||0),card=parseFloat(sub.card||0);
-        const deliveroo=parseFloat(sub.deliveroo||0),uber=parseFloat(sub.uber||0),online=parseFloat(sub.online||0);
-        const total=r2(deliveroo+uber+cash+card+online-shopExp+dep+vp);
-        const cashInHand=r2(cash-shopExp+depCash+vpCash);
-        const tCash=r2(parseFloat(sub.tips_cash||0));
-        const tCard=r2(parseFloat(sub.tips_card||0));
-        return[fmtDate(d),r2(deliveroo),r2(uber),r2(cash),r2(card),r2(online),r2(shopExp),r2(depCash),r2(depCard),r2(vpCash),r2(vpCard),total,cashInHand,total,tCash,tCard,r2(otherExpCash),r2(otherExpCard),otherExpNotes];
-      }
-      return[hdr,...dates.map(rowForDate)];
-    }
-    function buildWeeklyFresh(){
-      const dates=[...new Set([...takingsToUse.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
-      const wm={};dates.forEach(d=>{const{start}=payWeekOf(d);if(!wm[start])wm[start]=[];wm[start].push(d);});
-      const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)","Other Expenses Cash (£)","Other Expenses Card (£)"];
-      const rows=[hdr];
-      Object.entries(wm).sort().forEach(([ws,dates2])=>{
-        const{end}=payWeekOf(ws);
-        let del=0,uber=0,cash=0,card=0,online=0,shopExp=0,depCash=0,depCard=0,vpCash=0,vpCard=0,otherExpCash=0,otherExpCard=0,tipsCash=0,tipsCard=0;
-        dates2.forEach(d=>{
-          const sub=takingsToUse.find(s=>s.date===d)||{};
-          del+=parseFloat(sub.deliveroo||0);uber+=parseFloat(sub.uber||0);cash+=parseFloat(sub.cash||0);card+=parseFloat(sub.card||0);online+=parseFloat(sub.online||0);shopExp+=parseFloat(sub.shop_expense||0);
-          tipsCash+=parseFloat(sub.tips_cash||0);tipsCard+=parseFloat(sub.tips_card||0);
-          const dep=parseFloat(sub.deposit_receipt||0);const depPay=sub.deposit_pay_type||"cash";
-          if(depPay==="cash")depCash+=dep;else depCard+=dep;
-          const vp=parseFloat(sub.voucher_purchase||0);const vpPay=sub.voucher_pay_type||"cash";
-          if(vpPay==="cash")vpCash+=vp;else vpCard+=vp;
-          const dayExp=expenses.filter(e=>e.date===d);
-          otherExpCash+=dayExp.filter(e=>e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);
-          otherExpCard+=dayExp.filter(e=>e.pay_type==="card").reduce((a,e)=>a+e.amount,0);
-        });
-        const total=r2(del+uber+cash+card+online-shopExp+(depCash+depCard)+(vpCash+vpCard));
-        const cashInHand=r2(cash-shopExp+depCash+vpCash);
-        rows.push([fmtRangeExport(ws,end),del.toFixed(2),uber.toFixed(2),cash.toFixed(2),card.toFixed(2),online.toFixed(2),shopExp.toFixed(2),depCash.toFixed(2),depCard.toFixed(2),vpCash.toFixed(2),vpCard.toFixed(2),total,cashInHand,total,tipsCash.toFixed(2),tipsCard.toFixed(2),otherExpCash.toFixed(2),otherExpCard.toFixed(2)]);
-      });
-      return rows;
-    }
-    await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",buildDailyFresh());
-    await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Weekly",buildWeeklyFresh());
-  }
-
-  // ── Export builders ──
-  function buildPayroll(){
-    const hdr=["Date Range","Name","Type","Full Shifts","Night Shifts","Hours","Rate/Hour (£)","Rate/Full Shift (£)","Rate/Night Shift (£)","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes","Override?"];
-    const rows=[hdr];
-    staff.forEach(s=>{
-      const p=calcPay(s);const ex=getExtras(s.id);
-      rows.push([fmtRangeExport(weekRange.start,weekRange.end),s.name,"FOH",
-        p.full,p.night,p.hrs,
-        s.rate||"0",s.shiftRate||"0",s.nightRate||"0",
-        p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,
-        (ex.notes||[]).join("; "),p.isOverride?"MANUAL":""]);
-    });
-    kitchenStaff.forEach(k=>{
-      const p=calcKitchenPay(k);const ex=getExtras(kId(k.id));
-      rows.push([fmtRangeExport(weekRange.start,weekRange.end),k.name,"Kitchen",
-        p.full,p.night,p.hrs,
-        k.rate||"0",k.shiftRate||"0",k.nightRate||"0",
-        p.cashAmt,p.cardAmt,p.tips,p.addT,p.dedT,p.total,
-        (ex.notes||[]).join("; "),p.isOverride?"MANUAL":""]);
-    });
-    return rows;
-  }
-  function buildPayrollWeekly(){
-    const hdr=["Date Range","FH Cash (£)","FH Card (£)","FH Tips (£)","Kitchen Cash (£)","Kitchen Card (£)","Total Cash (£)","Total Card (£)","Total (£)"];
-    const{fhCash,fhCard,fhTips,kcCash,kcCard,cash,card,gross}=payTotals();
-    return[hdr,[fmtRangeExport(weekRange.start,weekRange.end),fhCash,fhCard,fhTips,kcCash,kcCard,cash,card,gross]];
-  }
-  async function buildPayrollMonthly(yearMonth, allExtrasDb){
-    // A week belongs to the month whose LAST day (Saturday=start+6) falls in.
-    const hdr=["Date Range","Staff Name","Type","Cash (£)","Card (£)","Tips (£)","Total Bank Transfer (£)"];
-    const rows=[hdr];
-    const[yr,mo]=yearMonth.split("-").map(Number);
-    const monthStart=new Date(yr,mo-1,1);
-    const monthEnd=new Date(yr,mo,0);
-    const monthStartISO=monthStart.toISOString().split("T")[0];
-    const monthEndISO=monthEnd.toISOString().split("T")[0];
-    const rangeStr=`${fmtDate(monthStartISO)}-${fmtDate(monthEndISO)}`;
-
-    // If allExtrasDb not passed, fetch from DB
-    const allEx=allExtrasDb||(await db.from("payroll_extras").select("*")).data||[];
-    if(allEx.length===0)return rows;
-
-    // Find all week_starts whose Saturday falls in this month
-    const qualifyingWeeks=new Set();
-    allEx.forEach(ex=>{
-      if(!ex.week_start)return;
-      const wEnd=addDays(ex.week_start,6);
-      if(wEnd>=monthStartISO&&wEnd<=monthEndISO)qualifyingWeeks.add(ex.week_start);
-    });
-    if(qualifyingWeeks.size===0)return rows;
-
-    const allPeople=[
-      ...staff.map(s=>({id:s.id,name:s.name,type:"FOH",rate:s.rate,shiftRate:s.shiftRate,nightRate:s.nightRate,cardMode:s.cardMode,cardFixed:s.cardFixed,tipsPct:s.tipsPct||"0",monthlyCard:s.monthlyCard||"0",sid:s.id})),
-      ...kitchenStaff.map(k=>({id:k.id,name:k.name,type:"Kitchen",rate:k.rate,shiftRate:k.shiftRate,nightRate:k.nightRate,cardMode:k.cardMode,cardFixed:k.cardFixed,tipsPct:"0",monthlyCard:k.monthlyCard||"0",sid:kId(k.id)}))
-    ];
-
-    allPeople.forEach(person=>{
-      let totalCash=0,totalTips=0;
-      qualifyingWeeks.forEach(ws=>{
-        const ex=allEx.find(e=>e.staff_id===person.sid&&e.week_start===ws);
-        if(!ex)return;
-        const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
-        const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
-        const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
-        const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const base=hrs*parseFloat(person.rate||0)+full*parseFloat(person.shiftRate||0)+night*parseFloat(person.nightRate||0);
-        const sal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
-        const{cashAmt}=splitCard(person.cardMode||"fixed",person.cardFixed,sal);
-        const storedTips=parseFloat(ex.tips||0);
-        const weekTakingsForWs=takings.filter(tk=>tk.date>=ws&&tk.date<=addDays(ws,6));
-        const weekTipsTotal=weekTakingsForWs.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0)+parseFloat(tk.tips_card||0),0);
-        const autoTips=person.type==="FOH"?r2(weekTipsTotal*parseFloat(person.tipsPct||0)/100):0;
-        const tips=storedTips>0?storedTips:autoTips;
-        // Cash: accumulated from weekly cash payments (1st to last day of month)
-        totalCash+=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
-        totalTips+=tips;
-      });
-      // Card: fixed monthly amount per staff — independent of weekly shifts
-      const fixedMonthlyCard=parseFloat(person.monthlyCard||0);
-      if(totalCash+fixedMonthlyCard+totalTips===0)return;
-      const bankTransfer=r2(fixedMonthlyCard+totalTips);
-      rows.push([rangeStr,person.name,person.type,r2(totalCash).toFixed(2),fixedMonthlyCard.toFixed(2),r2(totalTips).toFixed(2),bankTransfer.toFixed(2)]);
-    });
-    return rows;
-  }
-  function buildDailyForDate(date){
-    const sub=takings.find(s=>s.date===date)||{};
-    const dayExp=expenses.filter(e=>e.date===date);
-    const otherExpCash=dayExp.filter(e=>e.pay_type==="cash").reduce((s,e)=>s+e.amount,0);
-    const otherExpCard=dayExp.filter(e=>e.pay_type==="card").reduce((s,e)=>s+e.amount,0);
-    const otherExpNotes=dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ");
-    const shopExp=parseFloat(sub.shop_expense||0);
-    const dep=parseFloat(sub.deposit_receipt||0);
-    const depPay=sub.deposit_pay_type||"cash";
-    const depCash=depPay==="cash"?dep:0;
-    const depCard=depPay==="card"?dep:0;
-    const vp=parseFloat(sub.voucher_purchase||0);
-    const vpPay=sub.voucher_pay_type||"cash";
-    const vpCash=vpPay==="cash"?vp:0;
-    const vpCard=vpPay==="card"?vp:0;
-    const deliveroo=parseFloat(sub.deliveroo||0);
-    const uber=parseFloat(sub.uber||0);
-    const cash=parseFloat(sub.cash||0);
-    const card=parseFloat(sub.card||0);
-    const online=parseFloat(sub.online||0);
-    // Total and CashInHand do NOT include other expenses (informational only)
-    const total=r2(deliveroo+uber+cash+card+online-shopExp+dep+vp);
-    const cashInHand=r2(cash-shopExp+depCash+vpCash);
-    const tCash=r2(parseFloat(sub.tips_cash||0));
-    const tCard=r2(parseFloat(sub.tips_card||0));
-    // Column order: ...VPCard, Total, CashInHand, NetTotal, TipsCash, TipsCard, OtherExpCash, OtherExpCard, Notes
-    return[[
-      fmtDate(date),
-      r2(deliveroo), r2(uber), r2(cash), r2(card), r2(online),
-      r2(shopExp),
-      r2(depCash), r2(depCard),
-      r2(vpCash), r2(vpCard),
-      total, cashInHand, total,
-      tCash, tCard,
-      r2(otherExpCash), r2(otherExpCard),
-      otherExpNotes
-    ]];
-  }
-  function buildDaily(){
-    const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
-    const hdr=["Date","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)","Other Expenses Cash (£)","Other Expenses Card (£)","Other Expense Notes"];
-    return[hdr,...dates.map(date=>buildDailyForDate(date)[0])];
-  }
-  function buildWeekly(){
-    const dates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
-    const wm={};dates.forEach(d=>{const{start}=payWeekOf(d);if(!wm[start])wm[start]=[];wm[start].push(d);});
-    const hdr=["Date Range","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expenses (£)","Deposit Receipt Cash","Deposit Receipt Card","Voucher Purchase Cash","Voucher Purchase Card","Total","Cash in Hand","Net Total","Tips Cash (£)","Tips Card (£)","Other Expenses Cash (£)","Other Expenses Card (£)"];
-    const rows=[hdr];
-    Object.entries(wm).sort().forEach(([ws,dates2])=>{
-      const{end}=payWeekOf(ws);
-      let del=0,uber=0,cash=0,card=0,online=0,shopExp=0;
-      let depCash=0,depCard=0,vpCash=0,vpCard=0;
-      let otherExpCash=0,otherExpCard=0,tipsCash=0,tipsCard=0;
-      dates2.forEach(d=>{
-        const sub=takings.find(s=>s.date===d)||{};
-        del+=parseFloat(sub.deliveroo||0);uber+=parseFloat(sub.uber||0);
-        cash+=parseFloat(sub.cash||0);card+=parseFloat(sub.card||0);online+=parseFloat(sub.online||0);
-        shopExp+=parseFloat(sub.shop_expense||0);
-        tipsCash+=parseFloat(sub.tips_cash||0);
-        tipsCard+=parseFloat(sub.tips_card||0);
-        const dep=parseFloat(sub.deposit_receipt||0);
-        const depPay=sub.deposit_pay_type||"cash";
-        if(depPay==="cash")depCash+=dep;else depCard+=dep;
-        const vp=parseFloat(sub.voucher_purchase||0);
-        const vpPay=sub.voucher_pay_type||"cash";
-        if(vpPay==="cash")vpCash+=vp;else vpCard+=vp;
-        const dayExp=expenses.filter(e=>e.date===d);
-        otherExpCash+=dayExp.filter(e=>e.pay_type==="cash").reduce((a,e)=>a+e.amount,0);
-        otherExpCard+=dayExp.filter(e=>e.pay_type==="card").reduce((a,e)=>a+e.amount,0);
-      });
-      // Total and cashInHand do NOT include other expenses (informational only)
-      const total=r2(del+uber+cash+card+online-shopExp+(depCash+depCard)+(vpCash+vpCard));
-      const cashInHand=r2(cash-shopExp+depCash+vpCash);
-      rows.push([
-        fmtRangeExport(ws,end),
-        r2(del),r2(uber),r2(cash),r2(card),r2(online),
-        r2(shopExp),
-        r2(depCash),r2(depCard),
-        r2(vpCash),r2(vpCard),
-        total,cashInHand,total,
-        r2(tipsCash),r2(tipsCard),
-        r2(otherExpCash),r2(otherExpCard)
-      ]);
-    });
-    return rows;
-  }
-
-  async function exportPayroll(){
-    if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
-
-    const ws=weekRange.start;
-    // Flush current extras state to DB before fetching allEx
-    if(Object.keys(extras).length>0){
-      t("⏳ Saving current week data…");
-      try{
-        const flushOps=Object.entries(extras).map(([sid,ex])=>{
-          const payload={staff_id:sid,week_start:ws,tips:ex.tips||"0",additions:ex.additions||[],deductions:ex.deductions||[],notes:ex.notes||[],manual_full:ex.manualFull||null,manual_night:ex.manualNight||null,manual_hrs:ex.manualHrs||null,manual_cash:ex.manualCash||null,manual_card:ex.manualCard||null,manual_total:ex.manualTotal||null,extra_time:ex.extraTime||null};
-          // Try with extra_time; if column missing, retry without it
-          return db.from("payroll_extras").upsert(payload,{onConflict:"staff_id,week_start"})
-            .then(r=>{
-              if(r.error&&(r.error.message?.includes("extra_time")||r.error.code==="42703")){
-                const{extra_time,...payloadNoET}=payload;
-                return db.from("payroll_extras").upsert(payloadNoET,{onConflict:"staff_id,week_start"});
-              }
-              return r;
-            });
-        });
-        const results=await Promise.all(flushOps);
-        const errs=results.filter(r=>r.error).map(r=>r.error.message);
-        if(errs.length>0){t("❌ Save error: "+errs[0]);return;}
-      }catch(e){t("❌ Save error: "+e.message);return;}
-    }
-
-    // Now fetch ALL payroll_extras from DB — guaranteed to include current week
-    const{data:allExDb}=await db.from("payroll_extras").select("*");
-    if(!allExDb){t("❌ Could not load payroll data from DB");return;}
-
-    // Merge current extras STATE on top of DB rows so unsaved field edits are included.
-    // For each staff in current extras, if their week_start matches current week,
-    // use the state version (most up-to-date). DB rows for other weeks stay as-is.
-    const allEx=[...allExDb];
-    Object.entries(extras).forEach(([sid,ex])=>{
-      const idx=allEx.findIndex(e=>e.staff_id===sid&&e.week_start===ws);
-      const merged={staff_id:sid,week_start:ws,tips:ex.tips||"0",additions:ex.additions||[],deductions:ex.deductions||[],notes:ex.notes||[],manual_full:ex.manualFull||null,manual_night:ex.manualNight||null,manual_hrs:ex.manualHrs||null,manual_cash:ex.manualCash||null,manual_card:ex.manualCard||null,manual_total:ex.manualTotal||null};
-      if(idx>=0)allEx[idx]=merged;else allEx.push(merged);
-    });
-
-    // ── Build Payroll tab: one row per staff per week, ALL weeks ──
-    const payrollHdr=["Date Range","Name","Type","Full Shifts","Night Shifts","Hours","Rate/Hour (£)","Rate/Full Shift (£)","Rate/Night Shift (£)","Cash (£)","Card (£)","Tips (£)","Additions (£)","Deductions (£)","Total (£)","Notes","Extra Time (hrs)","Lost Hours (hrs)","Override?"];
-    const payrollRows=[payrollHdr];
-    // Group extras by week_start
-    const weekStarts=[...new Set(allEx.map(e=>e.week_start).filter(Boolean))].sort();
-    weekStarts.forEach(ws=>{
-      const wEnd=addDays(ws,6);
-      const wRange=fmtRangeExport(ws,wEnd);
-      // FOH staff — include all FOH with any pay configured
-      staff.forEach(s=>{
-        const ex=allEx.find(e=>e.staff_id===s.id&&e.week_start===ws)||{};
-        // Skip if no data and no fixed card amount
-        if(!allEx.find(e=>e.staff_id===s.id&&e.week_start===ws)&&!parseFloat(s.cardFixed||0)&&!parseFloat(s.shiftRate||0)&&!parseFloat(s.rate||0))return;
-        const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
-        const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
-        const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
-        const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const base=hrs*parseFloat(s.rate||0)+full*parseFloat(s.shiftRate||0)+night*parseFloat(s.nightRate||0);
-        const salaryTotal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
-        const{cardAmt,cashAmt}=splitCard(s.cardMode||"fixed",s.cardFixed,salaryTotal);
-        const cash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):cashAmt;
-        const card=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):cardAmt;
-        // Auto-calculate tips from takings if not manually set
-        const storedTips=parseFloat(ex.tips||0);
-        const weekTakingsForWs=takings.filter(tk=>tk.date>=ws&&tk.date<=wEnd);
-        const weekTipsTotal=weekTakingsForWs.reduce((a,tk)=>a+parseFloat(tk.tips_cash||0)+parseFloat(tk.tips_card||0),0);
-        const autoTips=r2(weekTipsTotal*parseFloat(s.tipsPct||0)/100);
-        const tips=storedTips>0?storedTips:autoTips;
-        // Compute overtime and lost hours from clock logs for this week
-        const fohLogs=clockLogs.filter(l=>l.staff_id===s.id&&l.date>=ws&&l.date<=addDays(ws,6));
-        let fohOvertimeHrs=0,fohLostHrs=0;
-        const fohRota=rota[s.id]||[];
-        fohRota.filter(sh=>sh.date>=ws&&sh.date<=addDays(ws,6)).forEach(sh=>{
-          const dayLog=fohLogs.find(l=>l.date===sh.date);
-          if(!dayLog||!dayLog.time_out)return;
-          let schedEnd=null;
-          if(sh.type==="Full Day (11am–close)")schedEnd="23:00";
-          else if(sh.type==="Night (5:30pm–close)")schedEnd="23:00";
-          else if(sh.type==="Custom"&&sh.customOut)schedEnd=sh.customOut;
-          if(!schedEnd)return;
-          const[eH,eM]=schedEnd.split(":").map(Number);
-          const[oH,oM]=dayLog.time_out.split(":").map(Number);
-          const diffMins=(oH*60+oM)-(eH*60+eM);
-          if(diffMins>15&&(dayLog.note||"").includes("overtime"))fohOvertimeHrs+=roundHrs025(diffMins/60);
-          if(diffMins<0&&(dayLog.note||"").includes("left_early"))fohLostHrs+=roundHrs025(Math.abs(diffMins)/60);
-        });
-        const extraTimeVal=ex.extra_time||(fohOvertimeHrs>0?String(fohOvertimeHrs):"");
-        const lostHrsVal=fohLostHrs>0?String(fohLostHrs):"";
-        const fohOverrideLabel=ex.manual_total?new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"2-digit",hour:"2-digit",minute:"2-digit"}):"";payrollRows.push([wRange,s.name,"FOH",full,night,r2(hrs).toFixed(2),s.rate||"0",s.shiftRate||"0",s.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),extraTimeVal,lostHrsVal,fohOverrideLabel]);
-      });
-      // Kitchen staff — include all kitchen with fixed cash or card
-      kitchenStaff.forEach(k=>{
-        const sid=kId(k.id);
-        const ex=allEx.find(e=>e.staff_id===sid&&e.week_start===ws)||{};
-        // Skip only if no extras AND no fixed amounts
-        if(!allEx.find(e=>e.staff_id===sid&&e.week_start===ws)&&!parseFloat(k.fixedCash||k.fixed_cash||0)&&!parseFloat(k.cardFixed||k.card_fixed||0))return;
-        const hrs=ex.manual_hrs!=null&&ex.manual_hrs!==""?parseFloat(ex.manual_hrs):0;
-        const full=ex.manual_full!=null&&ex.manual_full!==""?parseFloat(ex.manual_full):0;
-        const night=ex.manual_night!=null&&ex.manual_night!==""?parseFloat(ex.manual_night):0;
-        const tips=parseFloat(ex.tips||0);
-        const addT=(ex.additions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const dedT=(ex.deductions||[]).reduce((a,x)=>a+parseFloat(x.amount||0),0);
-        const base=hrs*parseFloat(k.rate||0)+full*parseFloat(k.shiftRate||0)+night*parseFloat(k.nightRate||0);
-        const salaryTotal=ex.manual_total!=null&&ex.manual_total!==""?parseFloat(ex.manual_total):Math.max(0,base+addT-dedT);
-        // Kitchen: fixed cash and fixed card from staff settings (not splitCard)
-        const fixedCash=parseFloat(k.fixed_cash||k.fixedCash||0);
-        const fixedCard=parseFloat(k.card_fixed||k.cardFixed||0);
-        const cash=ex.manual_cash!=null&&ex.manual_cash!==""?parseFloat(ex.manual_cash):r2(fixedCash+addT-dedT>0?fixedCash:0);
-        const card=ex.manual_card!=null&&ex.manual_card!==""?parseFloat(ex.manual_card):fixedCard;
-        const kitOverrideLabel=ex.manual_total?new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"2-digit",hour:"2-digit",minute:"2-digit"}):"";payrollRows.push([wRange,k.name,"Kitchen",full,night,r2(hrs).toFixed(2),k.rate||"0",k.shiftRate||"0",k.nightRate||"0",r2(cash).toFixed(2),r2(card).toFixed(2),r2(tips).toFixed(2),r2(addT).toFixed(2),r2(dedT).toFixed(2),r2(salaryTotal).toFixed(2),(ex.notes||[]).join("; "),"","",kitOverrideLabel]);
-      });
-    });
-
-    // ── Build PayrollWeekly: aggregate directly from payrollRows (one source of truth) ──
-    const wklyHdr=["Date Range","FH Cash (£)","FH Card (£)","FH Tips (£)","Kitchen Cash (£)","Kitchen Card (£)","Total Cash (£)","Total Card (£)","Total (£)"];
-    const wklyRows=[wklyHdr];
-    // Group payrollRows (skip header) by date range
-    const weekMap={};
-    payrollRows.slice(1).forEach(row=>{
-      const[wRange,,type,,,,,,, cash,card,tips]=[...row];
-      if(!weekMap[wRange])weekMap[wRange]={fhCash:0,fhCard:0,fhTips:0,kcCash:0,kcCard:0};
-      const c=parseFloat(cash||0),cd=parseFloat(card||0),tp=parseFloat(tips||0);
-      if(type==="FOH"){weekMap[wRange].fhCash+=c;weekMap[wRange].fhCard+=cd;weekMap[wRange].fhTips+=tp;}
-      else if(type==="Kitchen"){weekMap[wRange].kcCash+=c;weekMap[wRange].kcCard+=cd;}
-    });
-    Object.entries(weekMap).sort(([a],[b])=>a.localeCompare(b)).forEach(([wRange,w])=>{
-      const totCash=r2(w.fhCash+w.kcCash),totCard=r2(w.fhCard+w.kcCard),totAll=r2(totCash+totCard);
-      if(totCash+totCard+w.fhTips===0)return;
-      wklyRows.push([wRange,r2(w.fhCash),r2(w.fhCard),r2(w.fhTips),r2(w.kcCash),r2(w.kcCard),totCash,totCard,totAll]);
-    });
-
-    // Guard: if no data built, surface a clear error instead of pushing empty sheets
-    if(payrollRows.length<=1){
-      t("❌ No payroll data found in DB. Enter hours/shifts for staff — values save automatically when you leave each field.");
-      return;
-    }
-
-    // ── Build PayrollMonthly: group by month, one row per staff ──
-    const monthlyRows=await buildPayrollMonthly(payrollMonth,allEx);
-
-    t("⏳ Pushing Payroll tab…");
-    const wr1=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"Payroll",payrollRows);
-    if(!wr1.ok){t("❌ Payroll: "+wr1.err);return;}
-    t("⏳ Pushing PayrollWeekly tab…");
-    const wr2=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollWeekly",wklyRows);
-    if(!wr2.ok){t("❌ Weekly: "+wr2.err);return;}
-    if(monthlyRows.length>1){
-      t("⏳ Pushing PayrollMonthly tab…");
-      const wr3=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",monthlyRows);
-      if(!wr3.ok){t("❌ Monthly: "+wr3.err);return;}
-    }
-    // Clear extras state — PayrollCard remounts via clearKey and shows defaults
-    const emptyExtras={};
-    [...staff.map(s=>s.id),...kitchenStaff.map(k=>kId(k.id))].forEach(sid=>{
-      emptyExtras[sid]={tips:"",additions:[],deductions:[],notes:[],manualFull:"",manualNight:"",manualHrs:"",manualCash:"",manualCard:"",manualTotal:"",extraTime:"",id:null,ws:null};
-    });
-    setExtras(emptyExtras);
-    setClearKey(k=>k+1);
-    setPayrollLoaded(false);
-    // Push clock log for the full payroll week (all 7 days, sorted by date)
-    if(gsConfig.clockLogId){
-      t("⏳ Pushing Clock Log for week…");
-      const wr4=await pushClockLogWeek(ws);
-      if(!wr4.ok)t(`✅ Payroll pushed — but Clock Log failed: ${wr4.err}`);
-      else t(`✅ All pushed — ${payrollRows.length-1} staff-weeks · ${wklyRows.length-1} weekly rows · ${wr4.written||0} clock log rows — page cleared!`);
-    }else{
-      t(`✅ All pushed — ${payrollRows.length-1} staff-weeks, ${wklyRows.length-1} weekly rows, ${monthlyRows.length-1} monthly rows — page cleared!`);
-    }
-  }
-  async function exportPayrollMonthly(){
-    if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
-    const{data:allEx}=await db.from("payroll_extras").select("*");
-    const rows=await buildPayrollMonthly(payrollMonth,allEx||[]);
-    if(rows.length<=1)return t("⚠️ No payroll data found for this month — make sure weekly payrolls have been pushed first");
-    t(`⏳ Pushing PayrollMonthly tab (${rows.length-1} staff)…`);
-    const r=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"PayrollMonthly",rows);
-    if(!r.ok){t("❌ "+r.err);return;}
-    t("✅ PayrollMonthly updated!");
-  }
-  async function exportTakings(){
-    if(!gsConfig.webAppUrl||!gsConfig.takingsId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
-    const daily=buildDaily();
-    const weekly=buildWeekly();
-    t(`⏳ Sending Daily tab (${daily.length-1} data rows)…`);
-    const r1=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",daily);
-    if(!r1.ok){t("❌ "+r1.err);return;}
-    t(`⏳ Sending Weekly tab (${weekly.length-1} data rows)…`);
-    const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Weekly",weekly);
-    if(!r2.ok){t("❌ "+r2.err);return;}
-    const tabs=(r2.sheets||[]).join(", ")||"unknown";
-    t(`✅ Done — ${daily.length-1} daily rows, ${weekly.length-1} weekly rows. Tabs in sheet: [${tabs}]`);
-  }
-  // Export expenses only — merges into Daily sheet without touching takings columns
-  // Columns: 12=Other Exp Cash (0-indexed: 11), 13=Other Exp Card (12), 17=Notes (16)
-  async function exportExpensesOnly(){
-    if(!gsConfig.webAppUrl||!gsConfig.takingsId)return t("⚠️ Google Sheets not configured — tap ⚙️ Sheets");
-    // Get all expense dates
-    const expDates=[...new Set(expenses.map(e=>e.date))].filter(Boolean).sort();
-    if(expDates.length===0)return t("No expenses to export");
-    // For each expense date, build a row: either update existing taking row or create new
-    const takingsDates=takings.map(s=>s.date);
-    const rows=expDates.map(date=>{
-      const dayExp=expenses.filter(e=>e.date===date);
-      const expCash=dayExp.filter(e=>e.pay_type==="cash").reduce((s,e)=>s+e.amount,0);
-      const expCard=dayExp.filter(e=>e.pay_type==="card").reduce((s,e)=>s+e.amount,0);
-      const notes=dayExp.map(e=>`${e.description}(£${e.amount.toFixed(2)},${e.pay_type})`).join("; ");
-      const hasTaking=takingsDates.includes(date);
-      if(hasTaking){
-        // Return the full row so it overwrites correctly in the full Daily sheet
-        return buildDailyForDate(date)[0];
-      }else{
-        // New row: date + blanks for takings columns + expense columns
-        const blank="";
-        return[fmtDate(date),blank,blank,blank,blank,blank,blank,blank,blank,blank,blank,r2(expCash),r2(expCard),blank,blank,blank,notes];
-      }
-    });
-    // Rebuild full daily with merged expenses and push
-    const allDates=[...new Set([...takings.map(s=>s.date),...expenses.map(e=>e.date)])].filter(d=>d&&!d.startsWith("__")).sort();
-    const allRows=buildDaily(); // uses correct 19-column header including Tips Cash, Tips Card
-    t(`⏳ Merging expenses into Daily tab…`);
-    const r=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",allRows);
-    if(!r.ok){t("❌ "+r.err);return;}
-    t("✅ Expenses merged into Daily sheet!");
-  }
-
-  async function pushClockLog(date){
-    if(!gsConfig.webAppUrl||!gsConfig.clockLogId)return;
-    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Lost Hours (hrs)","Override At"];
-    const rows=[hdr];
-    const dayLogs=clockLogs.filter(l=>l.date===date);
-    dayLogs.forEach(l=>{
-      // Rota type for this staff on this date
-      const staffRota=rota[l.staff_id]||[];
-      const jsDay=new Date(date+"T12:00:00").getDay();
-      const rotaEntry=staffRota.find(d=>d.jsDay===jsDay);
-      let rotaType="";
-      if(rotaEntry){
-        if(rotaEntry.type==="Full Day (11am–close)")rotaType="Full Day";
-        else if(rotaEntry.type==="Night (5:30pm–close)")rotaType="Night Shift";
-        else if(rotaEntry.type==="Custom")rotaType=`Custom ${rotaEntry.customIn||""}–${rotaEntry.customOut||""}`;
-        else rotaType=rotaEntry.type;
-      }
-      // Extra time: clock-out minus scheduled end, rounded to 0/0.5/1/2
-      let extraTime=0;
-      if(l.time_out&&rotaEntry&&rotaEntry.customOut){
-        const[eH,eM]=rotaEntry.customOut.split(":").map(Number);
-        const[oH,oM]=l.time_out.split(":").map(Number);
-        const diffMins=(oH*60+oM)-(eH*60+eM);
-        if(diffMins>15){
-          const rawHrs=diffMins/60;
-          extraTime=roundHrs025(rawHrs); // nearest 0.25h
-        }
-      }
-      const rawHrs=parseHrs(l.time_in,l.time_out);
-      const breakHrs=parseFloat(l.break_time||0);
-      const netHrs=rawHrs>0?r2(Math.max(0,rawHrs-breakHrs)):"";
-      const NOTE_MAP={"forgot":"Forgot to clock out","overtime":"Working extra time","sick_leave":"Sick leave","left_early":"Left early/late","back-stamped":"Back-stamped"};
-      const noteLabel=(()=>{
-        const parts=(l.note||"").split("|");
-        const labels=[];let checklist=false;
-        parts.forEach(n=>{
-          if(n.startsWith("checklist_done")){checklist=true;const inner=n.slice(n.indexOf(":")+1);if(inner&&inner!==n)inner.split("|").forEach(p=>{const lbl=NOTE_MAP[p.trim()]||p.trim();if(lbl)labels.push(lbl);});}
-          else{const lbl=NOTE_MAP[n]||n;if(lbl)labels.push(lbl);}
-        });
-        if(checklist)labels.push("✅ End-of-shift checklist done");
-        return[...new Set(labels)].join(" + ");
-      })();
-      const overrideDate=l.override_at?new Date(l.override_at):null;
-      const overrideLabel=(overrideDate&&overrideDate.getFullYear()>2020)?overrideDate.toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
-      // Compute lost hours for left_early notes on custom shifts
-        let lostHrs="";
-        if((l.note||"").includes("left_early")&&rotaEntry&&rotaEntry.customOut&&l.time_out){
-          const[eH,eM]=rotaEntry.customOut.split(":").map(Number);
-          const[oH,oM]=l.time_out.split(":").map(Number);
-          const diffMins=(eH*60+eM)-(oH*60+oM);
-          if(diffMins>10)lostHrs=roundHrs025(diffMins/60)+"h";
-        }
-        rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",lostHrs,overrideLabel]);
-    });
-    if(rows.length>1){
-      // Accumulate this day's rows in localStorage history keyed by date
-      const hist=clockLogHistoryRef.current;
-      hist[date]=rows.slice(1); // store data rows (no header) keyed by ISO date
-      localStorage.setItem("clockLogHistory",JSON.stringify(hist));
-      // Build full accumulated history sorted by date
-      const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Lost Hours (hrs)","Override At"];
-      const allDataRows=Object.keys(hist).sort().flatMap(d=>hist[d]);
-      const allRows=[hdr,...allDataRows];
-      const result=await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",allRows);
-      if(result.ok){
-        setPushedClockDates(prev=>{const n=new Set(prev);n.add(date);localStorage.setItem("pushedClockDates",JSON.stringify([...n]));return n;});
-      }
-      return result;
-    }
-  }
-  // Push a full week of clock logs (all 7 days) sorted by date — called after payroll push
-  async function pushClockLogWeek(weekStart){
-    if(!gsConfig.webAppUrl||!gsConfig.clockLogId)return{ok:false,err:"Clock log sheet not configured"};
-    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Lost Hours (hrs)","Override At"];
-    const rows=[hdr];
-    const dates=weekDates(weekStart); // 7 ISO dates Sun-Sat
-    dates.forEach(date=>{
-      const dayLogs=clockLogs.filter(l=>l.date===date).sort((a,b)=>a.staff_name.localeCompare(b.staff_name));
-      dayLogs.forEach(l=>{
-        const staffRota=rota[l.staff_id]||[];
-        const jsDay=new Date(date+"T12:00:00").getDay();
-        const rotaEntry=staffRota.find(d=>d.jsDay===jsDay);
-        let rotaType="";
-        if(rotaEntry){
-          if(rotaEntry.type==="Full Day (11am–close)")rotaType="Full Day";
-          else if(rotaEntry.type==="Night (5:30pm–close)")rotaType="Night Shift";
-          else if(rotaEntry.type==="Custom")rotaType=`Custom ${rotaEntry.customIn||""}–${rotaEntry.customOut||""}`;
-          else rotaType=rotaEntry.type;
-        }
-        let extraTime=0;
-        const forgotNote=(l.note||"").includes("forgot");
-        if(!forgotNote&&l.time_out&&rotaEntry&&rotaEntry.customOut){
-          const[eH,eM]=rotaEntry.customOut.split(":").map(Number);
-          const[oH,oM]=l.time_out.split(":").map(Number);
-          const diffMins=(oH*60+oM)-(eH*60+eM);
-          if(diffMins>15)extraTime=roundHrs025(diffMins/60);
-        }
-        const rawHrs=parseHrs(l.time_in,l.time_out);
-        const breakHrs=parseFloat(l.break_time||0);
-        const netHrs=rawHrs>0?r2(Math.max(0,rawHrs-breakHrs)):"";
-        const NOTE_MAP={"forgot":"Forgot to clock out","overtime":"Working extra time","sick_leave":"Sick leave","left_early":"Left early/late","back-stamped":"Back-stamped"};
-        const noteLabel=(()=>{
-        const parts=(l.note||"").split("|");
-        const labels=[];let checklist=false;
-        parts.forEach(n=>{
-          if(n.startsWith("checklist_done")){checklist=true;const inner=n.slice(n.indexOf(":")+1);if(inner&&inner!==n)inner.split("|").forEach(p=>{const lbl=NOTE_MAP[p.trim()]||p.trim();if(lbl)labels.push(lbl);});}
-          else{const lbl=NOTE_MAP[n]||n;if(lbl)labels.push(lbl);}
-        });
-        if(checklist)labels.push("✅ End-of-shift checklist done");
-        return[...new Set(labels)].join(" + ");
-      })();
-        const overrideDate=l.override_at?new Date(l.override_at):null;
-        const overrideLabel=(overrideDate&&overrideDate.getFullYear()>2020)?overrideDate.toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
-        // Compute lost hours for left_early notes on custom shifts
-        let lostHrs="";
-        if((l.note||"").includes("left_early")&&rotaEntry&&rotaEntry.customOut&&l.time_out){
-          const[eH,eM]=rotaEntry.customOut.split(":").map(Number);
-          const[oH,oM]=l.time_out.split(":").map(Number);
-          const diffMins=(eH*60+eM)-(oH*60+oM);
-          if(diffMins>10)lostHrs=roundHrs025(diffMins/60)+"h";
-        }
-        rows.push([fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,parseFloat(l.break_time||0)||"",noteLabel,extraTime>0?(extraTime+"h"):"",lostHrs,overrideLabel]);
-      });
-    });
-    if(rows.length<=1)return{ok:true,written:0};
-    // Accumulate week's rows into localStorage history per day
-    const hist=clockLogHistoryRef.current;
-    dates.forEach(date=>{
-      const dayData=rows.slice(1).filter(r=>r[0]===fmtDate(date));
-      if(dayData.length>0)hist[date]=dayData;
-    });
-    localStorage.setItem("clockLogHistory",JSON.stringify(hist));
-    // Write full accumulated history sorted by date
-    const allDataRows=Object.keys(hist).sort().flatMap(d=>hist[d]);
-    const allRows=[rows[0],...allDataRows]; // rows[0] = header
-    const result=await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",allRows);
-    if(result.ok){
-      setPushedClockDates(prev=>{const n=new Set(prev);dates.forEach(d=>n.add(d));localStorage.setItem("pushedClockDates",JSON.stringify([...n]));return n;});
-    }
-    return result;
-  }
-  const[lastClockPush,setLastClockPush]=useState(()=>localStorage.getItem("lastClockPush")||"");
+  
   useEffect(()=>{
     if(!gsConfig.clockLogId||!gsConfig.webAppUrl)return;
     function checkAndPush(){
@@ -1898,7 +1029,101 @@ function ManagerApp({onLogout}){
         pushClockLog(yesterday).then(()=>{localStorage.setItem("lastClockPush",yesterday);setLastClockPush(yesterday);});
       }
     }
-    checkAndPush(); // run on load
+  // ── Clock log push functions ──
+  async function pushClockLog(date){
+    if(!gsConfig.webAppUrl||!gsConfig.clockLogId)return{ok:false,err:"Clock log sheet not configured"};
+    const dayLogs=clockLogs.filter(l=>l.date===date).sort((a,b)=>(a.staff_name||"").localeCompare(b.staff_name||""));
+    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Lost Hours (hrs)","Override At"];
+    const NOTE_MAP={"forgot":"Forgot to clock out","overtime":"Working extra time","sick_leave":"Sick leave","left_early":"Left early/late","back-stamped":"Back-stamped"};
+    const dataRows=dayLogs.map(l=>{
+      const staffRota=rota[l.staff_id]||[];
+      const jsDay=new Date(date+"T12:00:00").getDay();
+      const rotaEntry=staffRota.find(d=>d.jsDay===jsDay);
+      let rotaType="";
+      if(rotaEntry){
+        if(rotaEntry.type==="Full Day (11am–close)")rotaType="Full Day";
+        else if(rotaEntry.type==="Night (5:30pm–close)")rotaType="Night Shift";
+        else if(rotaEntry.type==="Custom")rotaType="Custom "+(rotaEntry.customIn||"")+"–"+(rotaEntry.customOut||"");
+        else rotaType=rotaEntry.type;
+      }
+      const rawHrs=parseHrs(l.time_in,l.time_out);
+      const breakHrs=parseFloat(l.break_time||0);
+      const netHrs=rawHrs>0?r2(Math.max(0,rawHrs-breakHrs)):"";
+      let extraTime=0;
+      const forgotNote=(l.note||"").includes("forgot");
+      if(!forgotNote&&l.time_out&&rotaEntry&&rotaEntry.customOut){
+        const[eH,eM]=rotaEntry.customOut.split(":").map(Number);
+        const[oH,oM]=l.time_out.split(":").map(Number);
+        const diffMins=(oH*60+oM)-(eH*60+eM);
+        if(diffMins>15)extraTime=roundHrs025(diffMins/60);
+      }
+      let lostHrs="";
+      if((l.note||"").includes("left_early")&&rotaEntry&&rotaEntry.customOut&&l.time_out){
+        const[eH,eM]=rotaEntry.customOut.split(":").map(Number);
+        const[oH,oM]=l.time_out.split(":").map(Number);
+        const diffMins=(eH*60+eM)-(oH*60+oM);
+        if(diffMins>10)lostHrs=roundHrs025(diffMins/60)+"h";
+      }
+      const parts=(l.note||"").split("|");
+      const labels=[];let checklist=false;
+      parts.forEach(n=>{if(n.startsWith("checklist_done")){checklist=true;const inner=n.slice(n.indexOf(":")+1);if(inner&&inner!==n)inner.split("|").forEach(p=>{const lbl=NOTE_MAP[p.trim()]||p.trim();if(lbl)labels.push(lbl);});}else{const lbl=NOTE_MAP[n]||n;if(lbl)labels.push(lbl);}});
+      if(checklist)labels.push("✅ End-of-shift checklist done");
+      const noteLabel=[...new Set(labels)].join(" + ");
+      const overrideDate=l.override_at?new Date(l.override_at):null;
+      const overrideLabel=(overrideDate&&overrideDate.getFullYear()>2020)?overrideDate.toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
+      return[fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,breakHrs||"",noteLabel,extraTime>0?(extraTime+"h"):"",lostHrs,overrideLabel];
+    });
+    if(dataRows.length===0)return{ok:true,written:0};
+    const hist=clockLogHistoryRef.current;
+    hist[date]=dataRows;
+    localStorage.setItem("clockLogHistory",JSON.stringify(hist));
+    const allDataRows=Object.keys(hist).sort().flatMap(d=>hist[d]);
+    const result=await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",[hdr,...allDataRows]);
+    if(result.ok){setPushedClockDates(prev=>{const n=new Set(prev);n.add(date);localStorage.setItem("pushedClockDates",JSON.stringify([...n]));return n;});}
+    return result;
+  }
+
+  async function pushClockLogWeek(weekStart){
+    if(!gsConfig.webAppUrl||!gsConfig.clockLogId)return{ok:false,err:"Clock log sheet not configured"};
+    const dates=weekDates(weekStart);
+    const hdr=["Date","Staff Name","Rota Type","Clock In","Clock Out","Hours Worked","Break (hrs)","Note","Extra Time (hrs)","Lost Hours (hrs)","Override At"];
+    const NOTE_MAP={"forgot":"Forgot to clock out","overtime":"Working extra time","sick_leave":"Sick leave","left_early":"Left early/late","back-stamped":"Back-stamped"};
+    const hist=clockLogHistoryRef.current;
+    dates.forEach(date=>{
+      const dayLogs=clockLogs.filter(l=>l.date===date).sort((a,b)=>(a.staff_name||"").localeCompare(b.staff_name||""));
+      if(dayLogs.length===0)return;
+      hist[date]=dayLogs.map(l=>{
+        const staffRota=rota[l.staff_id]||[];
+        const jsDay=new Date(date+"T12:00:00").getDay();
+        const rotaEntry=staffRota.find(d=>d.jsDay===jsDay);
+        let rotaType="";
+        if(rotaEntry){if(rotaEntry.type==="Full Day (11am–close)")rotaType="Full Day";else if(rotaEntry.type==="Night (5:30pm–close)")rotaType="Night Shift";else if(rotaEntry.type==="Custom")rotaType="Custom "+(rotaEntry.customIn||"")+"–"+(rotaEntry.customOut||"");else rotaType=rotaEntry.type;}
+        const rawHrs=parseHrs(l.time_in,l.time_out);
+        const breakHrs=parseFloat(l.break_time||0);
+        const netHrs=rawHrs>0?r2(Math.max(0,rawHrs-breakHrs)):"";
+        const forgotNote=(l.note||"").includes("forgot");
+        let extraTime=0;
+        if(!forgotNote&&l.time_out&&rotaEntry&&rotaEntry.customOut){const[eH,eM]=rotaEntry.customOut.split(":").map(Number);const[oH,oM]=l.time_out.split(":").map(Number);const diffMins=(oH*60+oM)-(eH*60+eM);if(diffMins>15)extraTime=roundHrs025(diffMins/60);}
+        let lostHrs="";
+        if((l.note||"").includes("left_early")&&rotaEntry&&rotaEntry.customOut&&l.time_out){const[eH,eM]=rotaEntry.customOut.split(":").map(Number);const[oH,oM]=l.time_out.split(":").map(Number);const diffMins=(eH*60+eM)-(oH*60+oM);if(diffMins>10)lostHrs=roundHrs025(diffMins/60)+"h";}
+        const parts=(l.note||"").split("|");const labels=[];let checklist=false;
+        parts.forEach(n=>{if(n.startsWith("checklist_done")){checklist=true;const inner=n.slice(n.indexOf(":")+1);if(inner&&inner!==n)inner.split("|").forEach(p=>{const lbl=NOTE_MAP[p.trim()]||p.trim();if(lbl)labels.push(lbl);});}else{const lbl=NOTE_MAP[n]||n;if(lbl)labels.push(lbl);}});
+        if(checklist)labels.push("✅ End-of-shift checklist done");
+        const noteLabel=[...new Set(labels)].join(" + ");
+        const overrideDate=l.override_at?new Date(l.override_at):null;
+        const overrideLabel=(overrideDate&&overrideDate.getFullYear()>2020)?overrideDate.toLocaleDateString("en-GB",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
+        return[fmtDate(date),l.staff_name,rotaType,l.time_in||"",l.time_out||"",netHrs,breakHrs||"",noteLabel,extraTime>0?(extraTime+"h"):"",lostHrs,overrideLabel];
+      });
+    });
+    localStorage.setItem("clockLogHistory",JSON.stringify(hist));
+    const allDataRows=Object.keys(hist).sort().flatMap(d=>hist[d]);
+    if(allDataRows.length===0)return{ok:true,written:0};
+    const result=await pushSheet(gsConfig.webAppUrl,gsConfig.clockLogId,"Clock Log",[hdr,...allDataRows]);
+    if(result.ok){setPushedClockDates(prev=>{const n=new Set(prev);dates.forEach(d=>n.add(d));localStorage.setItem("pushedClockDates",JSON.stringify([...n]));return n;});}
+    return{...result,written:allDataRows.length};
+  }
+
+      checkAndPush(); // run on load
     const interval=setInterval(checkAndPush,60000); // check every minute for midnight cross
     return()=>clearInterval(interval);
   },[gsConfig.clockLogId,lastClockPush]);
@@ -2801,7 +2026,7 @@ function ManagerApp({onLogout}){
   <div className="stitle">💳 Monthly Bank Transfers</div>
   <div className="ssub2" style={{marginBottom:12}}>{payrollMonth} — card payments + tips</div>
   {bankTransferView.map(p=><div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid rgba(255,255,255,.1)"}}>
-    <div><div style={{fontWeight:800}}>{p.name}</div><div style={{fontSize:12,opacity:.7}}>{p.type} · Card: £{p.monthlyCard} + Tips: £{r2(p.total-p.monthlyCard)}</div></div>
+    <div><div style={{fontWeight:800,color:"#fff"}}>{p.name}</div><div style={{fontSize:12,opacity:.7}}>{p.type} · Card: £{p.monthlyCard} + Tips: £{r2(p.total-p.monthlyCard)}</div></div>
     <div style={{fontWeight:900,fontSize:16,color:"#50DC78"}}>£{p.total}</div>
   </div>)}
   <div style={{marginTop:16,paddingTop:12,borderTop:"1px solid rgba(255,255,255,.2)"}}>
