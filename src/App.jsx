@@ -2870,12 +2870,12 @@ function ManagerApp({onLogout}){
 {bankTransferView&&(<div className="overlay" onClick={()=>setBankTransferView(null)}><div className="sheet" onClick={e=>e.stopPropagation()} style={{maxWidth:480,width:"100%"}}>
   <div className="stitle">💳 Monthly Bank Transfers</div>
   <div className="ssub2" style={{marginBottom:12}}>{payrollMonth} — card payments + tips</div>
-  {bankTransferView.map(p=><div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid rgba(255,255,255,.1)"}}>
-    <div><div style={{fontWeight:800,color:"#fff"}}>{p.name}</div><div style={{fontSize:12,opacity:.7}}>{p.type} · Card: £{p.monthlyCard} + Tips: £{r2(p.total-p.monthlyCard)}</div></div>
+  {bankTransferView.map(p=><div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid #F0F0F0"}}>
+    <div><div style={{fontWeight:800,color:"#1A1A2E"}}>{p.name}</div><div style={{fontSize:12,color:"#888"}}>{p.type} · Card: £{p.monthlyCard} + Tips: £{r2(p.total-p.monthlyCard)}</div></div>
     <div style={{fontWeight:900,fontSize:16,color:"#50DC78"}}>£{p.total}</div>
   </div>)}
-  <div style={{marginTop:16,paddingTop:12,borderTop:"1px solid rgba(255,255,255,.2)"}}>
-    <div style={{fontWeight:800,marginBottom:4}}>Total bank transfers: £{r2(bankTransferView.reduce((a,p)=>a+p.total,0))}</div>
+  <div style={{marginTop:16,paddingTop:12,borderTop:"1px solid #F0F0F0"}}>
+    <div style={{fontWeight:800,marginBottom:4,color:"#1A1A2E"}}>Total bank transfers: £{r2(bankTransferView.reduce((a,p)=>a+p.total,0))}</div>
     <button className="btn" style={{marginTop:8,background:"#50DC78",color:"#1A1A2E"}} onClick={async()=>{
       const ts=new Date().toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"2-digit",hour:"2-digit",minute:"2-digit"});
       const monthlyRows=await buildPayrollMonthly(payrollMonth,null);
