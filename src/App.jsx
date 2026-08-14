@@ -470,6 +470,8 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
   const[loading,setLoading]=useState(true);
   const[rotaMon,setRotaMon]=useState(()=>rotaWeekOf(todayISO()).start);
   const assigned=effectiveTakingsPerson===user.id;
+  const[clockTick,setClockTick]=useState(0);
+  useEffect(()=>{const i=setInterval(()=>setClockTick(x=>x+1),20000);return()=>clearInterval(i);},[]);
   const now=new Date();
   function t(m){setMsg(m);setTimeout(()=>setMsg(""),15000);}
   useEffect(()=>{loadData();},[]);
@@ -656,6 +658,37 @@ function StaffApp({user,onLogout,effectiveTakingsPerson}){
                 else t("❌ "+error.message);
               }}>Back-stamp to {todayRota.type==="Full Day (11am–close)"?"11:00":todayRota.type==="Night (5:30pm–close)"?"17:30":todayRota.customIn||"start"}</button>
             </div>
+          </div>);
+        })()}
+        {/* ── Clock In / Out card ── */}
+        {(()=>{
+          const todayLogs=logs.filter(l=>l.date===todayISO());
+          const todayDone=todayLogs.some(l=>l.time_in&&l.time_out);
+          const todayRota=rota.find(sh=>sh.date===todayISO());
+          const isSick=todayRota?.type==="Sick Leave"||todayLogs.some(l=>l.note==="sick_leave");
+          const showBreak=clockedIn&&(user.pay_type||"hourly")==="hourly";
+          return(<div className="clkcard">
+            <div className="clktime">{nowTime()}</div>
+            <div className="clkdate">{dispDate(todayISO(),true)}{todayRota&&todayRota.type!=="Off"?" · "+shiftLabel(todayRota):""}</div>
+            <div className={`clkst ${clockedIn?"in":"out"}`}>{clockedIn?`● Clocked in at ${clockInTime}`:todayDone?"✓ Shift complete":"○ Not clocked in"}</div>
+            {showBreak&&<div style={{marginBottom:14}}>
+              <div style={{fontSize:10,fontWeight:800,letterSpacing:".5px",textTransform:"uppercase",color:"rgba(255,255,255,.45)",marginBottom:6}}>Break taken today</div>
+              <div style={{display:"flex",gap:5}}>
+                {["0","0.5","1","1.5","2"].map(b=>(
+                  <button key={b} onClick={()=>setBreakTime(b)} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",cursor:"pointer",fontSize:12,fontWeight:800,background:breakTime===b?"#E8620A":"rgba(255,255,255,.12)",color:breakTime===b?"#fff":"rgba(255,255,255,.55)"}}>{b==="0"?"None":b+"h"}</button>
+                ))}
+              </div>
+            </div>}
+            <div className="clkbtns">
+              <button className="clkbtn in" disabled={clockedIn||todayDone||isSick} onClick={clockIn}>⏰ Clock In</button>
+              <button className="clkbtn out" disabled={!clockedIn} onClick={clockOut}>👋 Clock Out</button>
+            </div>
+            {todayLogs.length>0&&<div className="clkhist">
+              {todayLogs.map(l=>(<div key={l.id} className="clkrow">
+                <span>{l.time_in} → {l.time_out||"active"}{(l.note||"").includes("back-stamped")?" · back-stamped":""}</span>
+                <span>{l.time_out?Math.max(0,parseHrs(l.time_in,l.time_out)-parseFloat(l.break_time||0)).toFixed(1)+"h":"—"}</span>
+              </div>))}
+            </div>}
           </div>);
         })()}
         <div className="sec">This Week</div>{RotaList()}
@@ -897,6 +930,7 @@ function ManagerApp({onLogout}){
   const[expandedSummaryStaff,setExpandedSummaryStaff]=useState(new Set());
   const[bankTransferView,setBankTransferView]=useState(null);
   const[pushedClockDates,setPushedClockDates]=useState(()=>{try{return new Set(JSON.parse(localStorage.getItem("pushedClockDates")||"[]"));}catch{return new Set();}});
+  const[lastClockPush,setLastClockPush]=useState(()=>{try{return localStorage.getItem("lastClockPush")||"";}catch{return"";}});
   const clockLogDrafts=React.useRef({}); // {logId: {time_in, time_out, note}} — local edits before Confirm
   // Accumulated clock log history stored in localStorage — written as full history on each push
   const clockLogHistoryRef=React.useRef((()=>{try{return JSON.parse(localStorage.getItem("clockLogHistory")||"{}");}catch{return{};}})());
@@ -925,16 +959,71 @@ function ManagerApp({onLogout}){
   useEffect(()=>{loadAll();},[]);
   useEffect(()=>{if(staff.length)loadRota();},[rotaMon,staff.length]);
   useEffect(()=>{if(kitchenStaff.length)loadKitchenHours();},[weekRange.start,kitchenStaff.length]);
-  
-  useEffect(()=>{
-    if(!gsConfig.clockLogId||!gsConfig.webAppUrl)return;
-    function checkAndPush(){
-      const yesterday=addDays(todayISO(),-1);
-      if(lastClockPush!==yesterday){
-        pushClockLog(yesterday).then(()=>{localStorage.setItem("lastClockPush",yesterday);setLastClockPush(yesterday);});
-      }
-    }
-  // ── Clock log push functions ──
+
+  // ══════════════════════════════════════════════════════════════════
+  // DATA LOADING
+  // ══════════════════════════════════════════════════════════════════
+  async function loadAll(){
+    setLoading(true);
+    const[staffR,kitchenR,absR,clockR,rejR,takingsR,expensesR,defR,ovR,wmR,gsR]=await Promise.all([
+      db.from("staff").select("*").order("name"),
+      db.from("kitchen_staff").select("*"),
+      db.from("absences").select("*").order("date",{ascending:false}),
+      db.from("clock_logs").select("*").order("date",{ascending:false}),
+      db.from("rejections").select("*"),
+      db.from("takings").select("*"),
+      db.from("expenses").select("*"),
+      db.from("takings_defaults").select("*"),
+      db.from("takings_assignment").select("staff_id").eq("date",todayISO()).maybeSingle(),
+      db.from("app_settings").select("value").eq("key","welcome_message").maybeSingle(),
+      db.from("app_settings").select("key,value").in("key",["gs_web_app_url","gs_payroll_id","gs_takings_id","gs_clock_log_id"]),
+    ]);
+    setStaff((staffR.data||[]).map(s=>({...s,rate:s.rate||"0",shiftRate:s.shift_rate||"0",nightRate:s.night_rate||"0",cardMode:s.card_mode||"fixed",cardFixed:s.card_fixed||"0",monthlyCard:s.monthly_card||"0",tipsPct:s.tips_pct||"0",payType:s.pay_type||"hourly"})));
+    setKitchenStaff((kitchenR.data||[]).map(k=>({...k,rate:k.rate||"0",shiftRate:k.shift_rate||"0",nightRate:k.night_rate||"0",cardMode:k.card_mode||"fixed",cardFixed:k.card_fixed||"0",fixedCash:k.fixed_cash||"0",monthlyCard:k.monthly_card||"0",payType:k.pay_type||"hourly"})));
+    setAbsences(absR.data||[]);
+    setClockLogs(clockR.data||[]);
+    setRejections(rejR.data||[]);
+    setTakings(takingsR.data||[]);
+    setExpenses((expensesR.data||[]).map(e=>({...e,amount:parseFloat(e.amount||0)})));
+    const tdObj={};(defR.data||[]).forEach(r=>{tdObj[r.day_of_week]=r.staff_id;});
+    setTakingDefaults(tdObj);
+    setTodayOverride(ovR.data?.staff_id||null);
+    const gsRows=gsR.data||[];
+    const gv=key=>gsRows.find(r=>r.key===key)?.value||"";
+    setGsConfig({webAppUrl:gv("gs_web_app_url"),payrollId:gv("gs_payroll_id"),takingsId:gv("gs_takings_id"),clockLogId:gv("gs_clock_log_id"),welcomeMsg:wmR.data?.value||""});
+    setLoading(false);
+  }
+
+  // Rebuilds the `rota` map for the currently selected week (rotaMon) — one 7-day array per staff.
+  // Mirrors the matching logic used on the staff side: prefer an exact week_start match, else the
+  // closest row for that weekday, so legacy rows saved under a slightly different date format still show.
+  async function loadRota(){
+    const dates=weekDates(rotaMon);
+    const{data}=await db.from("rota").select("*");
+    const rows=data||[];
+    const byStaff={};
+    staff.forEach(s=>{
+      byStaff[s.id]=dates.map((dateISO,idx)=>{
+        const jsDay=idx;
+        const candidates=rows.filter(r=>r.staff_id===s.id&&r.day_index===jsDay);
+        const exact=candidates.find(r=>r.week_start===rotaMon);
+        const closest=exact||candidates.slice().sort((a,b)=>Math.abs(new Date(a.week_start+"T12:00:00")-new Date(rotaMon+"T12:00:00"))-Math.abs(new Date(b.week_start+"T12:00:00")-new Date(rotaMon+"T12:00:00")))[0];
+        return{date:dateISO,jsDay,type:closest?.shift_type||"Off",customIn:closest?.custom_in||"",customOut:closest?.custom_out||"",rowId:closest?.id};
+      });
+    });
+    setRota(byStaff);
+  }
+
+  // Kitchen staff are paid via fixed weekly amounts (see calcKitchenPay), not hourly clocking —
+  // there's no kitchen clock-in system in this app. Kept as a safe no-op so the effect that calls
+  // it never throws; extend this if kitchen clocking is added later.
+  async function loadKitchenHours(){
+    setKitchenHours({});
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // CLOCK LOG → GOOGLE SHEETS PUSH
+  // ══════════════════════════════════════════════════════════════════
   async function pushClockLog(date){
     if(!gsConfig.webAppUrl||!gsConfig.clockLogId)return{ok:false,err:"Clock log sheet not configured"};
     const dayLogs=clockLogs.filter(l=>l.date===date).sort((a,b)=>(a.staff_name||"").localeCompare(b.staff_name||""));
@@ -1028,10 +1117,394 @@ function ManagerApp({onLogout}){
     return{...result,written:allDataRows.length};
   }
 
-      checkAndPush(); // run on load
+  useEffect(()=>{
+    if(!gsConfig.clockLogId||!gsConfig.webAppUrl)return;
+    function checkAndPush(){
+      const yesterday=addDays(todayISO(),-1);
+      if(lastClockPush!==yesterday){
+        pushClockLog(yesterday).then(()=>{localStorage.setItem("lastClockPush",yesterday);setLastClockPush(yesterday);});
+      }
+    }
+    checkAndPush(); // run on load
     const interval=setInterval(checkAndPush,60000); // check every minute for midnight cross
     return()=>clearInterval(interval);
   },[gsConfig.clockLogId,lastClockPush]);
+
+  // ══════════════════════════════════════════════════════════════════
+  // PAYROLL EXTRAS (additions/deductions/manual overrides per staff per week)
+  // ══════════════════════════════════════════════════════════════════
+  function getExtras(sid){
+    return extras[sid]||{additions:[],deductions:[],tips:"",manualFull:"",manualNight:"",manualHrs:"",manualCash:"",manualCard:"",manualTotal:"",extraTime:""};
+  }
+  async function persistExtras(sid,ex){
+    const payload={
+      week_start:weekRange.start,staff_id:sid,
+      tips:ex.tips||"",additions:ex.additions||[],deductions:ex.deductions||[],
+      manual_full:ex.manualFull||"",manual_night:ex.manualNight||"",manual_hrs:ex.manualHrs||"",
+      manual_cash:ex.manualCash||"",manual_card:ex.manualCard||"",manual_total:ex.manualTotal||"",
+      extra_time:ex.extraTime||"",
+    };
+    if(ex.id){
+      await db.from("payroll_extras").update(payload).eq("id",ex.id);
+    }else{
+      const{data}=await db.from("payroll_extras").insert(payload).select().single();
+      if(data)setExtras(p=>({...p,[sid]:{...(p[sid]||{}),id:data.id,ws:data.week_start}}));
+    }
+  }
+  function setExtrasState(sid,updaterFn){
+    setExtras(p=>{
+      const current=p[sid]||getExtras(sid);
+      const updated=updaterFn(current);
+      persistExtras(sid,updated);
+      return{...p,[sid]:updated};
+    });
+  }
+  const updateExtras=setExtrasState;
+
+  // ══════════════════════════════════════════════════════════════════
+  // PAYROLL CALCULATIONS
+  // ⚠️ Money math — verify against a known week's real payroll before trusting for live pay runs.
+  // ══════════════════════════════════════════════════════════════════
+  function calcPay(s){
+    const sid=s.id;
+    const ex=getExtras(sid);
+    const ws=weekRange.start,we=weekRange.end;
+    const sLogs=clockLogs.filter(l=>l.staff_id===sid&&l.date>=ws&&l.date<=we);
+    const sRota=rota[sid]||[];
+    const clockedDatesSet=new Set(sLogs.filter(l=>l.time_in&&l.time_out).map(l=>l.date));
+    const autoFull=sRota.filter(sh=>sh?.type==="Full Day (11am–close)"&&sh.date>=ws&&sh.date<=we&&clockedDatesSet.has(sh.date)).length;
+    const autoNight=sRota.filter(sh=>sh?.type==="Night (5:30pm–close)"&&sh.date>=ws&&sh.date<=we&&clockedDatesSet.has(sh.date)).length;
+    const customLogs=sLogs.filter(l=>{const sr=sRota.find(d=>d.date===l.date);return sr&&sr.type==="Custom"&&l.time_in&&l.time_out;});
+    const autoHrs=r2(customLogs.reduce((a,l)=>{
+      const forgotCO=(l.note||"").includes("forgot");
+      const dRota=sRota.find(d=>d.date===l.date);
+      if(forgotCO&&dRota&&dRota.customIn&&dRota.customOut)return a+Math.max(0,parseHrs(dRota.customIn,dRota.customOut)-parseFloat(l.break_time||0));
+      return a+Math.max(0,parseHrs(l.time_in,l.time_out)-parseFloat(l.break_time||0));
+    },0));
+
+    const full=(ex.manualFull!==undefined&&ex.manualFull!=="")?parseFloat(ex.manualFull||0):autoFull;
+    const night=(ex.manualNight!==undefined&&ex.manualNight!=="")?parseFloat(ex.manualNight||0):autoNight;
+    const hrs=(ex.manualHrs!==undefined&&ex.manualHrs!=="")?parseFloat(ex.manualHrs||0):autoHrs;
+
+    const rate=parseFloat(s.rate||0),shiftRate=parseFloat(s.shiftRate||0),nightRate=parseFloat(s.nightRate||0);
+    const grossBase=r2(hrs*rate+full*shiftRate+night*nightRate);
+
+    const additions=ex.additions||[],deductions=ex.deductions||[];
+    const addT=r2(additions.reduce((a,x)=>a+parseFloat(x.amount||0),0));
+    const dedT=r2(deductions.reduce((a,x)=>a+parseFloat(x.amount||0),0));
+
+    const cardMode=s.cardMode||"fixed";
+    const cardFixedVal=parseFloat(s.cardFixed||0);
+    let cardAmt,baseCash;
+    if(cardMode==="cash"){cardAmt=0;baseCash=grossBase;}
+    else if(cardMode==="card"){cardAmt=grossBase;baseCash=0;}
+    else{cardAmt=Math.min(cardFixedVal,grossBase);baseCash=r2(grossBase-cardAmt);}
+    cardAmt=r2(cardAmt);
+    const cardExceeds=cardMode==="fixed"&&cardFixedVal>grossBase+0.001;
+
+    const wTakings=takings.filter(tk=>tk.date>=ws&&tk.date<=we);
+    const totalCardTips=r2(wTakings.reduce((a,tk)=>a+parseFloat(tk.tips_card||0),0));
+    const tipsPct=parseFloat(s.tipsPct||0);
+    const autoTips=r2(totalCardTips*tipsPct/100);
+    const tips=(ex.tips!==undefined&&ex.tips!=="")?r2(parseFloat(ex.tips||0)):autoTips;
+
+    let total=r2(baseCash+cardAmt+addT-dedT);
+    let cashAmt=r2(baseCash+addT-dedT);
+    let isOverride=false;
+    if(ex.manualCash!==undefined&&ex.manualCash!==""){cashAmt=r2(parseFloat(ex.manualCash));isOverride=true;}
+    if(ex.manualCard!==undefined&&ex.manualCard!==""){cardAmt=r2(parseFloat(ex.manualCard));isOverride=true;}
+    if(ex.manualTotal!==undefined&&ex.manualTotal!==""){total=r2(parseFloat(ex.manualTotal));isOverride=true;}
+    else if(isOverride){total=r2(cashAmt+cardAmt);}
+
+    const sickDays=sLogs.filter(l=>l.note==="sick_leave"||(l.note||"").includes("sick_leave")).length;
+    const overtimeLogs=sLogs.filter(l=>(l.note||"").includes("overtime"));
+    const autoOvertimeHrs=r2(overtimeLogs.reduce((a,l)=>{
+      const dRota=sRota.find(d=>d.date===l.date);
+      if(!dRota||!dRota.customOut||!l.time_out)return a;
+      const[eH,eM]=dRota.customOut.split(":").map(Number);
+      const[oH,oM]=l.time_out.split(":").map(Number);
+      const diffMins=(oH*60+oM)-(eH*60+eM);
+      return a+(diffMins>0?roundHrs025(diffMins/60):0);
+    },0));
+
+    return{
+      hrs,full,night,
+      tips:tips.toFixed(2),autoTips:autoTips.toFixed(2),
+      baseCash:baseCash.toFixed(2),cardAmt:cardAmt.toFixed(2),cashAmt,
+      addT:addT.toFixed(2),dedT:dedT.toFixed(2),
+      total:total.toFixed(2),grossTotal:grossBase,cardExceeds,
+      isOverride,sickDays,autoOvertimeHrs,
+      autoOvertimeLabel:autoOvertimeHrs>0?`${autoOvertimeHrs}h worked extra`:"",
+      autoDeductions:[],
+    };
+  }
+
+  function calcKitchenPay(k){
+    const sid=kId(k.id);
+    const ex=getExtras(sid);
+    const hrs=parseFloat(ex.manualHrs||0);
+    const fixedCashBase=parseFloat(k.fixedCash||0);
+    const fixedCardBase=parseFloat(k.cardFixed||0);
+    const cardMode=k.cardMode||"fixed";
+    let fixedCash,fixedCard;
+    if(cardMode==="cash"){fixedCash=r2(fixedCashBase+fixedCardBase);fixedCard=0;}
+    else if(cardMode==="card"){fixedCash=0;fixedCard=r2(fixedCashBase+fixedCardBase);}
+    else{fixedCash=r2(fixedCashBase);fixedCard=r2(fixedCardBase);}
+
+    const additions=ex.additions||[],deductions=ex.deductions||[];
+    const addT=r2(additions.reduce((a,x)=>a+parseFloat(x.amount||0),0));
+    const dedT=r2(deductions.reduce((a,x)=>a+parseFloat(x.amount||0),0));
+
+    let total=r2(fixedCash+fixedCard+addT-dedT);
+    let cashAmt=r2(fixedCash+addT-dedT);
+    let isOverride=false;
+    if(ex.manualTotal!==undefined&&ex.manualTotal!==""){total=r2(parseFloat(ex.manualTotal));isOverride=true;}
+    if(ex.manualCash!==undefined&&ex.manualCash!==""){cashAmt=r2(parseFloat(ex.manualCash));isOverride=true;}
+
+    return{
+      hrs,full:0,night:0,
+      fixedCash:fixedCash.toFixed(2),fixedCard:fixedCard.toFixed(2),cashAmt,
+      addT:addT.toFixed(2),dedT:dedT.toFixed(2),total:total.toFixed(2),
+      isOverride,grossTotal:r2(fixedCash+fixedCard),cardExceeds:false,
+      autoOvertimeHrs:0,autoOvertimeLabel:"",sickDays:0,autoDeductions:[],
+      tips:"0.00",autoTips:"0.00",
+    };
+  }
+
+  function payTotals(){
+    let cash=0,card=0,gross=0,fhTips=0;
+    staff.forEach(s=>{
+      const p=calcPay(s);
+      cash+=parseFloat(p.cashAmt||0);card+=parseFloat(p.cardAmt||0);
+      gross+=parseFloat(p.total||0);fhTips+=parseFloat(p.tips||0);
+    });
+    kitchenStaff.forEach(k=>{
+      const p=calcKitchenPay(k);
+      cash+=parseFloat(p.cashAmt||0);card+=parseFloat(p.fixedCard||0);
+      gross+=parseFloat(p.total||0);
+    });
+    return{cash:r2(cash),card:r2(card),gross:r2(gross),fhTips:r2(fhTips)};
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // STAFF / KITCHEN STAFF CRUD
+  // ══════════════════════════════════════════════════════════════════
+  async function removeStaff(s){
+    if(!window.confirm(`Remove ${s.name}? This cannot be undone.`))return;
+    const{error}=await db.from("staff").delete().eq("id",s.id);
+    if(!error){setStaff(p=>p.filter(x=>x.id!==s.id));t(`🗑️ ${s.name} removed`);}
+    else t("❌ "+error.message);
+  }
+  async function addKitchen(){
+    if(!newKName.trim())return;
+    const{data,error}=await db.from("kitchen_staff").insert({name:newKName.trim(),cash_card:"cash",pay_type:"hourly",rate:"0",shift_rate:"0",night_rate:"0",card_mode:"fixed",card_fixed:"0",fixed_cash:"0"}).select().single();
+    if(!error){
+      setKitchenStaff(p=>[...p,{...data,payType:"hourly",rate:"0",shiftRate:"0",nightRate:"0",cardMode:"fixed",cardFixed:"0",fixedCash:"0"}]);
+      setNewKName("");
+      t("✅ "+data.name+" added");
+    }else t("❌ "+error.message);
+  }
+  async function delKitchen(id){
+    if(!window.confirm("Remove this kitchen staff member?"))return;
+    const{error}=await db.from("kitchen_staff").delete().eq("id",id);
+    if(!error)setKitchenStaff(p=>p.filter(x=>x.id!==id));
+    else t("❌ "+error.message);
+  }
+  async function updKitchenField(id,field,value){
+    const{error}=await db.from("kitchen_staff").update({[field]:value}).eq("id",id);
+    if(error)t("❌ "+error.message);
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // ROTA (manager side)
+  // ══════════════════════════════════════════════════════════════════
+  function setShift(staffId,dayIdx,field,value){
+    setRota(p=>{
+      const days=[...(p[staffId]||[])];
+      if(!days[dayIdx])return p;
+      days[dayIdx]={...days[dayIdx],[field]:value,_unsaved:true};
+      return{...p,[staffId]:days};
+    });
+  }
+  async function sendRota(staffId){
+    const days=rota[staffId]||[];
+    for(const d of days){
+      const payload={staff_id:staffId,week_start:rotaMon,day_index:d.jsDay,shift_type:d.type||"Off",custom_in:d.type==="Custom"?(d.customIn||""):"",custom_out:d.type==="Custom"?(d.customOut||""):""};
+      if(d.rowId){
+        await db.from("rota").update(payload).eq("id",d.rowId);
+      }else{
+        const{data}=await db.from("rota").insert(payload).select().single();
+        if(data)d.rowId=data.id;
+      }
+    }
+    setRota(p=>({...p,[staffId]:days.map(d=>({...d,_unsaved:false}))}));
+    t(`📤 Rota sent to ${staff.find(s=>s.id===staffId)?.name||"staff"}`);
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // SETTINGS
+  // ══════════════════════════════════════════════════════════════════
+  async function saveGsConfig(config){
+    await Promise.all([
+      db.from("app_settings").upsert({key:"gs_web_app_url",value:config.webAppUrl||""}),
+      db.from("app_settings").upsert({key:"gs_payroll_id",value:config.payrollId||""}),
+      db.from("app_settings").upsert({key:"gs_takings_id",value:config.takingsId||""}),
+      db.from("app_settings").upsert({key:"gs_clock_log_id",value:config.clockLogId||""}),
+      db.from("app_settings").upsert({key:"welcome_message",value:config.welcomeMsg||""}),
+    ]);
+    setGsConfig(config);
+    t("✅ Settings saved");
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // PAYROLL EXPORT
+  // ══════════════════════════════════════════════════════════════════
+  async function exportPayroll(){
+    if(!gsConfig.webAppUrl||!gsConfig.payrollId)return t("⚠️ Payroll sheet not configured — tap ⚙️ Sheets");
+    t("⏳ Pushing payroll…");
+    const hdr=["Week","Name","Type","Hours","Full Shifts","Night Shifts","Cash","Card","Additions","Deductions","Tips","Total"];
+    const weekLabel=fmtRangeExport(weekRange.start,weekRange.end);
+    const staffRows=staff.map(s=>{const p=calcPay(s);return[weekLabel,s.name,"FOH",p.hrs,p.full,p.night,p.baseCash,p.cardAmt,p.addT,p.dedT,p.tips,p.total];});
+    const kitchenRows=kitchenStaff.map(k=>{const p=calcKitchenPay(k);return[weekLabel,k.name,"Kitchen",p.hrs||0,0,0,p.fixedCash,p.fixedCard,p.addT,p.dedT,"0.00",p.total];});
+    const allRows=[...staffRows,...kitchenRows];
+    const r1=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"Staff",[hdr,...allRows]);
+    if(!r1.ok)return t("❌ Staff push failed: "+r1.err);
+    const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.payrollId,"Weekly",[hdr,...allRows]);
+    if(!r2.ok)return t("❌ Weekly push failed: "+r2.err);
+    t("✅ Payroll pushed for "+weekLabel);
+  }
+
+  async function buildPayrollMonthly(month){
+    const{data:allEx}=await db.from("payroll_extras").select("*");
+    const monthStart=month+"-01";
+    const monthEnd=new Date(parseInt(month.split("-")[0]),parseInt(month.split("-")[1]),0).toISOString().split("T")[0];
+    const hdr=["Name","Type","Monthly Card","Tips","Total"];
+    const people=[...staff.map(s=>({id:s.id,name:s.name,monthlyCard:parseFloat(s.monthlyCard||0),type:"FOH"})),...kitchenStaff.map(k=>({id:kId(k.id),name:k.name,monthlyCard:parseFloat(k.monthlyCard||0),type:"Kitchen"}))];
+    const rows=people.map(p=>{
+      const weekExs=(allEx||[]).filter(e=>e.staff_id===p.id&&e.week_start>=monthStart&&e.week_start<=monthEnd);
+      const tips=r2(weekExs.reduce((a,e)=>a+parseFloat(e.tips||0),0));
+      const total=r2(p.monthlyCard+tips);
+      return[p.name,p.type,p.monthlyCard.toFixed(2),tips.toFixed(2),total.toFixed(2)];
+    });
+    return[hdr,...rows];
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // TAKINGS (manager side) — assignment, entry/edit, export
+  // ══════════════════════════════════════════════════════════════════
+  const todayDow=new Date().getDay();
+  const effectiveTodayPerson=todayOverride||takingDefaults[todayDow]||null;
+
+  async function saveTakingDefault(staffId,dow,isAssigned){
+    if(isAssigned){
+      await db.from("takings_defaults").delete().eq("day_of_week",dow);
+      await db.from("takings_defaults").insert({day_of_week:dow,staff_id:staffId});
+      setTakingDefaults(p=>({...p,[dow]:staffId}));
+    }else{
+      await db.from("takings_defaults").delete().eq("day_of_week",dow).eq("staff_id",staffId);
+      setTakingDefaults(p=>{const n={...p};if(n[dow]===staffId)delete n[dow];return n;});
+    }
+  }
+  async function saveTodayOverride(staffId){
+    const today=todayISO();
+    await db.from("takings_assignment").delete().eq("date",today);
+    if(staffId)await db.from("takings_assignment").insert({date:today,staff_id:staffId});
+    setTodayOverride(staffId||null);
+  }
+  function staffAssignedDays(staffId){
+    return Object.entries(takingDefaults).filter(([dow,id])=>id===staffId).map(([dow])=>DAYS_SUN[dow]);
+  }
+
+  function buildDaily(){
+    const hdr=["Date","Staff","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expense","Deposit Receipt","Deposit Pay Type","Voucher Purchase","Voucher Pay Type","Tips Cash","Tips Card","Other Expenses Cash","Other Expenses Card","Note"];
+    const rows=[...takings].sort((a,b)=>a.date.localeCompare(b.date)).map(tk=>{
+      const dayExpenses=expenses.filter(e=>e.date===tk.date);
+      const expCash=r2(dayExpenses.filter(e=>e.pay_type==="cash").reduce((a,e)=>a+parseFloat(e.amount||0),0));
+      const expCard=r2(dayExpenses.filter(e=>e.pay_type==="card").reduce((a,e)=>a+parseFloat(e.amount||0),0));
+      const expNotes=dayExpenses.map(e=>e.description+" £"+parseFloat(e.amount||0).toFixed(2)).join("; ");
+      return[fmtDate(tk.date),tk.staff_name||"",r2(tk.deliveroo||0),r2(tk.uber||0),r2(tk.cash||0),r2(tk.card||0),r2(tk.online||0),r2(tk.shop_expense||0),r2(tk.deposit_receipt||0),tk.deposit_pay_type||"",r2(tk.voucher_purchase||0),tk.voucher_pay_type||"",r2(tk.tips_cash||0),r2(tk.tips_card||0),expCash,expCard,[tk.note,expNotes].filter(Boolean).join(" | ")];
+    });
+    return[hdr,...rows];
+  }
+
+  function buildWeekly(){
+    const hdr=["Week Start","Week End","Deliveroo","Uber Eats","Cash","Card","Online","Shop Expense","Deposit Receipt","Voucher Purchase","Tips Cash","Tips Card","Other Expenses Cash","Other Expenses Card","Total Takings"];
+    const weeks={};
+    function bucket(ws){if(!weeks[ws])weeks[ws]={deliveroo:0,uber:0,cash:0,card:0,online:0,shop_expense:0,deposit_receipt:0,voucher_purchase:0,tips_cash:0,tips_card:0,expCash:0,expCard:0};return weeks[ws];}
+    takings.forEach(tk=>{
+      const w=bucket(snapToSunday(tk.date));
+      w.deliveroo+=parseFloat(tk.deliveroo||0);w.uber+=parseFloat(tk.uber||0);w.cash+=parseFloat(tk.cash||0);w.card+=parseFloat(tk.card||0);w.online+=parseFloat(tk.online||0);
+      w.shop_expense+=parseFloat(tk.shop_expense||0);w.deposit_receipt+=parseFloat(tk.deposit_receipt||0);w.voucher_purchase+=parseFloat(tk.voucher_purchase||0);
+      w.tips_cash+=parseFloat(tk.tips_cash||0);w.tips_card+=parseFloat(tk.tips_card||0);
+    });
+    expenses.forEach(e=>{
+      const w=bucket(snapToSunday(e.date));
+      if(e.pay_type==="cash")w.expCash+=parseFloat(e.amount||0);else w.expCard+=parseFloat(e.amount||0);
+    });
+    const rows=Object.keys(weeks).sort().map(ws=>{
+      const w=weeks[ws];
+      const total=r2(w.deliveroo+w.uber+w.cash+w.card+w.online-w.shop_expense+w.deposit_receipt+w.voucher_purchase);
+      return[fmtDate(ws),fmtDate(addDays(ws,6)),r2(w.deliveroo),r2(w.uber),r2(w.cash),r2(w.card),r2(w.online),r2(w.shop_expense),r2(w.deposit_receipt),r2(w.voucher_purchase),r2(w.tips_cash),r2(w.tips_card),r2(w.expCash),r2(w.expCard),total];
+    });
+    return[hdr,...rows];
+  }
+
+  async function autoPushDay(date,updatedTakingsList){
+    if(!gsConfig.webAppUrl||!gsConfig.takingsId)return{ok:false,err:"Takings sheet not configured"};
+    const r1=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",buildDaily());
+    const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Weekly",buildWeekly());
+    return{ok:r1.ok&&r2.ok,err:r1.err||r2.err};
+  }
+
+  async function upsertTakings(date,vals,note){
+    const existing=takings.find(x=>x.date===date);
+    if(existing){
+      const{error}=await db.from("takings").update({...vals,note,is_new:false}).eq("id",existing.id);
+      if(error)return{ok:false,err:error.message};
+      const updated=takings.map(x=>x.id===existing.id?{...x,...vals,note,is_new:false}:x);
+      setTakings(updated);
+      return{ok:true,updatedTakings:updated};
+    }else{
+      const{data,error}=await db.from("takings").insert({staff_id:"manager",staff_name:"Manager",date,...vals,note,is_new:false}).select().single();
+      if(error)return{ok:false,err:error.message};
+      const updated=[data,...takings];
+      setTakings(updated);
+      return{ok:true,updatedTakings:updated};
+    }
+  }
+
+  async function exportTakings(){
+    if(!gsConfig.webAppUrl||!gsConfig.takingsId)return t("⚠️ Takings sheet not configured — tap ⚙️ Sheets");
+    t("⏳ Pushing takings…");
+    const r1=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Daily",buildDaily());
+    if(!r1.ok)return t("❌ Daily push failed: "+r1.err);
+    const r2=await pushSheet(gsConfig.webAppUrl,gsConfig.takingsId,"Weekly",buildWeekly());
+    if(!r2.ok)return t("❌ Weekly push failed: "+r2.err);
+    t("✅ Takings pushed — Daily + Weekly");
+  }
+
+  async function exportExpensesOnly(){
+    return exportTakings();
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // EXPENSES CRUD
+  // ══════════════════════════════════════════════════════════════════
+  async function addExpense(desc,amount,payType,date){
+    const{data,error}=await db.from("expenses").insert({description:desc,amount:parseFloat(amount)||0,pay_type:payType,date}).select().single();
+    if(!error)setExpenses(p=>[{...data,amount:parseFloat(data.amount||0)},...p]);
+    return{error};
+  }
+  async function delExpense(id){
+    const{error}=await db.from("expenses").delete().eq("id",id);
+    if(!error)setExpenses(p=>p.filter(x=>x.id!==id));
+    return{error};
+  }
+  async function updateExpense(id,fields){
+    const{error}=await db.from("expenses").update(fields).eq("id",id);
+    if(!error)setExpenses(p=>p.map(x=>x.id===id?{...x,...fields,amount:parseFloat(fields.amount??x.amount)}:x));
+    return{error};
+  }
   function buildRotaText(sId){
     const s=staff.find(x=>x.id===sId);if(!s)return"";
     const days=rota[sId]||[];
@@ -1972,7 +2445,7 @@ function ManagerApp({onLogout}){
         )}
 
         {/* ══ EXPENSES ══ */}
-        {tab==="expenses"&&<ExpensesTab expenses={expenses} onAdd={addExpense} onDelete={delExpense} onUpdate={updateExpense} toast={t} gsReady={gsReady} gsConfig={gsConfig} buildDaily={buildDaily} buildWeekly={buildWeekly} exportTakings={exportTakings} exportExpensesOnly={exportExpensesOnly}/>}
+        {tab==="expenses"&&<ExpensesTab expenses={expenses} setExpenses={setExpenses} onAdd={addExpense} onDelete={delExpense} onUpdate={updateExpense} toast={t} gsReady={gsReady} gsConfig={gsConfig} buildDaily={buildDaily} buildWeekly={buildWeekly} exportTakings={exportTakings} exportExpensesOnly={exportExpensesOnly}/>}
 
         {/* ══ ABSENCES ══ */}
         {tab==="absence"&&(
@@ -2490,7 +2963,7 @@ function TakingsForm({setTakings,toast}){
 // ═══════════════════════════════════════════════════════════════════
 // EXPENSES TAB
 // ═══════════════════════════════════════════════════════════════════
-function ExpensesTab({expenses,onAdd,onDelete,onUpdate,toast,gsReady,gsConfig,buildDaily,buildWeekly,exportTakings,exportExpensesOnly}){
+function ExpensesTab({expenses,setExpenses,onAdd,onDelete,onUpdate,toast,gsReady,gsConfig,buildDaily,buildWeekly,exportTakings,exportExpensesOnly}){
   const[desc,setDesc]=useState("");const[amount,setAmount]=useState("");const[payType,setPayType]=useState("cash");const[date,setDate]=useState(todayISO());const[saving,setSaving]=useState(false);
   const[editMode,setEditMode]=useState(false);
   const[filterDate,setFilterDate]=useState(todayISO());
